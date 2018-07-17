@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@freebsd.org>
  * Copyright (c) 2012 Damjan Marion <dmarion@freebsd.org>
  * All rights reserved.
@@ -34,22 +36,21 @@ __FBSDID("$FreeBSD$");
 #include <sys/kernel.h>
 #include <sys/module.h>
 #include <sys/malloc.h>
-#include <sys/rman.h>
+
 #include <sys/timeet.h>
 #include <sys/timetc.h>
 #include <sys/watchdog.h>
 #include <machine/bus.h>
 #include <machine/cpu.h>
-#include <machine/frame.h>
 #include <machine/intr.h>
 
-#include <dev/fdt/fdt_common.h>
+#include <machine/machdep.h> /* For arm_set_delay */
+
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
 #include <machine/bus.h>
-#include <machine/fdt.h>
 
 #define	SP804_TIMER1_LOAD	0x00
 #define	SP804_TIMER1_VALUE	0x04
@@ -101,6 +102,7 @@ struct sp804_timer_softc {
 	struct timecounter	tc;
 	bool			et_enabled;
 	struct eventtimer	et;
+	int			timer_initialized;
 };
 
 /* Read/Write macros for Timer used as timecounter */
@@ -111,6 +113,7 @@ struct sp804_timer_softc {
 	bus_space_write_4(sc->bst, sc->bsh, reg, val)
 
 static unsigned sp804_timer_tc_get_timecount(struct timecounter *);
+static void sp804_timer_delay(int, void *);
 
 static unsigned
 sp804_timer_tc_get_timecount(struct timecounter *tc)
@@ -184,6 +187,9 @@ static int
 sp804_timer_probe(device_t dev)
 {
 
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
+
 	if (ofw_bus_is_compatible(dev, "arm,sp804")) {
 		device_set_desc(dev, "SP804 System Timer");
 		return (BUS_PROBE_DEFAULT);
@@ -199,6 +205,8 @@ sp804_timer_attach(device_t dev)
 	int rid = 0;
 	int i;
 	uint32_t id, reg;
+	phandle_t node;
+	pcell_t clock;
 
 	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid, RF_ACTIVE);
 	if (sc->mem_res == NULL) {
@@ -216,8 +224,12 @@ sp804_timer_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	/* TODO: get frequency from FDT */
 	sc->sysclk_freq = DEFAULT_FREQUENCY;
+	/* Get the base clock frequency */
+	node = ofw_bus_get_node(dev);
+	if ((OF_getencprop(node, "clock-frequency", &clock, sizeof(clock))) > 0) {
+		sc->sysclk_freq = clock;
+	}
 
 	/* Setup and enable the timer */
 	if (bus_setup_intr(dev, sc->irq_res, INTR_TYPE_CLK,
@@ -235,8 +247,8 @@ sp804_timer_attach(device_t dev)
 	/*
 	 * Timer 1, timecounter
 	 */
-	sc->tc.tc_frequency = DEFAULT_FREQUENCY;
-	sc->tc.tc_name = "SP804 Timecouter";
+	sc->tc.tc_frequency = sc->sysclk_freq;
+	sc->tc.tc_name = "SP804-1";
 	sc->tc.tc_get_timecount = sp804_timer_tc_get_timecount;
 	sc->tc.tc_poll_pps = NULL;
 	sc->tc.tc_counter_mask = ~0u;
@@ -255,9 +267,7 @@ sp804_timer_attach(device_t dev)
 	 * Timer 2, event timer
 	 */
 	sc->et_enabled = 0;
-	sc->et.et_name = malloc(64, M_DEVBUF, M_NOWAIT | M_ZERO);
-	sprintf(sc->et.et_name, "SP804 Event Timer %d",
-		device_get_unit(dev));
+	sc->et.et_name = "SP804-2";
 	sc->et.et_flags = ET_FLAGS_PERIODIC | ET_FLAGS_ONESHOT;
 	sc->et.et_quality = 1000;
 	sc->et.et_frequency = sc->sysclk_freq / DEFAULT_DIVISOR;
@@ -282,7 +292,11 @@ sp804_timer_attach(device_t dev)
 		     (sp804_timer_tc_read_4(SP804_PRIMECELL_ID0 + i*4) & 0xff);
 	}
 
+	arm_set_delay(sp804_timer_delay, sc);
+
 	device_printf(dev, "PrimeCell ID: %08x\n", id);
+
+	sc->timer_initialized = 1;
 
 	return (0);
 }
@@ -303,28 +317,12 @@ static devclass_t sp804_timer_devclass;
 
 DRIVER_MODULE(sp804_timer, simplebus, sp804_timer_driver, sp804_timer_devclass, 0, 0);
 
-void
-DELAY(int usec)
+static void
+sp804_timer_delay(int usec, void *arg)
 {
+	struct sp804_timer_softc *sc = arg;
 	int32_t counts;
 	uint32_t first, last;
-	device_t timer_dev;
-	struct sp804_timer_softc *sc;
-
-	timer_dev = devclass_get_device(sp804_timer_devclass, 0);
-
-	if (timer_dev == NULL) {
-		/*
-		 * Timer is not initialized yet
-		 */
-		for (; usec > 0; usec--)
-			for (counts = 200; counts > 0; counts--)
-				/* Prevent gcc from optimizing  out the loop */
-				cpufunc_nullop();
-		return;
-	}
-
-       	sc = device_get_softc(timer_dev);
 
 	/* Get the number of times to count */
 	counts = usec * ((sc->tc.tc_frequency / 1000000) + 1);
@@ -335,7 +333,7 @@ DELAY(int usec)
 		last = sp804_timer_tc_get_timecount(&sc->tc);
 		if (last == first)
 			continue;
-		if (last>first) {
+		if (last > first) {
 			counts -= (int32_t)(last - first);
 		} else {
 			counts -= (int32_t)((0xFFFFFFFF - first) + last);

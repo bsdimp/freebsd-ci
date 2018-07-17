@@ -6,20 +6,21 @@
 // License. See LICENSE.TXT for details.
 //
 //===----------------------------------------------------------------------===//
-//
-// This file defines the DelayedDiagnostic class, which is used to
-// record diagnostics that are being conditionally produced during
-// declarator parsing.  Certain kinds of diagnostics --- notably
-// deprecation and access control --- are suppressed based on
-// semantic properties of the parsed declaration that aren't known
-// until it is fully parsed.
-//
-// This file also defines AccessedEntity.
-//
+///
+/// \file
+/// \brief Defines the classes clang::DelayedDiagnostic and 
+/// clang::AccessedEntity.
+///
+/// DelayedDiangostic is used to record diagnostics that are being
+/// conditionally produced during declarator parsing.  Certain kinds of
+/// diagnostics -- notably deprecation and access control -- are suppressed
+/// based on semantic properties of the parsed declaration that aren't known
+/// until it is fully parsed.
+///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_SEMA_DELAYED_DIAGNOSTIC_H
-#define LLVM_CLANG_SEMA_DELAYED_DIAGNOSTIC_H
+#ifndef LLVM_CLANG_SEMA_DELAYEDDIAGNOSTIC_H
+#define LLVM_CLANG_SEMA_DELAYEDDIAGNOSTIC_H
 
 #include "clang/Sema/Sema.h"
 
@@ -112,20 +113,24 @@ private:
 /// the complete parsing of the current declaration.
 class DelayedDiagnostic {
 public:
-  enum DDKind { Deprecation, Access, ForbiddenType };
+  enum DDKind : unsigned char { Availability, Access, ForbiddenType };
 
-  unsigned char Kind; // actually a DDKind
+  DDKind Kind;
   bool Triggered;
 
   SourceLocation Loc;
 
   void Destroy();
 
-  static DelayedDiagnostic makeDeprecation(SourceLocation Loc,
-           const NamedDecl *D,
-           const ObjCInterfaceDecl *UnknownObjCClass,
-           const ObjCPropertyDecl  *ObjCProperty,
-           StringRef Msg);
+  static DelayedDiagnostic makeAvailability(AvailabilityResult AR,
+                                            SourceLocation Loc,
+                                            const NamedDecl *ReferringDecl,
+                                            const NamedDecl *OffendingDecl,
+                                            const ObjCInterfaceDecl *UnknownObjCClass,
+                                            const ObjCPropertyDecl  *ObjCProperty,
+                                            StringRef Msg,
+                                            bool ObjCPropertyAccess);
+
 
   static DelayedDiagnostic makeAccess(SourceLocation Loc,
                                       const AccessedEntity &Entity) {
@@ -160,15 +165,23 @@ public:
     return *reinterpret_cast<const AccessedEntity*>(AccessData);
   }
 
-  const NamedDecl *getDeprecationDecl() const {
-    assert(Kind == Deprecation && "Not a deprecation diagnostic.");
-    return DeprecationData.Decl;
+  const NamedDecl *getAvailabilityReferringDecl() const {
+    assert(Kind == Availability && "Not an availability diagnostic.");
+    return AvailabilityData.ReferringDecl;
   }
 
-  StringRef getDeprecationMessage() const {
-    assert(Kind == Deprecation && "Not a deprecation diagnostic.");
-    return StringRef(DeprecationData.Message,
-                           DeprecationData.MessageLen);
+  const NamedDecl *getAvailabilityOffendingDecl() const {
+    return AvailabilityData.OffendingDecl;
+  }
+
+  StringRef getAvailabilityMessage() const {
+    assert(Kind == Availability && "Not an availability diagnostic.");
+    return StringRef(AvailabilityData.Message, AvailabilityData.MessageLen);
+  }
+
+  AvailabilityResult getAvailabilityResult() const {
+    assert(Kind == Availability && "Not an availability diagnostic.");
+    return AvailabilityData.AR;
   }
 
   /// The diagnostic ID to emit.  Used like so:
@@ -189,23 +202,30 @@ public:
     assert(Kind == ForbiddenType && "not a forbidden-type diagnostic");
     return QualType::getFromOpaquePtr(ForbiddenTypeData.OperandType);
   }
-  
+
   const ObjCInterfaceDecl *getUnknownObjCClass() const {
-    return DeprecationData.UnknownObjCClass;
+    return AvailabilityData.UnknownObjCClass;
   }
 
   const ObjCPropertyDecl *getObjCProperty() const {
-    return DeprecationData.ObjCProperty;
+    return AvailabilityData.ObjCProperty;
   }
-  
+
+  bool getObjCPropertyAccess() const {
+    return AvailabilityData.ObjCPropertyAccess;
+  }
+
 private:
 
-  struct DD {
-    const NamedDecl *Decl;
+  struct AD {
+    const NamedDecl *ReferringDecl;
+    const NamedDecl *OffendingDecl;
     const ObjCInterfaceDecl *UnknownObjCClass;
     const ObjCPropertyDecl  *ObjCProperty;
     const char *Message;
     size_t MessageLen;
+    AvailabilityResult AR;
+    bool ObjCPropertyAccess;
   };
 
   struct FTD {
@@ -215,8 +235,7 @@ private:
   };
 
   union {
-    /// Deprecation
-    struct DD DeprecationData;
+    struct AD AvailabilityData;
     struct FTD ForbiddenTypeData;
 
     /// Access control.
@@ -224,14 +243,13 @@ private:
   };
 };
 
-/// DelayedDiagnosticPool - A collection of diagnostics which were
-/// delayed.
+/// \brief A collection of diagnostics which were delayed.
 class DelayedDiagnosticPool {
   const DelayedDiagnosticPool *Parent;
   SmallVector<DelayedDiagnostic, 4> Diagnostics;
 
-  DelayedDiagnosticPool(const DelayedDiagnosticPool &) LLVM_DELETED_FUNCTION;
-  void operator=(const DelayedDiagnosticPool &) LLVM_DELETED_FUNCTION;
+  DelayedDiagnosticPool(const DelayedDiagnosticPool &) = delete;
+  void operator=(const DelayedDiagnosticPool &) = delete;
 public:
   DelayedDiagnosticPool(const DelayedDiagnosticPool *parent) : Parent(parent) {}
   ~DelayedDiagnosticPool() {
@@ -240,11 +258,22 @@ public:
       i->Destroy();
   }
 
+  DelayedDiagnosticPool(DelayedDiagnosticPool &&Other)
+    : Parent(Other.Parent), Diagnostics(std::move(Other.Diagnostics)) {
+    Other.Diagnostics.clear();
+  }
+  DelayedDiagnosticPool &operator=(DelayedDiagnosticPool &&Other) {
+    Parent = Other.Parent;
+    Diagnostics = std::move(Other.Diagnostics);
+    Other.Diagnostics.clear();
+    return *this;
+  }
+
   const DelayedDiagnosticPool *getParent() const { return Parent; }
 
   /// Does this pool, or any of its ancestors, contain any diagnostics?
   bool empty() const {
-    return (Diagnostics.empty() && (Parent == NULL || Parent->empty()));
+    return (Diagnostics.empty() && (!Parent || Parent->empty()));
   }
 
   /// Add a diagnostic to this pool.
@@ -257,7 +286,7 @@ public:
     if (pool.Diagnostics.empty()) return;
 
     if (Diagnostics.empty()) {
-      Diagnostics = llvm_move(pool.Diagnostics);
+      Diagnostics = std::move(pool.Diagnostics);
     } else {
       Diagnostics.append(pool.pool_begin(), pool.pool_end());
     }

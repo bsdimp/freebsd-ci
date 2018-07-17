@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001-2011 The FreeBSD Project.
  * All rights reserved.
  *
@@ -46,14 +48,50 @@ _Static_assert(__generic(_Complex_I, float _Complex, 1, 0),
 #define	complex		_Complex
 #define	I		_Complex_I
 
+#if __ISO_C_VISIBLE >= 2011
+#ifdef __clang__
+#define	CMPLX(x, y)	((double complex){ x, y })
+#define	CMPLXF(x, y)	((float complex){ x, y })
+#define	CMPLXL(x, y)	((long double complex){ x, y })
+#elif __GNUC_PREREQ__(4, 7)
+#define	CMPLX(x, y)	__builtin_complex((double)(x), (double)(y))
+#define	CMPLXF(x, y)	__builtin_complex((float)(x), (float)(y))
+#define	CMPLXL(x, y)	__builtin_complex((long double)(x), (long double)(y))
+#endif
+#endif /* __ISO_C_VISIBLE >= 2011 */
+
 __BEGIN_DECLS
 
 double		cabs(double complex);
 float		cabsf(float complex);
 long double	cabsl(long double complex);
+double complex	cacos(double complex);
+float complex	cacosf(float complex);
+double complex	cacosh(double complex);
+float complex	cacoshf(float complex);
+long double complex
+		cacoshl(long double complex);
+long double complex
+		cacosl(long double complex);
 double		carg(double complex);
 float		cargf(float complex);
 long double	cargl(long double complex);
+double complex	casin(double complex);
+float complex	casinf(float complex);
+double complex	casinh(double complex);
+float complex	casinhf(float complex);
+long double complex
+		casinhl(long double complex);
+long double complex
+		casinl(long double complex);
+double complex	catan(double complex);
+float complex	catanf(float complex);
+double complex	catanh(double complex);
+float complex	catanhf(float complex);
+long double complex
+		catanhl(long double complex);
+long double complex
+		catanl(long double complex);
 double complex	ccos(double complex);
 float complex	ccosf(float complex);
 double complex	ccosh(double complex);
@@ -63,10 +101,18 @@ float complex	cexpf(float complex);
 double		cimag(double complex) __pure2;
 float		cimagf(float complex) __pure2;
 long double	cimagl(long double complex) __pure2;
+double complex	clog(double complex);
+float complex	clogf(float complex);
+long double complex
+		clogl(long double complex);
 double complex	conj(double complex) __pure2;
 float complex	conjf(float complex) __pure2;
 long double complex
 		conjl(long double complex) __pure2;
+float complex	cpowf(float complex, float complex);
+double complex	cpow(double complex, double complex);
+long double complex
+		cpowl(long double complex, long double complex);
 float complex	cprojf(float complex) __pure2;
 double complex	cproj(double complex) __pure2;
 long double complex

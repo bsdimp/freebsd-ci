@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2006 M. Warner Losh.  All rights reserved.
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2006 M. Warner Losh.
  * Copyright (c) 2010 Greg Ansley.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -24,6 +26,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_platform.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -39,16 +43,18 @@ __FBSDID("$FreeBSD$");
 #include <sys/timetc.h>
 
 #include <machine/bus.h>
-#include <machine/cpu.h>
-#include <machine/cpufunc.h>
 #include <machine/resource.h>
-#include <machine/frame.h>
 #include <machine/intr.h>
 #include <arm/at91/at91reg.h>
 #include <arm/at91/at91var.h>
 
 #include <arm/at91/at91_pmcreg.h>
 #include <arm/at91/at91_pmcvar.h>
+
+#ifdef FDT
+#include <dev/ofw/ofw_bus.h>
+#include <dev/ofw/ofw_bus_subr.h>
+#endif
 
 static struct at91_pmc_softc {
 	bus_space_tag_t		sc_st;
@@ -59,8 +65,8 @@ static struct at91_pmc_softc {
 
 static uint32_t pllb_init;
 
-MALLOC_DECLARE(M_PMC);
-MALLOC_DEFINE(M_PMC, "at91_pmc_clocks", "AT91 PMC Clock descriptors");
+MALLOC_DECLARE(M_PMC_CLK);
+MALLOC_DEFINE(M_PMC_CLK, "at91_pmc_clocks", "AT91 PMC Clock descriptors");
 
 #define AT91_PMC_BASE 0xffffc00
 
@@ -296,12 +302,12 @@ at91_pmc_clock_add(const char *name, uint32_t irq,
 	struct at91_pmc_clock *clk;
 	int i, buflen;
 
-	clk = malloc(sizeof(*clk), M_PMC, M_NOWAIT | M_ZERO);
+	clk = malloc(sizeof(*clk), M_PMC_CLK, M_NOWAIT | M_ZERO);
 	if (clk == NULL)
 		goto err;
 
 	buflen = strlen(name) + 1;
-	clk->name = malloc(buflen, M_PMC, M_NOWAIT);
+	clk->name = malloc(buflen, M_PMC_CLK, M_NOWAIT);
 	if (clk->name == NULL)
 		goto err;
 
@@ -313,7 +319,7 @@ at91_pmc_clock_add(const char *name, uint32_t irq,
 	else
 		clk->parent = parent;
 
-	for (i = 0; i < sizeof(clock_list) / sizeof(clock_list[0]); i++) {
+	for (i = 0; i < nitems(clock_list); i++) {
 		if (clock_list[i] == NULL) {
 			clock_list[i] = clk;
 			return (clk);
@@ -322,8 +328,8 @@ at91_pmc_clock_add(const char *name, uint32_t irq,
 err:
 	if (clk != NULL) {
 		if (clk->name != NULL)
-			free(clk->name, M_PMC);
-		free(clk, M_PMC);
+			free(clk->name, M_PMC_CLK);
+		free(clk, M_PMC_CLK);
 	}
 
 	panic("could not allocate pmc clock '%s'", name);
@@ -351,7 +357,7 @@ at91_pmc_clock_ref(const char *name)
 {
 	int i;
 
-	for (i = 0; i < sizeof(clock_list) / sizeof(clock_list[0]); i++) {
+	for (i = 0; i < nitems(clock_list); i++) {
 		if (clock_list[i] == NULL)
 		    break;
 		if (strcmp(name, clock_list[i]->name) == 0)
@@ -477,7 +483,7 @@ static const unsigned int at91_main_clock_tbl[] = {
 	12000000, 12288000, 13560000, 14318180, 14745600,
 	16000000, 17344700, 18432000, 20000000
 };
-#define	MAIN_CLOCK_TBL_LEN	(sizeof(at91_main_clock_tbl) / sizeof(*at91_main_clock_tbl))
+#define	MAIN_CLOCK_TBL_LEN	nitems(at91_main_clock_tbl)
 #endif
 
 static unsigned int
@@ -499,7 +505,7 @@ at91_pmc_sense_main_clock(void)
 	 * AT91C_MAIN_CLOCK in the kernel config file.
 	 */
 	if (ckgr_val >= 21000000)
-		return ((ckgr_val + 250) / 500 * 500);
+		return (rounddown(ckgr_val + 250, 500));
 
 	/*
 	 * Try to find the standard frequency that match best.
@@ -526,6 +532,8 @@ at91_pmc_init_clock(void)
 	unsigned int main_clock;
 	uint32_t mckr;
 	uint32_t mdiv;
+
+	soc_info.soc_data->soc_clock_init();
 
 	main_clock = at91_pmc_sense_main_clock();
 
@@ -627,7 +635,7 @@ at91_pmc_deactivate(device_t dev)
 	if (sc->mem_res)
 		bus_release_resource(dev, SYS_RES_IOPORT,
 		    rman_get_rid(sc->mem_res), sc->mem_res);
-	sc->mem_res = 0;
+	sc->mem_res = NULL;
 }
 
 static int
@@ -651,7 +659,13 @@ errout:
 static int
 at91_pmc_probe(device_t dev)
 {
-
+#ifdef FDT
+	if (!ofw_bus_is_compatible(dev, "atmel,at91rm9200-pmc") &&
+ 		!ofw_bus_is_compatible(dev, "atmel,at91sam9260-pmc") &&
+		!ofw_bus_is_compatible(dev, "atmel,at91sam9g45-pmc") &&
+		!ofw_bus_is_compatible(dev, "atmel,at91sam9x5-pmc"))
+		return (ENXIO);
+#endif
 	device_set_desc(dev, "PMC");
 	return (0);
 }
@@ -696,5 +710,10 @@ static driver_t at91_pmc_driver = {
 };
 static devclass_t at91_pmc_devclass;
 
-DRIVER_MODULE(at91_pmc, atmelarm, at91_pmc_driver, at91_pmc_devclass, NULL,
-    NULL);
+#ifdef FDT
+EARLY_DRIVER_MODULE(at91_pmc, simplebus, at91_pmc_driver, at91_pmc_devclass,
+    NULL, NULL, BUS_PASS_CPU);
+#else
+EARLY_DRIVER_MODULE(at91_pmc, atmelarm, at91_pmc_driver, at91_pmc_devclass,
+    NULL, NULL, BUS_PASS_CPU);
+#endif

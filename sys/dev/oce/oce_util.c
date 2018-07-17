@@ -1,5 +1,7 @@
 /*-
- * Copyright (C) 2012 Emulex
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (C) 2013 Emulex
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -36,9 +38,7 @@
  * Costa Mesa, CA 92626
  */
 
-
 /* $FreeBSD$ */
-
 
 #include "oce_if.h"
 
@@ -107,15 +107,15 @@ oce_dma_free(POCE_SOFTC sc, POCE_DMA_MEM dma)
 	if (dma->tag == NULL)
 		return;
 
-	if (dma->map != NULL) {
+	if (dma->paddr != 0) {
 		bus_dmamap_sync(dma->tag, dma->map,
 				BUS_DMASYNC_POSTREAD | BUS_DMASYNC_POSTWRITE);
 		bus_dmamap_unload(dma->tag, dma->map);
+		dma->paddr = 0;
 	}
 
 	if (dma->ptr != NULL) {
 		bus_dmamem_free(dma->tag, dma->ptr, dma->map);
-		dma->map = NULL;
 		dma->ptr = NULL;
 	}
 

@@ -13,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -38,10 +38,8 @@ __FBSDID("$FreeBSD$");
 
 #include "SYS.h"
 
-	.weak	_vfork
-	.set	_vfork,__sys_vfork
-	.weak	vfork
-	.set	vfork,__sys_vfork
+	WEAK_REFERENCE(__sys_vfork, _vfork)
+	WEAK_REFERENCE(__sys_vfork, vfork)
 ENTRY(__sys_vfork)
 	popl	%ecx		/* my rta into ecx */
 	mov	$SYS_vfork,%eax

@@ -1,5 +1,7 @@
-/*
- * Copyright (c) 2010-2011 Qlogic Corporation
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2011-2013 Qlogic Corporation
  * All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
@@ -36,6 +38,6 @@
 
 #define QLA_VERSION_MAJOR 	1
 #define QLA_VERSION_MINOR	1
-#define QLA_VERSION_BUILD	30
+#define QLA_VERSION_BUILD	36
 
 #endif /* #ifndef _QLA_VER_H_ */

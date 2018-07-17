@@ -11,9 +11,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#define DEBUG_TYPE "ExprEngine"
-
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExprEngine.h"
+#include "PrettyStackTraceLocationContext.h"
 #include "clang/AST/CXXInheritance.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/ParentMap.h"
@@ -27,6 +26,8 @@
 using namespace clang;
 using namespace ento;
 
+#define DEBUG_TYPE "ExprEngine"
+
 STATISTIC(NumOfDynamicDispatchPathSplits,
   "The # of times we split the path due to imprecise dynamic dispatch info");
 
@@ -36,38 +37,43 @@ STATISTIC(NumInlinedCalls,
 STATISTIC(NumReachedInlineCountMax,
   "The # of times we reached inline count maximum");
 
-void ExprEngine::processCallEnter(CallEnter CE, ExplodedNode *Pred) {
+void ExprEngine::processCallEnter(NodeBuilderContext& BC, CallEnter CE,
+                                  ExplodedNode *Pred) {
   // Get the entry block in the CFG of the callee.
   const StackFrameContext *calleeCtx = CE.getCalleeContext();
-  const CFG *CalleeCFG = calleeCtx->getCFG();
-  const CFGBlock *Entry = &(CalleeCFG->getEntry());
-  
+  PrettyStackTraceLocationContext CrashInfo(calleeCtx);
+  const CFGBlock *Entry = CE.getEntry();
+
   // Validate the CFG.
   assert(Entry->empty());
   assert(Entry->succ_size() == 1);
-  
-  // Get the solitary sucessor.
+
+  // Get the solitary successor.
   const CFGBlock *Succ = *(Entry->succ_begin());
-  
+
   // Construct an edge representing the starting location in the callee.
   BlockEdge Loc(Entry, Succ, calleeCtx);
 
   ProgramStateRef state = Pred->getState();
-  
-  // Construct a new node and add it to the worklist.
+
+  // Construct a new node, notify checkers that analysis of the function has
+  // begun, and add the resultant nodes to the worklist.
   bool isNew;
   ExplodedNode *Node = G.getNode(Loc, state, false, &isNew);
   Node->addPredecessor(Pred, G);
-  if (isNew)
-    Engine.getWorkList()->enqueue(Node);
+  if (isNew) {
+    ExplodedNodeSet DstBegin;
+    processBeginOfFunction(BC, Node, DstBegin, Loc);
+    Engine.enqueue(DstBegin);
+  }
 }
 
 // Find the last statement on the path to the exploded node and the
 // corresponding Block.
 static std::pair<const Stmt*,
                  const CFGBlock*> getLastStmt(const ExplodedNode *Node) {
-  const Stmt *S = 0;
-  const CFGBlock *Blk = 0;
+  const Stmt *S = nullptr;
+  const CFGBlock *Blk = nullptr;
   const StackFrameContext *SF =
           Node->getLocation().getLocationContext()->getCurrentStackFrame();
 
@@ -105,12 +111,12 @@ static std::pair<const Stmt*,
     }
 
     if (Node->pred_empty())
-      return std::pair<const Stmt*, const CFGBlock*>((Stmt*)0, (CFGBlock*)0);
+      return std::make_pair(nullptr, nullptr);
 
     Node = *Node->pred_begin();
   }
 
-  return std::pair<const Stmt*, const CFGBlock*>(S, Blk);
+  return std::make_pair(S, Blk);
 }
 
 /// Adjusts a return value when the called function's return type does not
@@ -157,9 +163,9 @@ void ExprEngine::removeDeadOnEndOfFunction(NodeBuilderContext& BC,
                                            ExplodedNode *Pred,
                                            ExplodedNodeSet &Dst) {
   // Find the last statement in the function and the corresponding basic block.
-  const Stmt *LastSt = 0;
-  const CFGBlock *Blk = 0;
-  llvm::tie(LastSt, Blk) = getLastStmt(Pred);
+  const Stmt *LastSt = nullptr;
+  const CFGBlock *Blk = nullptr;
+  std::tie(LastSt, Blk) = getLastStmt(Pred);
   if (!Blk || !LastSt) {
     Dst.Add(Pred);
     return;
@@ -204,8 +210,8 @@ static bool isTemporaryPRValue(const CXXConstructExpr *E, SVal V) {
   return isa<CXXTempObjectRegion>(MR);
 }
 
-/// The call exit is simulated with a sequence of nodes, which occur between 
-/// CallExitBegin and CallExitEnd. The following operations occur between the 
+/// The call exit is simulated with a sequence of nodes, which occur between
+/// CallExitBegin and CallExitEnd. The following operations occur between the
 /// two program points:
 /// 1. CallExitBegin (triggers the start of call exit sequence)
 /// 2. Bind the return value
@@ -214,21 +220,21 @@ static bool isTemporaryPRValue(const CXXConstructExpr *E, SVal V) {
 /// 5. PostStmt<CallExpr>
 void ExprEngine::processCallExit(ExplodedNode *CEBNode) {
   // Step 1 CEBNode was generated before the call.
-
+  PrettyStackTraceLocationContext CrashInfo(CEBNode->getLocationContext());
   const StackFrameContext *calleeCtx =
       CEBNode->getLocationContext()->getCurrentStackFrame();
-  
+
   // The parent context might not be a stack frame, so make sure we
   // look up the first enclosing stack frame.
   const StackFrameContext *callerCtx =
     calleeCtx->getParent()->getCurrentStackFrame();
-  
+
   const Stmt *CE = calleeCtx->getCallSite();
   ProgramStateRef state = CEBNode->getState();
   // Find the last statement in the function and the corresponding basic block.
-  const Stmt *LastSt = 0;
-  const CFGBlock *Blk = 0;
-  llvm::tie(LastSt, Blk) = getLastStmt(CEBNode);
+  const Stmt *LastSt = nullptr;
+  const CFGBlock *Blk = nullptr;
+  std::tie(LastSt, Blk) = getLastStmt(CEBNode);
 
   // Generate a CallEvent /before/ cleaning the state, so that we can get the
   // correct value for 'this' (if necessary).
@@ -279,7 +285,7 @@ void ExprEngine::processCallExit(ExplodedNode *CEBNode) {
   // they occurred.
   ExplodedNodeSet CleanedNodes;
   if (LastSt && Blk && AMgr.options.AnalysisPurgeOpt != PurgeNone) {
-    static SimpleProgramPointTag retValBind("ExprEngine : Bind Return Value");
+    static SimpleProgramPointTag retValBind("ExprEngine", "Bind Return Value");
     PostStmt Loc(LastSt, calleeCtx, &retValBind);
     bool isNew;
     ExplodedNode *BindedRetNode = G.getNode(Loc, state, false, &isNew);
@@ -293,10 +299,10 @@ void ExprEngine::processCallExit(ExplodedNode *CEBNode) {
     // context, telling it to clean up everything in the callee's context
     // (and its children). We use the callee's function body as a diagnostic
     // statement, with which the program point will be associated.
-    removeDead(BindedRetNode, CleanedNodes, 0, calleeCtx,
+    removeDead(BindedRetNode, CleanedNodes, nullptr, calleeCtx,
                calleeCtx->getAnalysisDeclContext()->getBody(),
                ProgramPoint::PostStmtPurgeDeadSymbolsKind);
-    currBldrCtx = 0;
+    currBldrCtx = nullptr;
   } else {
     CleanedNodes.Add(CEBNode);
   }
@@ -376,22 +382,6 @@ void ExprEngine::examineStackFrames(const Decl *D, const LocationContext *LCtx,
     }
     LCtx = LCtx->getParent();
   }
-
-}
-
-static bool IsInStdNamespace(const FunctionDecl *FD) {
-  const DeclContext *DC = FD->getEnclosingNamespaceContext();
-  const NamespaceDecl *ND = dyn_cast<NamespaceDecl>(DC);
-  if (!ND)
-    return false;
-  
-  while (const DeclContext *Parent = ND->getParent()) {
-    if (!isa<NamespaceDecl>(Parent))
-      break;
-    ND = cast<NamespaceDecl>(Parent);
-  }
-
-  return ND->getName() == "std";
 }
 
 // The GDM component containing the dynamic dispatch bifurcation info. When
@@ -405,7 +395,8 @@ namespace {
     DynamicDispatchModeInlined = 1,
     DynamicDispatchModeConservative
   };
-}
+} // end anonymous namespace
+
 REGISTER_TRAIT_WITH_PROGRAMSTATE(DynamicDispatchBifurcationMap,
                                  CLANG_ENTO_PROGRAMSTATE_MAP(const MemRegion *,
                                                              unsigned))
@@ -418,7 +409,8 @@ bool ExprEngine::inlineCall(const CallEvent &Call, const Decl *D,
   const LocationContext *CurLC = Pred->getLocationContext();
   const StackFrameContext *CallerSFC = CurLC->getCurrentStackFrame();
   const LocationContext *ParentOfCallee = CallerSFC;
-  if (Call.getKind() == CE_Block) {
+  if (Call.getKind() == CE_Block &&
+      !cast<BlockCall>(Call).isConversionFromLambda()) {
     const BlockDataRegion *BR = cast<BlockCall>(Call).getBlockRegion();
     assert(BR && "If we have the block definition we should have its region");
     AnalysisDeclContext *BlockCtx = AMgr.getAnalysisDeclContext(D);
@@ -426,7 +418,7 @@ bool ExprEngine::inlineCall(const CallEvent &Call, const Decl *D,
                                                          cast<BlockDecl>(D),
                                                          BR);
   }
-  
+
   // This may be NULL, but that's fine.
   const Expr *CallE = Call.getOriginExpr();
 
@@ -436,8 +428,7 @@ bool ExprEngine::inlineCall(const CallEvent &Call, const Decl *D,
     CalleeADC->getStackFrame(ParentOfCallee, CallE,
                              currBldrCtx->getBlock(),
                              currStmtIdx);
-  
-    
+
   CallEnter Loc(CallE, CalleeSFC, CurLC);
 
   // Construct a new state which contains the mapping from actual to
@@ -456,6 +447,7 @@ bool ExprEngine::inlineCall(const CallEvent &Call, const Decl *D,
   Bldr.takeNodes(Pred);
 
   NumInlinedCalls++;
+  Engine.FunctionSummaries->bumpNumTimesInlined(D);
 
   // Mark the decl as visited.
   if (VisitedCallees)
@@ -468,7 +460,7 @@ static ProgramStateRef getInlineFailedState(ProgramStateRef State,
                                             const Stmt *CallE) {
   const void *ReplayState = State->get<ReplayWithoutInlining>();
   if (!ReplayState)
-    return 0;
+    return nullptr;
 
   assert(ReplayState == CallE && "Backtracked to the wrong call.");
   (void)CallE;
@@ -562,7 +554,7 @@ ProgramStateRef ExprEngine::bindReturnValue(const CallEvent &Call,
   QualType ResultTy = Call.getResultType();
   SValBuilder &SVB = getSValBuilder();
   unsigned Count = currBldrCtx->blockCount();
-  SVal R = SVB.conjureSymbolVal(0, E, LCtx, ResultTy, Count);
+  SVal R = SVB.conjureSymbolVal(nullptr, E, LCtx, ResultTy, Count);
   return State->BindExpr(E, LCtx, R);
 }
 
@@ -661,6 +653,8 @@ static CallInlinePolicy mayInlineCallKind(const CallEvent &Call,
     break;
   }
   case CE_CXXAllocator:
+    if (Opts.mayInlineCXXAllocator())
+      break;
     // Do not inline allocators until we model deallocators.
     // This is unfortunate, but basically necessary for smart pointers and such.
     return CIP_DisallowedAlways;
@@ -676,51 +670,60 @@ static CallInlinePolicy mayInlineCallKind(const CallEvent &Call,
   return CIP_Allowed;
 }
 
-/// Returns true if the given C++ class is a container.
-///
-/// Our heuristic for this is whether it contains a method named 'begin()' or a
-/// nested type named 'iterator'.
-static bool isContainerClass(const ASTContext &Ctx, const CXXRecordDecl *RD) {
-  // Don't record any path information.
-  CXXBasePaths Paths(false, false, false);
+/// Returns true if the given C++ class contains a member with the given name.
+static bool hasMember(const ASTContext &Ctx, const CXXRecordDecl *RD,
+                      StringRef Name) {
+  const IdentifierInfo &II = Ctx.Idents.get(Name);
+  DeclarationName DeclName = Ctx.DeclarationNames.getIdentifier(&II);
+  if (!RD->lookup(DeclName).empty())
+    return true;
 
-  const IdentifierInfo &BeginII = Ctx.Idents.get("begin");
-  DeclarationName BeginName = Ctx.DeclarationNames.getIdentifier(&BeginII);
-  DeclContext::lookup_const_result BeginDecls = RD->lookup(BeginName);
-  if (!BeginDecls.empty())
-    return true;
-  if (RD->lookupInBases(&CXXRecordDecl::FindOrdinaryMember,
-                        BeginName.getAsOpaquePtr(),
-                        Paths))
-    return true;
-  
-  const IdentifierInfo &IterII = Ctx.Idents.get("iterator");
-  DeclarationName IteratorName = Ctx.DeclarationNames.getIdentifier(&IterII);
-  DeclContext::lookup_const_result IterDecls = RD->lookup(IteratorName);
-  if (!IterDecls.empty())
-    return true;
-  if (RD->lookupInBases(&CXXRecordDecl::FindOrdinaryMember,
-                        IteratorName.getAsOpaquePtr(),
-                        Paths))
+  CXXBasePaths Paths(false, false, false);
+  if (RD->lookupInBases(
+          [DeclName](const CXXBaseSpecifier *Specifier, CXXBasePath &Path) {
+            return CXXRecordDecl::FindOrdinaryMember(Specifier, Path, DeclName);
+          },
+          Paths))
     return true;
 
   return false;
 }
 
-/// Returns true if the given function refers to a constructor or destructor of
-/// a C++ container.
+/// Returns true if the given C++ class is a container or iterator.
 ///
-/// We generally do a poor job modeling most containers right now, and would
+/// Our heuristic for this is whether it contains a method named 'begin()' or a
+/// nested type named 'iterator' or 'iterator_category'.
+static bool isContainerClass(const ASTContext &Ctx, const CXXRecordDecl *RD) {
+  return hasMember(Ctx, RD, "begin") ||
+         hasMember(Ctx, RD, "iterator") ||
+         hasMember(Ctx, RD, "iterator_category");
+}
+
+/// Returns true if the given function refers to a method of a C++ container
+/// or iterator.
+///
+/// We generally do a poor job modeling most containers right now, and might
 /// prefer not to inline their methods.
-static bool isContainerCtorOrDtor(const ASTContext &Ctx,
-                                  const FunctionDecl *FD) {
-  // Heuristic: a type is a container if it contains a "begin()" method
-  // or a type named "iterator".
-  if (!(isa<CXXConstructorDecl>(FD) || isa<CXXDestructorDecl>(FD)))
+static bool isContainerMethod(const ASTContext &Ctx,
+                              const FunctionDecl *FD) {
+  if (const CXXMethodDecl *MD = dyn_cast<CXXMethodDecl>(FD))
+    return isContainerClass(Ctx, MD->getParent());
+  return false;
+}
+
+/// Returns true if the given function is the destructor of a class named
+/// "shared_ptr".
+static bool isCXXSharedPtrDtor(const FunctionDecl *FD) {
+  const CXXDestructorDecl *Dtor = dyn_cast<CXXDestructorDecl>(FD);
+  if (!Dtor)
     return false;
 
-  const CXXRecordDecl *RD = cast<CXXMethodDecl>(FD)->getParent();
-  return isContainerClass(Ctx, RD);
+  const CXXRecordDecl *RD = Dtor->getParent();
+  if (const IdentifierInfo *II = RD->getDeclName().getAsIdentifierInfo())
+    if (II->isStr("shared_ptr"))
+        return true;
+
+  return false;
 }
 
 /// Returns true if the function in \p CalleeADC may be inlined in general.
@@ -728,10 +731,10 @@ static bool isContainerCtorOrDtor(const ASTContext &Ctx,
 /// This checks static properties of the function, such as its signature and
 /// CFG, to determine whether the analyzer should ever consider inlining it,
 /// in any context.
-static bool mayInlineDecl(const CallEvent &Call, AnalysisDeclContext *CalleeADC,
+static bool mayInlineDecl(AnalysisDeclContext *CalleeADC,
                           AnalyzerOptions &Opts) {
   // FIXME: Do not inline variadic calls.
-  if (Call.isVariadic())
+  if (CallEvent::isVariadic(CalleeADC->getDecl()))
     return false;
 
   // Check certain C++-related inlining policies.
@@ -746,15 +749,23 @@ static bool mayInlineDecl(const CallEvent &Call, AnalysisDeclContext *CalleeADC,
       // Conditionally control the inlining of C++ standard library functions.
       if (!Opts.mayInlineCXXStandardLibrary())
         if (Ctx.getSourceManager().isInSystemHeader(FD->getLocation()))
-          if (IsInStdNamespace(FD))
+          if (AnalysisDeclContext::isInStdNamespace(FD))
             return false;
 
       // Conditionally control the inlining of methods on objects that look
       // like C++ containers.
-      if (!Opts.mayInlineCXXContainerCtorsAndDtors())
-        if (!Ctx.getSourceManager().isFromMainFile(FD->getLocation()))
-          if (isContainerCtorOrDtor(Ctx, FD))
+      if (!Opts.mayInlineCXXContainerMethods())
+        if (!Ctx.getSourceManager().isInMainFile(FD->getLocation()))
+          if (isContainerMethod(Ctx, FD))
             return false;
+
+      // Conditionally control the inlining of the destructor of C++ shared_ptr.
+      // We don't currently do a good job modeling shared_ptr because we can't
+      // see the reference count, so treating as opaque is probably the best
+      // idea.
+      if (!Opts.mayInlineCXXSharedPtrDtor())
+        if (isCXXSharedPtrDtor(FD))
+          return false;
     }
   }
 
@@ -786,6 +797,14 @@ bool ExprEngine::shouldInlineCall(const CallEvent &Call, const Decl *D,
   AnalysisDeclContextManager &ADCMgr = AMgr.getAnalysisDeclContextManager();
   AnalysisDeclContext *CalleeADC = ADCMgr.getContext(D);
 
+  // Temporary object destructor processing is currently broken, so we never
+  // inline them.
+  // FIXME: Remove this once temp destructors are working.
+  if (isa<CXXDestructorCall>(Call)) {
+    if ((*currBldrCtx->getBlock())[currStmtIdx].getAs<CFGTemporaryDtor>())
+      return false;
+  }
+
   // The auto-synthesized bodies are essential to inline as they are
   // usually small and commonly used. Note: we should do this check early on to
   // ensure we always inline these calls.
@@ -804,7 +823,7 @@ bool ExprEngine::shouldInlineCall(const CallEvent &Call, const Decl *D,
   } else {
     // We haven't actually checked the static properties of this function yet.
     // Do that now, and record our decision in the function summaries.
-    if (mayInlineDecl(Call, CalleeADC, Opts)) {
+    if (mayInlineDecl(CalleeADC, Opts)) {
       Engine.FunctionSummaries->markMayInline(D);
     } else {
       Engine.FunctionSummaries->markShouldNotInline(D);
@@ -839,7 +858,8 @@ bool ExprEngine::shouldInlineCall(const CallEvent &Call, const Decl *D,
   // Do not inline large functions too many times.
   if ((Engine.FunctionSummaries->getNumTimesInlined(D) >
        Opts.getMaxTimesInlineLarge()) &&
-      CalleeCFG->getNumBlockIDs() > 13) {
+       CalleeCFG->getNumBlockIDs() >=
+       Opts.getMinCFGSizeTreatFunctionsAsLarge()) {
     NumReachedInlineCountMax++;
     return false;
   }
@@ -848,8 +868,6 @@ bool ExprEngine::shouldInlineCall(const CallEvent &Call, const Decl *D,
       (CalleeCFG->getNumBlockIDs() > Opts.getAlwaysInlineSize()
       || IsRecursive))
     return false;
-
-  Engine.FunctionSummaries->bumpNumTimesInlined(D);
 
   return true;
 }
@@ -955,18 +973,15 @@ void ExprEngine::BifurcateCall(const MemRegion *BifurReg,
   conservativeEvalCall(Call, Bldr, Pred, NoIState);
 
   NumOfDynamicDispatchPathSplits++;
-  return;
 }
-
 
 void ExprEngine::VisitReturnStmt(const ReturnStmt *RS, ExplodedNode *Pred,
                                  ExplodedNodeSet &Dst) {
-  
   ExplodedNodeSet dstPreVisit;
   getCheckerManager().runCheckersForPreStmt(dstPreVisit, Pred, RS, *this);
 
   StmtNodeBuilder B(dstPreVisit, Dst, *currBldrCtx);
-  
+
   if (RS->getRetValue()) {
     for (ExplodedNodeSet::iterator it = dstPreVisit.begin(),
                                   ei = dstPreVisit.end(); it != ei; ++it) {

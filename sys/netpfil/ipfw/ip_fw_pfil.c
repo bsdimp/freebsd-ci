@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 Andre Oppermann, Internet Business Solutions AG
  * All rights reserved.
  *
@@ -59,6 +61,7 @@ __FBSDID("$FreeBSD$");
 #ifdef INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
+#include <netinet6/scope6_var.h>
 #endif
 
 #include <netgraph/ng_ipfw.h>
@@ -82,9 +85,9 @@ int ipfw_chg_hook(SYSCTL_HANDLER_ARGS);
 
 /* Forward declarations. */
 static int ipfw_divert(struct mbuf **, int, struct ipfw_rule_ref *, int);
-static int ipfw_check_packet(void *, struct mbuf **, struct ifnet *, int,
+int ipfw_check_packet(void *, struct mbuf **, struct ifnet *, int,
 	struct inpcb *);
-static int ipfw_check_frame(void *, struct mbuf **, struct ifnet *, int,
+int ipfw_check_frame(void *, struct mbuf **, struct ifnet *, int,
 	struct inpcb *);
 
 #ifdef SYSCTL_NODE
@@ -92,20 +95,21 @@ static int ipfw_check_frame(void *, struct mbuf **, struct ifnet *, int,
 SYSBEGIN(f1)
 
 SYSCTL_DECL(_net_inet_ip_fw);
-SYSCTL_VNET_PROC(_net_inet_ip_fw, OID_AUTO, enable,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fw_enable), 0,
-    ipfw_chg_hook, "I", "Enable ipfw");
+SYSCTL_PROC(_net_inet_ip_fw, OID_AUTO, enable,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3,
+    &VNET_NAME(fw_enable), 0, ipfw_chg_hook, "I", "Enable ipfw");
 #ifdef INET6
 SYSCTL_DECL(_net_inet6_ip6_fw);
-SYSCTL_VNET_PROC(_net_inet6_ip6_fw, OID_AUTO, enable,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fw6_enable), 0,
-    ipfw_chg_hook, "I", "Enable ipfw+6");
+SYSCTL_PROC(_net_inet6_ip6_fw, OID_AUTO, enable,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3,
+    &VNET_NAME(fw6_enable), 0, ipfw_chg_hook, "I", "Enable ipfw+6");
 #endif /* INET6 */
 
 SYSCTL_DECL(_net_link_ether);
-SYSCTL_VNET_PROC(_net_link_ether, OID_AUTO, ipfw,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3, &VNET_NAME(fwlink_enable), 0,
-    ipfw_chg_hook, "I", "Pass ether pkts through firewall");
+SYSCTL_PROC(_net_link_ether, OID_AUTO, ipfw,
+    CTLFLAG_VNET | CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_SECURE3,
+    &VNET_NAME(fwlink_enable), 0, ipfw_chg_hook, "I",
+    "Pass ether pkts through firewall");
 
 SYSEND
 
@@ -116,7 +120,7 @@ SYSEND
  * dummynet, divert, netgraph or other modules.
  * The packet may be consumed.
  */
-static int
+int
 ipfw_check_packet(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
     struct inpcb *inp)
 {
@@ -196,8 +200,20 @@ again:
 		}
 #ifdef INET6
 		if (args.next_hop6 != NULL) {
-			bcopy(args.next_hop6, (fwd_tag+1), len);
-			if (in6_localip(&args.next_hop6->sin6_addr))
+			struct sockaddr_in6 *sa6;
+
+			sa6 = (struct sockaddr_in6 *)(fwd_tag + 1);
+			bcopy(args.next_hop6, sa6, len);
+			/*
+			 * If nh6 address is link-local we should convert
+			 * it to kernel internal form before doing any
+			 * comparisons.
+			 */
+			if (sa6_embedscope(sa6, V_ip6_use_defzone) != 0) {
+				ret = EACCES;
+				break;
+			}
+			if (in6_localip(&sa6->sin6_addr))
 				(*m0)->m_flags |= M_FASTFWD_OURS;
 			(*m0)->m_flags |= M_IP6_NEXTHOP;
 		}
@@ -289,11 +305,9 @@ again:
 
 /*
  * ipfw processing for ethernet packets (in and out).
- * Inteface is NULL from ether_demux, and ifp from
- * ether_output_frame.
  */
-static int
-ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
+int
+ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *ifp, int dir,
     struct inpcb *inp)
 {
 	struct ether_header *eh;
@@ -303,20 +317,15 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 	struct ip_fw_args args;
 	struct m_tag *mtag;
 
-	/* fetch start point from rule, if any */
+	/* fetch start point from rule, if any.  remove the tag if present. */
 	mtag = m_tag_locate(*m0, MTAG_IPFW_RULE, 0, NULL);
 	if (mtag == NULL) {
 		args.rule.slot = 0;
 	} else {
-		/* dummynet packet, already partially processed */
-		struct ipfw_rule_ref *r;
-
-		/* XXX can we free it after use ? */
-		mtag->m_tag_id = PACKET_TAG_NONE;
-		r = (struct ipfw_rule_ref *)(mtag + 1);
-		if (r->info & IPFW_ONEPASS)
+		args.rule = *((struct ipfw_rule_ref *)(mtag+1));
+		m_tag_delete(*m0, mtag);
+		if (args.rule.info & IPFW_ONEPASS)
 			return (0);
-		args.rule = *r;
 	}
 
 	/* I need some amt of data to be contiguous */
@@ -334,7 +343,7 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 	m_adj(m, ETHER_HDR_LEN);	/* strip ethernet header */
 
 	args.m = m;		/* the packet we are looking at		*/
-	args.oif = dst;		/* destination, if any			*/
+	args.oif = dir == PFIL_OUT ? ifp: NULL;	/* destination, if any	*/
 	args.next_hop = NULL;	/* we do not support forward yet	*/
 	args.next_hop6 = NULL;	/* we do not support forward yet	*/
 	args.eh = &save_eh;	/* MAC header for bridged/MAC packets	*/
@@ -369,14 +378,13 @@ ipfw_check_frame(void *arg, struct mbuf **m0, struct ifnet *dst, int dir,
 
 	case IP_FW_DUMMYNET:
 		ret = EACCES;
-		int dir;
 
 		if (ip_dn_io_ptr == NULL)
 			break; /* i.e. drop */
 
 		*m0 = NULL;
-		dir = PROTO_LAYER2 | (dst ? DIR_OUT : DIR_IN);
-		ip_dn_io_ptr(&m, dir, &args);
+		dir = (dir == PFIL_IN) ? DIR_IN : DIR_OUT;
+		ip_dn_io_ptr(&m, dir | PROTO_LAYER2, &args);
 		return 0;
 
 	default:
@@ -491,7 +499,7 @@ static int
 ipfw_hook(int onoff, int pf)
 {
 	struct pfil_head *pfh;
-	void *hook_func;
+	pfil_func_t hook_func;
 
 	pfh = pfil_head_get(PFIL_TYPE_AF, pf);
 	if (pfh == NULL)
@@ -536,30 +544,22 @@ ipfw_attach_hooks(int arg)
 int
 ipfw_chg_hook(SYSCTL_HANDLER_ARGS)
 {
-	int *enable;
 	int newval;
 	int error;
 	int af;
 
-	if (arg1 == &VNET_NAME(fw_enable)) {
-		enable = &V_fw_enable;
+	if (arg1 == &V_fw_enable)
 		af = AF_INET;
-	}
 #ifdef INET6
-	else if (arg1 == &VNET_NAME(fw6_enable)) {
-		enable = &V_fw6_enable;
+	else if (arg1 == &V_fw6_enable)
 		af = AF_INET6;
-	}
 #endif
-	else if (arg1 == &VNET_NAME(fwlink_enable)) {
-		enable = &V_fwlink_enable;
+	else if (arg1 == &V_fwlink_enable)
 		af = AF_LINK;
-	}
 	else 
 		return (EINVAL);
 
-	newval = *enable;
-
+	newval = *(int *)arg1;
 	/* Handle sysctl change */
 	error = sysctl_handle_int(oidp, &newval, 0, req);
 
@@ -569,13 +569,13 @@ ipfw_chg_hook(SYSCTL_HANDLER_ARGS)
 	/* Formalize new value */
 	newval = (newval) ? 1 : 0;
 
-	if (*enable == newval)
+	if (*(int *)arg1 == newval)
 		return (0);
 
 	error = ipfw_hook(newval, af);
 	if (error)
 		return (error);
-	*enable = newval;
+	*(int *)arg1 = newval;
 
 	return (0);
 }

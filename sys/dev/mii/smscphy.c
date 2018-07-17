@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 Benno Rice.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -77,6 +79,7 @@ DRIVER_MODULE(smscphy, miibus, smscphy_driver, smscphy_devclass, 0, 0);
 
 static const struct mii_phydesc smscphys[] = {
 	MII_PHY_DESC(SMC, LAN8710A),
+	MII_PHY_DESC(SMC, LAN8700),
 	MII_PHY_END
 };
 
@@ -120,12 +123,6 @@ smscphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
                 break;
 
         case MII_MEDIACHG:
-                /*
-                 * If the interface is not up, don't do anything.
-                 */
-                if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
-                        break;
-
 		switch (IFM_SUBTYPE(ife->ifm_media)) {
 		case IFM_AUTO:
 			smscphy_auto(sc, ife->ifm_media);
@@ -139,10 +136,6 @@ smscphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
                 break;
 
         case MII_TICK:
-		if ((mii->mii_ifp->if_flags & IFF_UP) == 0) {
-			return (0);
-		}
-
 		if (IFM_SUBTYPE(ife->ifm_media) != IFM_AUTO) {
 			break;
 		}

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Charles Mott <cm@linktel.net>
  * All rights reserved.
  *
@@ -146,6 +148,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/stdarg.h>
 #include <sys/param.h>
 #include <sys/kernel.h>
+#include <sys/systm.h>
 #include <sys/lock.h>
 #include <sys/module.h>
 #include <sys/rwlock.h>
@@ -348,24 +351,16 @@ MODULE_VERSION(libalias, 1);
 static int
 alias_mod_handler(module_t mod, int type, void *data)
 {
-	int error;
 
 	switch (type) {
-	case MOD_LOAD:
-		error = 0;
-		handler_chain_init();
-		break;
 	case MOD_QUIESCE:
 	case MOD_UNLOAD:
-	        handler_chain_destroy();
 	        finishoff();
-		error = 0;
-		break;
+	case MOD_LOAD:
+		return (0);
 	default:
-		error = EINVAL;
+		return (EINVAL);
 	}
-
-	return (error);
 }
 
 static moduledata_t alias_mod = {
@@ -791,9 +786,9 @@ FindNewPortGroup(struct libalias *la,
 		struct alias_link *search_result;
 
 		for (j = 0; j < port_count; j++)
-			if (0 != (search_result = FindLinkIn(la, dst_addr, alias_addr,
-			    dst_port, htons(port_sys + j),
-			    link_type, 0)))
+			if ((search_result = FindLinkIn(la, dst_addr,
+			    alias_addr, dst_port, htons(port_sys + j),
+			    link_type, 0)) != NULL)
 				break;
 
 		/* Found a good range, return base */

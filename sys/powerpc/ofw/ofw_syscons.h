@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 Peter Grehan
  * All rights reserved.
  *
@@ -32,6 +34,7 @@
 struct ofwfb_softc {
 	video_adapter_t	sc_va;
 	struct cdev *sc_si;
+	bus_space_tag_t sc_tag;
 	phandle_t	sc_node;
 	int	       	sc_console;
 

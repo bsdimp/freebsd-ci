@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Juli Mallett <jmallett@FreeBSD.org>
  * All rights reserved.
  *
@@ -81,7 +83,7 @@ octeon_rtc_probe(device_t dev)
 		return (ENXIO);
 
 	device_set_desc(dev, "Cavium Octeon Realtime Clock");
-	return (0);
+	return (BUS_PROBE_NOWILDCARD);
 }
 
 static int

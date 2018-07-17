@@ -5,9 +5,117 @@
  *
  *****************************************************************************/
 
-/*
- * Copyright (C) 2000 - 2013, Intel Corp.
+/******************************************************************************
+ *
+ * 1. Copyright Notice
+ *
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
+ *
+ * 2. License
+ *
+ * 2.1. This is your license from Intel Corp. under its intellectual property
+ * rights. You may have additional license terms from the party that provided
+ * you this software, covering your right to use that party's intellectual
+ * property rights.
+ *
+ * 2.2. Intel grants, free of charge, to any person ("Licensee") obtaining a
+ * copy of the source code appearing in this file ("Covered Code") an
+ * irrevocable, perpetual, worldwide license under Intel's copyrights in the
+ * base code distributed originally by Intel ("Original Intel Code") to copy,
+ * make derivatives, distribute, use and display any portion of the Covered
+ * Code in any form, with the right to sublicense such rights; and
+ *
+ * 2.3. Intel grants Licensee a non-exclusive and non-transferable patent
+ * license (with the right to sublicense), under only those claims of Intel
+ * patents that are infringed by the Original Intel Code, to make, use, sell,
+ * offer to sell, and import the Covered Code and derivative works thereof
+ * solely to the minimum extent necessary to exercise the above copyright
+ * license, and in no event shall the patent license extend to any additions
+ * to or modifications of the Original Intel Code. No other license or right
+ * is granted directly or by implication, estoppel or otherwise;
+ *
+ * The above copyright and patent license is granted only if the following
+ * conditions are met:
+ *
+ * 3. Conditions
+ *
+ * 3.1. Redistribution of Source with Rights to Further Distribute Source.
+ * Redistribution of source code of any substantial portion of the Covered
+ * Code or modification with rights to further distribute source must include
+ * the above Copyright Notice, the above License, this list of Conditions,
+ * and the following Disclaimer and Export Compliance provision. In addition,
+ * Licensee must cause all Covered Code to which Licensee contributes to
+ * contain a file documenting the changes Licensee made to create that Covered
+ * Code and the date of any change. Licensee must include in that file the
+ * documentation of any changes made by any predecessor Licensee. Licensee
+ * must include a prominent statement that the modification is derived,
+ * directly or indirectly, from Original Intel Code.
+ *
+ * 3.2. Redistribution of Source with no Rights to Further Distribute Source.
+ * Redistribution of source code of any substantial portion of the Covered
+ * Code or modification without rights to further distribute source must
+ * include the following Disclaimer and Export Compliance provision in the
+ * documentation and/or other materials provided with distribution. In
+ * addition, Licensee may not authorize further sublicense of source of any
+ * portion of the Covered Code, and must include terms to the effect that the
+ * license from Licensee to its licensee is limited to the intellectual
+ * property embodied in the software Licensee provides to its licensee, and
+ * not to intellectual property embodied in modifications its licensee may
+ * make.
+ *
+ * 3.3. Redistribution of Executable. Redistribution in executable form of any
+ * substantial portion of the Covered Code or modification must reproduce the
+ * above Copyright Notice, and the following Disclaimer and Export Compliance
+ * provision in the documentation and/or other materials provided with the
+ * distribution.
+ *
+ * 3.4. Intel retains all right, title, and interest in and to the Original
+ * Intel Code.
+ *
+ * 3.5. Neither the name Intel nor any other trademark owned or controlled by
+ * Intel shall be used in advertising or otherwise to promote the sale, use or
+ * other dealings in products derived from or relating to the Covered Code
+ * without prior written authorization from Intel.
+ *
+ * 4. Disclaimer and Export Compliance
+ *
+ * 4.1. INTEL MAKES NO WARRANTY OF ANY KIND REGARDING ANY SOFTWARE PROVIDED
+ * HERE. ANY SOFTWARE ORIGINATING FROM INTEL OR DERIVED FROM INTEL SOFTWARE
+ * IS PROVIDED "AS IS," AND INTEL WILL NOT PROVIDE ANY SUPPORT, ASSISTANCE,
+ * INSTALLATION, TRAINING OR OTHER SERVICES. INTEL WILL NOT PROVIDE ANY
+ * UPDATES, ENHANCEMENTS OR EXTENSIONS. INTEL SPECIFICALLY DISCLAIMS ANY
+ * IMPLIED WARRANTIES OF MERCHANTABILITY, NONINFRINGEMENT AND FITNESS FOR A
+ * PARTICULAR PURPOSE.
+ *
+ * 4.2. IN NO EVENT SHALL INTEL HAVE ANY LIABILITY TO LICENSEE, ITS LICENSEES
+ * OR ANY OTHER THIRD PARTY, FOR ANY LOST PROFITS, LOST DATA, LOSS OF USE OR
+ * COSTS OF PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES, OR FOR ANY INDIRECT,
+ * SPECIAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THIS AGREEMENT, UNDER ANY
+ * CAUSE OF ACTION OR THEORY OF LIABILITY, AND IRRESPECTIVE OF WHETHER INTEL
+ * HAS ADVANCE NOTICE OF THE POSSIBILITY OF SUCH DAMAGES. THESE LIMITATIONS
+ * SHALL APPLY NOTWITHSTANDING THE FAILURE OF THE ESSENTIAL PURPOSE OF ANY
+ * LIMITED REMEDY.
+ *
+ * 4.3. Licensee shall not export, either directly or indirectly, any of this
+ * software or system incorporating such software without first obtaining any
+ * required license or other approval from the U. S. Department of Commerce or
+ * any other agency or department of the United States Government. In the
+ * event Licensee exports any such software from the United States or
+ * re-exports any such software from a foreign destination, Licensee shall
+ * ensure that the distribution and export/re-export of the software is in
+ * compliance with all laws, regulations, orders, or other restrictions of the
+ * U.S. Export Administration Regulations. Licensee agrees that neither it nor
+ * any of its subsidiaries will export/re-export any technical data, process,
+ * software, or service, directly or indirectly, to any country for which the
+ * United States government or any agency thereof requires an export license,
+ * other governmental approval, or letter of assurance, without first obtaining
+ * such license, approval or letter.
+ *
+ *****************************************************************************
+ *
+ * Alternatively, you may choose to be licensed under the terms of the
+ * following license:
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -24,25 +132,23 @@
  *    of any contributors may be used to endorse or promote products derived
  *    from this software without specific prior written permission.
  *
- * Alternatively, this software may be distributed under the terms of the
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Alternatively, you may choose to be licensed under the terms of the
  * GNU General Public License ("GPL") version 2 as published by the Free
  * Software Foundation.
  *
- * NO WARRANTY
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGES.
- */
-
-#define __NSREPAIR2_C__
+ *****************************************************************************/
 
 #include <contrib/dev/acpica/include/acpi.h>
 #include <contrib/dev/acpica/include/accommon.h>
@@ -58,7 +164,7 @@
  */
 typedef
 ACPI_STATUS (*ACPI_REPAIR_FUNCTION) (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 typedef struct acpi_repair_info
@@ -77,42 +183,63 @@ AcpiNsMatchComplexRepair (
 
 static ACPI_STATUS
 AcpiNsRepair_ALR (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 static ACPI_STATUS
 AcpiNsRepair_CID (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
+    ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
+
+static ACPI_STATUS
+AcpiNsRepair_CST (
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 static ACPI_STATUS
 AcpiNsRepair_FDE (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 static ACPI_STATUS
 AcpiNsRepair_HID (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
+    ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
+
+static ACPI_STATUS
+AcpiNsRepair_PRT (
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 static ACPI_STATUS
 AcpiNsRepair_PSS (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 static ACPI_STATUS
 AcpiNsRepair_TSS (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr);
 
 static ACPI_STATUS
 AcpiNsCheckSortedList (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     *ReturnObject,
+    UINT32                  StartIndex,
     UINT32                  ExpectedCount,
     UINT32                  SortIndex,
     UINT8                   SortDirection,
     char                    *SortKeyName);
+
+/* Values for SortDirection above */
+
+#define ACPI_SORT_ASCENDING     0
+#define ACPI_SORT_DESCENDING    1
+
+static void
+AcpiNsRemoveElement (
+    ACPI_OPERAND_OBJECT     *ObjDesc,
+    UINT32                  Index);
 
 static void
 AcpiNsSortList (
@@ -120,11 +247,6 @@ AcpiNsSortList (
     UINT32                  Count,
     UINT32                  Index,
     UINT8                   SortDirection);
-
-/* Values for SortDirection above */
-
-#define ACPI_SORT_ASCENDING     0
-#define ACPI_SORT_DESCENDING    1
 
 
 /*
@@ -135,9 +257,11 @@ AcpiNsSortList (
  *
  * _ALR: Sort the list ascending by AmbientIlluminance
  * _CID: Strings: uppercase all, remove any leading asterisk
+ * _CST: Sort the list ascending by C state type
  * _FDE: Convert Buffer of BYTEs to a Buffer of DWORDs
  * _GTM: Convert Buffer of BYTEs to a Buffer of DWORDs
  * _HID: Strings: uppercase all, remove any leading asterisk
+ * _PRT: Fix reversed SourceName and SourceIndex
  * _PSS: Sort the list descending by Power
  * _TSS: Sort the list descending by Power
  *
@@ -152,9 +276,11 @@ static const ACPI_REPAIR_INFO       AcpiNsRepairableNames[] =
 {
     {"_ALR", AcpiNsRepair_ALR},
     {"_CID", AcpiNsRepair_CID},
+    {"_CST", AcpiNsRepair_CST},
     {"_FDE", AcpiNsRepair_FDE},
     {"_GTM", AcpiNsRepair_FDE},     /* _GTM has same repair as _FDE */
     {"_HID", AcpiNsRepair_HID},
+    {"_PRT", AcpiNsRepair_PRT},
     {"_PSS", AcpiNsRepair_PSS},
     {"_TSS", AcpiNsRepair_TSS},
     {{0,0,0,0}, NULL}               /* Table terminator */
@@ -170,7 +296,7 @@ static const ACPI_REPAIR_INFO       AcpiNsRepairableNames[] =
  *
  * FUNCTION:    AcpiNsComplexRepairs
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              Node                - Namespace node for the method/object
  *              ValidateStatus      - Original status of earlier validation
  *              ReturnObjectPtr     - Pointer to the object returned from the
@@ -186,7 +312,7 @@ static const ACPI_REPAIR_INFO       AcpiNsRepairableNames[] =
 
 ACPI_STATUS
 AcpiNsComplexRepairs (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_NAMESPACE_NODE     *Node,
     ACPI_STATUS             ValidateStatus,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
@@ -203,7 +329,7 @@ AcpiNsComplexRepairs (
         return (ValidateStatus);
     }
 
-    Status = Predefined->RepairFunction (Data, ReturnObjectPtr);
+    Status = Predefined->RepairFunction (Info, ReturnObjectPtr);
     return (Status);
 }
 
@@ -236,6 +362,7 @@ AcpiNsMatchComplexRepair (
         {
             return (ThisName);
         }
+
         ThisName++;
     }
 
@@ -247,7 +374,7 @@ AcpiNsMatchComplexRepair (
  *
  * FUNCTION:    AcpiNsRepair_ALR
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObjectPtr     - Pointer to the object returned from the
  *                                    evaluation of a method or object
  *
@@ -260,15 +387,15 @@ AcpiNsMatchComplexRepair (
 
 static ACPI_STATUS
 AcpiNsRepair_ALR (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
 {
     ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
     ACPI_STATUS             Status;
 
 
-    Status = AcpiNsCheckSortedList (Data, ReturnObject, 2, 1,
-                ACPI_SORT_ASCENDING, "AmbientIlluminance");
+    Status = AcpiNsCheckSortedList (Info, ReturnObject, 0, 2, 1,
+        ACPI_SORT_ASCENDING, "AmbientIlluminance");
 
     return (Status);
 }
@@ -278,7 +405,7 @@ AcpiNsRepair_ALR (
  *
  * FUNCTION:    AcpiNsRepair_FDE
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObjectPtr     - Pointer to the object returned from the
  *                                    evaluation of a method or object
  *
@@ -293,7 +420,7 @@ AcpiNsRepair_ALR (
 
 static ACPI_STATUS
 AcpiNsRepair_FDE (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
 {
     ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
@@ -321,7 +448,8 @@ AcpiNsRepair_FDE (
 
         if (ReturnObject->Buffer.Length != ACPI_FDE_BYTE_BUFFER_SIZE)
         {
-            ACPI_WARN_PREDEFINED ((AE_INFO, Data->Pathname, Data->NodeFlags,
+            ACPI_WARN_PREDEFINED ((AE_INFO,
+                Info->FullPathname, Info->NodeFlags,
                 "Incorrect return buffer length %u, expected %u",
                 ReturnObject->Buffer.Length, ACPI_FDE_DWORD_BUFFER_SIZE));
 
@@ -330,7 +458,8 @@ AcpiNsRepair_FDE (
 
         /* Create the new (larger) buffer object */
 
-        BufferObject = AcpiUtCreateBufferObject (ACPI_FDE_DWORD_BUFFER_SIZE);
+        BufferObject = AcpiUtCreateBufferObject (
+            ACPI_FDE_DWORD_BUFFER_SIZE);
         if (!BufferObject)
         {
             return (AE_NO_MEMORY);
@@ -339,7 +468,8 @@ AcpiNsRepair_FDE (
         /* Expand each byte to a DWORD */
 
         ByteBuffer = ReturnObject->Buffer.Pointer;
-        DwordBuffer = ACPI_CAST_PTR (UINT32, BufferObject->Buffer.Pointer);
+        DwordBuffer = ACPI_CAST_PTR (UINT32,
+            BufferObject->Buffer.Pointer);
 
         for (i = 0; i < ACPI_FDE_FIELD_COUNT; i++)
         {
@@ -350,10 +480,11 @@ AcpiNsRepair_FDE (
 
         ACPI_DEBUG_PRINT ((ACPI_DB_REPAIR,
             "%s Expanded Byte Buffer to expected DWord Buffer\n",
-            Data->Pathname));
+            Info->FullPathname));
         break;
 
     default:
+
         return (AE_AML_OPERAND_TYPE);
     }
 
@@ -362,7 +493,7 @@ AcpiNsRepair_FDE (
     AcpiUtRemoveReference (ReturnObject);
     *ReturnObjectPtr = BufferObject;
 
-    Data->Flags |= ACPI_OBJECT_REPAIRED;
+    Info->ReturnFlags |= ACPI_OBJECT_REPAIRED;
     return (AE_OK);
 }
 
@@ -371,7 +502,7 @@ AcpiNsRepair_FDE (
  *
  * FUNCTION:    AcpiNsRepair_CID
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObjectPtr     - Pointer to the object returned from the
  *                                    evaluation of a method or object
  *
@@ -385,7 +516,7 @@ AcpiNsRepair_FDE (
 
 static ACPI_STATUS
 AcpiNsRepair_CID (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
 {
     ACPI_STATUS             Status;
@@ -400,7 +531,7 @@ AcpiNsRepair_CID (
 
     if (ReturnObject->Common.Type == ACPI_TYPE_STRING)
     {
-        Status = AcpiNsRepair_HID (Data, ReturnObjectPtr);
+        Status = AcpiNsRepair_HID (Info, ReturnObjectPtr);
         return (Status);
     }
 
@@ -419,22 +550,18 @@ AcpiNsRepair_CID (
         OriginalElement = *ElementPtr;
         OriginalRefCount = OriginalElement->Common.ReferenceCount;
 
-        Status = AcpiNsRepair_HID (Data, ElementPtr);
+        Status = AcpiNsRepair_HID (Info, ElementPtr);
         if (ACPI_FAILURE (Status))
         {
             return (Status);
         }
 
-        /* Take care with reference counts */
-
         if (OriginalElement != *ElementPtr)
         {
-            /* Element was replaced */
+            /* Update reference count of new object */
 
             (*ElementPtr)->Common.ReferenceCount =
                 OriginalRefCount;
-
-            AcpiUtRemoveReference (OriginalElement);
         }
 
         ElementPtr++;
@@ -446,9 +573,104 @@ AcpiNsRepair_CID (
 
 /******************************************************************************
  *
+ * FUNCTION:    AcpiNsRepair_CST
+ *
+ * PARAMETERS:  Info                - Method execution information block
+ *              ReturnObjectPtr     - Pointer to the object returned from the
+ *                                    evaluation of a method or object
+ *
+ * RETURN:      Status. AE_OK if object is OK or was repaired successfully
+ *
+ * DESCRIPTION: Repair for the _CST object:
+ *              1. Sort the list ascending by C state type
+ *              2. Ensure type cannot be zero
+ *              3. A subpackage count of zero means _CST is meaningless
+ *              4. Count must match the number of C state subpackages
+ *
+ *****************************************************************************/
+
+static ACPI_STATUS
+AcpiNsRepair_CST (
+    ACPI_EVALUATE_INFO      *Info,
+    ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
+{
+    ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
+    ACPI_OPERAND_OBJECT     **OuterElements;
+    UINT32                  OuterElementCount;
+    ACPI_OPERAND_OBJECT     *ObjDesc;
+    ACPI_STATUS             Status;
+    BOOLEAN                 Removing;
+    UINT32                  i;
+
+
+    ACPI_FUNCTION_NAME (NsRepair_CST);
+
+
+    /*
+     * Check if the C-state type values are proportional.
+     */
+    OuterElementCount = ReturnObject->Package.Count - 1;
+    i = 0;
+    while (i < OuterElementCount)
+    {
+        OuterElements = &ReturnObject->Package.Elements[i + 1];
+        Removing = FALSE;
+
+        if ((*OuterElements)->Package.Count == 0)
+        {
+            ACPI_WARN_PREDEFINED ((AE_INFO,
+                Info->FullPathname, Info->NodeFlags,
+                "SubPackage[%u] - removing entry due to zero count", i));
+            Removing = TRUE;
+            goto RemoveElement;
+        }
+
+        ObjDesc = (*OuterElements)->Package.Elements[1]; /* Index1 = Type */
+        if ((UINT32) ObjDesc->Integer.Value == 0)
+        {
+            ACPI_WARN_PREDEFINED ((AE_INFO,
+                Info->FullPathname, Info->NodeFlags,
+                "SubPackage[%u] - removing entry due to invalid Type(0)", i));
+            Removing = TRUE;
+        }
+
+RemoveElement:
+        if (Removing)
+        {
+            AcpiNsRemoveElement (ReturnObject, i + 1);
+            OuterElementCount--;
+        }
+        else
+        {
+            i++;
+        }
+    }
+
+    /* Update top-level package count, Type "Integer" checked elsewhere */
+
+    ObjDesc = ReturnObject->Package.Elements[0];
+    ObjDesc->Integer.Value = OuterElementCount;
+
+    /*
+     * Entries (subpackages) in the _CST Package must be sorted by the
+     * C-state type, in ascending order.
+     */
+    Status = AcpiNsCheckSortedList (Info, ReturnObject, 1, 4, 1,
+        ACPI_SORT_ASCENDING, "C-State Type");
+    if (ACPI_FAILURE (Status))
+    {
+        return (Status);
+    }
+
+    return (AE_OK);
+}
+
+
+/******************************************************************************
+ *
  * FUNCTION:    AcpiNsRepair_HID
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObjectPtr     - Pointer to the object returned from the
  *                                    evaluation of a method or object
  *
@@ -461,7 +683,7 @@ AcpiNsRepair_CID (
 
 static ACPI_STATUS
 AcpiNsRepair_HID (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
 {
     ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
@@ -482,12 +704,13 @@ AcpiNsRepair_HID (
 
     if (ReturnObject->String.Length == 0)
     {
-        ACPI_WARN_PREDEFINED ((AE_INFO, Data->Pathname, Data->NodeFlags,
+        ACPI_WARN_PREDEFINED ((AE_INFO,
+            Info->FullPathname, Info->NodeFlags,
             "Invalid zero-length _HID or _CID string"));
 
         /* Return AE_OK anyway, let driver handle it */
 
-        Data->Flags |= ACPI_OBJECT_REPAIRED;
+        Info->ReturnFlags |= ACPI_OBJECT_REPAIRED;
         return (AE_OK);
     }
 
@@ -512,7 +735,7 @@ AcpiNsRepair_HID (
         NewString->String.Length--;
 
         ACPI_DEBUG_PRINT ((ACPI_DB_REPAIR,
-            "%s: Removed invalid leading asterisk\n", Data->Pathname));
+            "%s: Removed invalid leading asterisk\n", Info->FullPathname));
     }
 
     /*
@@ -525,7 +748,7 @@ AcpiNsRepair_HID (
      */
     for (Dest = NewString->String.Pointer; *Source; Dest++, Source++)
     {
-        *Dest = (char) ACPI_TOUPPER (*Source);
+        *Dest = (char) toupper ((int) *Source);
     }
 
     AcpiUtRemoveReference (ReturnObject);
@@ -536,47 +759,73 @@ AcpiNsRepair_HID (
 
 /******************************************************************************
  *
- * FUNCTION:    AcpiNsRepair_TSS
+ * FUNCTION:    AcpiNsRepair_PRT
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObjectPtr     - Pointer to the object returned from the
  *                                    evaluation of a method or object
  *
  * RETURN:      Status. AE_OK if object is OK or was repaired successfully
  *
- * DESCRIPTION: Repair for the _TSS object. If necessary, sort the object list
- *              descending by the power dissipation values.
+ * DESCRIPTION: Repair for the _PRT object. If necessary, fix reversed
+ *              SourceName and SourceIndex field, a common BIOS bug.
  *
  *****************************************************************************/
 
 static ACPI_STATUS
-AcpiNsRepair_TSS (
-    ACPI_PREDEFINED_DATA    *Data,
+AcpiNsRepair_PRT (
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
 {
-    ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
-    ACPI_STATUS             Status;
-    ACPI_NAMESPACE_NODE     *Node;
+    ACPI_OPERAND_OBJECT     *PackageObject = *ReturnObjectPtr;
+    ACPI_OPERAND_OBJECT     **TopObjectList;
+    ACPI_OPERAND_OBJECT     **SubObjectList;
+    ACPI_OPERAND_OBJECT     *ObjDesc;
+    ACPI_OPERAND_OBJECT     *SubPackage;
+    UINT32                  ElementCount;
+    UINT32                  Index;
 
 
-    /*
-     * We can only sort the _TSS return package if there is no _PSS in the
-     * same scope. This is because if _PSS is present, the ACPI specification
-     * dictates that the _TSS Power Dissipation field is to be ignored, and
-     * therefore some BIOSs leave garbage values in the _TSS Power field(s).
-     * In this case, it is best to just return the _TSS package as-is.
-     * (May, 2011)
-     */
-    Status = AcpiNsGetNode (Data->Node, "^_PSS", ACPI_NS_NO_UPSEARCH, &Node);
-    if (ACPI_SUCCESS (Status))
+    /* Each element in the _PRT package is a subpackage */
+
+    TopObjectList = PackageObject->Package.Elements;
+    ElementCount = PackageObject->Package.Count;
+
+    /* Examine each subpackage */
+
+    for (Index = 0; Index < ElementCount; Index++, TopObjectList++)
     {
-        return (AE_OK);
+        SubPackage = *TopObjectList;
+        SubObjectList = SubPackage->Package.Elements;
+
+        /* Check for minimum required element count */
+
+        if (SubPackage->Package.Count < 4)
+        {
+            continue;
+        }
+
+        /*
+         * If the BIOS has erroneously reversed the _PRT SourceName (index 2)
+         * and the SourceIndex (index 3), fix it. _PRT is important enough to
+         * workaround this BIOS error. This also provides compatibility with
+         * other ACPI implementations.
+         */
+        ObjDesc = SubObjectList[3];
+        if (!ObjDesc || (ObjDesc->Common.Type != ACPI_TYPE_INTEGER))
+        {
+            SubObjectList[3] = SubObjectList[2];
+            SubObjectList[2] = ObjDesc;
+            Info->ReturnFlags |= ACPI_OBJECT_REPAIRED;
+
+            ACPI_WARN_PREDEFINED ((AE_INFO,
+                Info->FullPathname, Info->NodeFlags,
+                "PRT[%X]: Fixed reversed SourceName and SourceIndex",
+                Index));
+        }
     }
 
-    Status = AcpiNsCheckSortedList (Data, ReturnObject, 5, 1,
-                ACPI_SORT_DESCENDING, "PowerDissipation");
-
-    return (Status);
+    return (AE_OK);
 }
 
 
@@ -584,7 +833,7 @@ AcpiNsRepair_TSS (
  *
  * FUNCTION:    AcpiNsRepair_PSS
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObjectPtr     - Pointer to the object returned from the
  *                                    evaluation of a method or object
  *
@@ -599,7 +848,7 @@ AcpiNsRepair_TSS (
 
 static ACPI_STATUS
 AcpiNsRepair_PSS (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
 {
     ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
@@ -613,13 +862,13 @@ AcpiNsRepair_PSS (
 
 
     /*
-     * Entries (sub-packages) in the _PSS Package must be sorted by power
+     * Entries (subpackages) in the _PSS Package must be sorted by power
      * dissipation, in descending order. If it appears that the list is
      * incorrectly sorted, sort it. We sort by CpuFrequency, since this
      * should be proportional to the power.
      */
-    Status =AcpiNsCheckSortedList (Data, ReturnObject, 6, 0,
-                ACPI_SORT_DESCENDING, "CpuFrequency");
+    Status = AcpiNsCheckSortedList (Info, ReturnObject, 0, 6, 0,
+        ACPI_SORT_DESCENDING, "CpuFrequency");
     if (ACPI_FAILURE (Status))
     {
         return (Status);
@@ -640,7 +889,8 @@ AcpiNsRepair_PSS (
 
         if ((UINT32) ObjDesc->Integer.Value > PreviousValue)
         {
-            ACPI_WARN_PREDEFINED ((AE_INFO, Data->Pathname, Data->NodeFlags,
+            ACPI_WARN_PREDEFINED ((AE_INFO,
+                Info->FullPathname, Info->NodeFlags,
                 "SubPackage[%u,%u] - suspicious power dissipation values",
                 i-1, i));
         }
@@ -655,12 +905,60 @@ AcpiNsRepair_PSS (
 
 /******************************************************************************
  *
+ * FUNCTION:    AcpiNsRepair_TSS
+ *
+ * PARAMETERS:  Info                - Method execution information block
+ *              ReturnObjectPtr     - Pointer to the object returned from the
+ *                                    evaluation of a method or object
+ *
+ * RETURN:      Status. AE_OK if object is OK or was repaired successfully
+ *
+ * DESCRIPTION: Repair for the _TSS object. If necessary, sort the object list
+ *              descending by the power dissipation values.
+ *
+ *****************************************************************************/
+
+static ACPI_STATUS
+AcpiNsRepair_TSS (
+    ACPI_EVALUATE_INFO      *Info,
+    ACPI_OPERAND_OBJECT     **ReturnObjectPtr)
+{
+    ACPI_OPERAND_OBJECT     *ReturnObject = *ReturnObjectPtr;
+    ACPI_STATUS             Status;
+    ACPI_NAMESPACE_NODE     *Node;
+
+
+    /*
+     * We can only sort the _TSS return package if there is no _PSS in the
+     * same scope. This is because if _PSS is present, the ACPI specification
+     * dictates that the _TSS Power Dissipation field is to be ignored, and
+     * therefore some BIOSs leave garbage values in the _TSS Power field(s).
+     * In this case, it is best to just return the _TSS package as-is.
+     * (May, 2011)
+     */
+    Status = AcpiNsGetNode (Info->Node, "^_PSS",
+        ACPI_NS_NO_UPSEARCH, &Node);
+    if (ACPI_SUCCESS (Status))
+    {
+        return (AE_OK);
+    }
+
+    Status = AcpiNsCheckSortedList (Info, ReturnObject, 0, 5, 1,
+        ACPI_SORT_DESCENDING, "PowerDissipation");
+
+    return (Status);
+}
+
+
+/******************************************************************************
+ *
  * FUNCTION:    AcpiNsCheckSortedList
  *
- * PARAMETERS:  Data                - Pointer to validation data structure
+ * PARAMETERS:  Info                - Method execution information block
  *              ReturnObject        - Pointer to the top-level returned object
- *              ExpectedCount       - Minimum length of each sub-package
- *              SortIndex           - Sub-package entry to sort on
+ *              StartIndex          - Index of the first subpackage
+ *              ExpectedCount       - Minimum length of each subpackage
+ *              SortIndex           - Subpackage entry to sort on
  *              SortDirection       - Ascending or descending
  *              SortKeyName         - Name of the SortIndex field
  *
@@ -674,8 +972,9 @@ AcpiNsRepair_PSS (
 
 static ACPI_STATUS
 AcpiNsCheckSortedList (
-    ACPI_PREDEFINED_DATA    *Data,
+    ACPI_EVALUATE_INFO      *Info,
     ACPI_OPERAND_OBJECT     *ReturnObject,
+    UINT32                  StartIndex,
     UINT32                  ExpectedCount,
     UINT32                  SortIndex,
     UINT8                   SortDirection,
@@ -700,16 +999,18 @@ AcpiNsCheckSortedList (
     }
 
     /*
-     * NOTE: assumes list of sub-packages contains no NULL elements.
+     * NOTE: assumes list of subpackages contains no NULL elements.
      * Any NULL elements should have been removed by earlier call
      * to AcpiNsRemoveNullElements.
      */
-    OuterElements = ReturnObject->Package.Elements;
     OuterElementCount = ReturnObject->Package.Count;
-    if (!OuterElementCount)
+    if (!OuterElementCount || StartIndex >= OuterElementCount)
     {
         return (AE_AML_PACKAGE_LIMIT);
     }
+
+    OuterElements = &ReturnObject->Package.Elements[StartIndex];
+    OuterElementCount -= StartIndex;
 
     PreviousValue = 0;
     if (SortDirection == ACPI_SORT_DESCENDING)
@@ -728,7 +1029,7 @@ AcpiNsCheckSortedList (
             return (AE_AML_OPERAND_TYPE);
         }
 
-        /* Each sub-package must have the minimum length */
+        /* Each subpackage must have the minimum length */
 
         if ((*OuterElements)->Package.Count < ExpectedCount)
         {
@@ -752,14 +1053,14 @@ AcpiNsCheckSortedList (
             ((SortDirection == ACPI_SORT_DESCENDING) &&
                 (ObjDesc->Integer.Value > PreviousValue)))
         {
-            AcpiNsSortList (ReturnObject->Package.Elements,
+            AcpiNsSortList (&ReturnObject->Package.Elements[StartIndex],
                 OuterElementCount, SortIndex, SortDirection);
 
-            Data->Flags |= ACPI_OBJECT_REPAIRED;
+            Info->ReturnFlags |= ACPI_OBJECT_REPAIRED;
 
             ACPI_DEBUG_PRINT ((ACPI_DB_REPAIR,
                 "%s: Repaired unsorted list - now sorted by %s\n",
-                Data->Pathname, SortKeyName));
+                Info->FullPathname, SortKeyName));
             return (AE_OK);
         }
 
@@ -824,4 +1125,63 @@ AcpiNsSortList (
             }
         }
     }
+}
+
+
+/******************************************************************************
+ *
+ * FUNCTION:    AcpiNsRemoveElement
+ *
+ * PARAMETERS:  ObjDesc             - Package object element list
+ *              Index               - Index of element to remove
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Remove the requested element of a package and delete it.
+ *
+ *****************************************************************************/
+
+static void
+AcpiNsRemoveElement (
+    ACPI_OPERAND_OBJECT     *ObjDesc,
+    UINT32                  Index)
+{
+    ACPI_OPERAND_OBJECT     **Source;
+    ACPI_OPERAND_OBJECT     **Dest;
+    UINT32                  Count;
+    UINT32                  NewCount;
+    UINT32                  i;
+
+
+    ACPI_FUNCTION_NAME (NsRemoveElement);
+
+
+    Count = ObjDesc->Package.Count;
+    NewCount = Count - 1;
+
+    Source = ObjDesc->Package.Elements;
+    Dest = Source;
+
+    /* Examine all elements of the package object, remove matched index */
+
+    for (i = 0; i < Count; i++)
+    {
+        if (i == Index)
+        {
+            AcpiUtRemoveReference (*Source); /* Remove one ref for being in pkg */
+            AcpiUtRemoveReference (*Source);
+        }
+        else
+        {
+            *Dest = *Source;
+            Dest++;
+        }
+
+        Source++;
+    }
+
+    /* NULL terminate list and update the package count */
+
+    *Dest = NULL;
+    ObjDesc->Package.Count = NewCount;
 }

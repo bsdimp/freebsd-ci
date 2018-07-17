@@ -1,4 +1,7 @@
-/* Copyright (c) 1983, 1989
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 1983, 1989
  *    The Regents of the University of California.  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -28,7 +31,7 @@
 
 /*%
  *      from nameser.h	8.1 (Berkeley) 6/2/93
- *	$Id: nameser_compat.h,v 1.5.18.3 2006/05/19 02:36:00 marka Exp $
+ *	$Id: nameser_compat.h,v 1.8 2006/05/19 02:33:40 marka Exp $
  * $FreeBSD$
  */
 
@@ -175,6 +178,7 @@ typedef struct {
 #define T_ATMA		ns_t_atma
 #define T_NAPTR		ns_t_naptr
 #define T_A6		ns_t_a6
+#define T_DNAME		ns_t_dname
 #define T_OPT		ns_t_opt
 #define	T_TSIG		ns_t_tsig
 #define	T_IXFR		ns_t_ixfr

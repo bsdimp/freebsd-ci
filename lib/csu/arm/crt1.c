@@ -1,5 +1,7 @@
 /* LINTLIBRARY */
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright 2001 David E. O'Brien.
  * All rights reserved.
  * Copyright 1996-1998 John D. Polstra.
@@ -19,7 +21,7 @@
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
  *          This product includes software developed for the
- *          FreeBSD Project.  See http://www.freebsd.org/ for
+ *          FreeBSD Project.  See https://www.freebsd.org/ for
  *          information about FreeBSD.
  *          This product includes software developed for the
  *          NetBSD Project.  See http://www.netbsd.org/ for
@@ -41,12 +43,6 @@
 
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
-
-#ifndef lint
-#ifndef __GNUC__
-#error "GCC is needed to compile this file"
-#endif
-#endif /* lint */
 
 #include <stdlib.h>
 
@@ -114,6 +110,20 @@ __start(int argc, char **argv, char **env, struct ps_strings *ps_strings,
 	handle_static_init(argc, argv, env);
 	exit(main(argc, argv, env));
 }
+
+static const struct {
+	int32_t	namesz;
+	int32_t	descsz;
+	int32_t	type;
+	char	name[sizeof(NOTE_FREEBSD_VENDOR)];
+	char	desc[sizeof(MACHINE_ARCH)];
+} archtag __attribute__ ((section (NOTE_SECTION), aligned(4))) __used = {
+	.namesz = sizeof(NOTE_FREEBSD_VENDOR),
+	.descsz = sizeof(MACHINE_ARCH),
+	.type = ARCH_NOTETYPE,
+	.name = NOTE_FREEBSD_VENDOR,
+	.desc = MACHINE_ARCH
+};
 
 #ifdef GCRT
 __asm__(".text");

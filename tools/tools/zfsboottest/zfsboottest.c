@@ -28,7 +28,9 @@
 /* $FreeBSD$ */
 
 #include <sys/param.h>
+#include <sys/disk.h>
 #include <sys/queue.h>
+#include <sys/stat.h>
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -43,15 +45,31 @@
 
 #define NBBY 8
 
-void
+int
 pager_output(const char *line)
 {
 
 	fprintf(stderr, "%s", line);
+	return (0);
+}
+
+uint64_t
+ldi_get_size(void *priv)
+{
+	struct stat sb;
+	int fd;
+
+	fd = *(int *)priv;
+	if (fstat(fd, &sb) != 0)
+		return (0);
+	if (S_ISCHR(sb.st_mode) && ioctl(fd, DIOCGMEDIASIZE, &sb.st_size) != 0)
+		return (0);
+	return (sb.st_size);
 }
 
 #define ZFS_TEST
 #define	printf(...)	 fprintf(stderr, __VA_ARGS__)
+#include "libzfs.h"
 #include "zfsimpl.c"
 #undef printf
 
@@ -134,6 +152,14 @@ main(int argc, char** argv)
 			close(fd[i - 1]);
 		}
 	}
+
+	STAILQ_FOREACH(spa, &zfs_pools, spa_link) {
+		if (zfs_spa_init(spa)) {
+			fprintf(stderr, "can't init pool %s\n", spa->spa_name);
+			exit(1);
+		}
+	}
+
 	spa_all_status();
 
 	spa = STAILQ_FIRST(&zfs_pools);
@@ -142,12 +168,8 @@ main(int argc, char** argv)
 		exit(1);
 	}
 
-	if (zfs_spa_init(spa)) {
-		fprintf(stderr, "can't init pool\n");
-		exit(1);
-	}
-
 #if 0
+	uint64_t rootobj;
 	if (zfs_get_root(spa, &rootobj)) {
 		fprintf(stderr, "can't get root\n");
 		exit(1);
@@ -158,8 +180,8 @@ main(int argc, char** argv)
 	if (zfs_mount(spa, 0, &zfsmnt)) {
 		fprintf(stderr, "can't mount\n");
 		exit(1);
-	}
 #endif
+	}
 
 	printf("\n");
 	for (++i, failures = 0; i < argc; i++) {

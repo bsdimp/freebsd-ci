@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2005 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2005 Atheros Communications, Inc.
  * Copyright (c) 2008-2010, Atheros Communications Inc.
@@ -95,8 +97,10 @@ ar5416BTCoexSetWeights(struct ath_hal *ah, u_int32_t stompType)
 	struct ath_hal_5416 *ahp = AH5416(ah);
 
 	if (AR_SREV_KIWI_10_OR_LATER(ah)) {
-		/* TODO: TX RX seperate is not enabled. */
+		/* TODO: TX RX separate is not enabled. */
 		switch (stompType) {
+		case HAL_BT_COEX_STOMP_AUDIO:
+			/* XXX TODO */
 		case HAL_BT_COEX_STOMP_ALL:
 			ahp->ah_btCoexBTWeight = AR5416_BT_WGHT;
 			ahp->ah_btCoexWLANWeight = AR5416_STOMP_ALL_WLAN_WGHT;
@@ -128,6 +132,8 @@ ar5416BTCoexSetWeights(struct ath_hal *ah, u_int32_t stompType)
 		}
 	} else {
 		switch (stompType) {
+		case HAL_BT_COEX_STOMP_AUDIO:
+			/* XXX TODO */
 		case HAL_BT_COEX_STOMP_ALL:
 			ahp->ah_btCoexBTWeight = AR5416_BT_WGHT;
 			ahp->ah_btCoexWLANWeight = AR5416_STOMP_ALL_WLAN_WGHT;
@@ -269,14 +275,14 @@ ar5416BTCoexEnable(struct ath_hal *ah)
 	}
 	OS_REG_WRITE(ah, AR_BT_COEX_MODE2, ahp->ah_btCoexMode2);
 
-#if 0
-    /* Added Select GPIO5~8 instaed SPI */
-    if (AR_SREV_9271(ah)) {
-        val = OS_REG_READ(ah, AR9271_CLOCK_CONTROL);
-        val &= 0xFFFFFEFF;
-        OS_REG_WRITE(ah, AR9271_CLOCK_CONTROL, val);
-    }
-#endif
+	/* Added Select GPIO5~8 instaed SPI */
+	if (AR_SREV_9271(ah)) {
+		uint32_t val;
+
+		val = OS_REG_READ(ah, AR9271_CLOCK_CONTROL);
+		val &= 0xFFFFFEFF;
+		OS_REG_WRITE(ah, AR9271_CLOCK_CONTROL, val);
+	}
 
 	if (ahp->ah_btCoexFlag & HAL_BT_COEX_FLAG_LOW_ACK_PWR)
 		OS_REG_WRITE(ah, AR_TPC, HAL_BT_COEX_LOW_ACK_POWER);
@@ -327,6 +333,11 @@ void
 ar5416InitBTCoex(struct ath_hal *ah)
 {
 	struct ath_hal_5416 *ahp = AH5416(ah);
+
+	HALDEBUG(ah, HAL_DEBUG_BT_COEX,
+	    "%s: called; configType=%d\n",
+	    __func__,
+	    ahp->ah_btCoexConfigType);
 
 	if (ahp->ah_btCoexConfigType == HAL_BT_COEX_CFG_3WIRE) {
 		OS_REG_SET_BIT(ah, AR_GPIO_INPUT_EN_VAL,

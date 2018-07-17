@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1982, 1986, 1990 The Regents of the University of California.
  * All rights reserved.
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -100,8 +102,6 @@ memrw(struct cdev *dev, struct uio *uio, int flags)
 	cnt = 0;
 	error = 0;
 
-	GIANT_REQUIRED;
-
 	while (uio->uio_resid > 0 && !error) {
 		iov = uio->uio_iov;
 		if (iov->iov_len == 0) {
@@ -125,8 +125,9 @@ kmem_direct_mapped:	v = uio->uio_offset;
 				break;
 			}
 	
-			if (!pmap_dev_direct_mapped(v, cnt)) {
-				error = uiomove((void *)v, cnt, uio);
+			if (hw_direct_map && !pmap_dev_direct_mapped(v, cnt)) {
+				error = uiomove((void *)PHYS_TO_DMAP(v), cnt,
+				    uio);
 			} else {
 				m.phys_addr = trunc_page(v);
 				marr = &m;
@@ -179,21 +180,10 @@ memmmap(struct cdev *dev, vm_ooffset_t offset, vm_paddr_t *paddr,
 {
 	int i;
 
-	/*
-	 * /dev/mem is the only one that makes sense through this
-	 * interface.  For /dev/kmem any physaddr we return here
-	 * could be transient and hence incorrect or invalid at
-	 * a later time.
-	 */
-	if (dev2unit(dev) != CDEV_MINOR_MEM)
-		return (-1);
-
-	/* Only direct-mapped addresses. */
-	if (mem_valid(offset, 0)
-	    && pmap_dev_direct_mapped(offset, 0))
+	if (dev2unit(dev) == CDEV_MINOR_MEM)
+		*paddr = offset;
+	else
 		return (EFAULT);
-
-	*paddr = offset;
 
 	for (i = 0; i < mem_range_softc.mr_ndesc; i++) {
 		if (!(mem_range_softc.mr_desc[i].mr_flags & MDF_ACTIVE))
@@ -231,9 +221,7 @@ ppc_mrinit(struct mem_range_softc *sc)
 	sc->mr_cap = 0;
 	sc->mr_ndesc = 8; /* XXX: Should be dynamically expandable */
 	sc->mr_desc = malloc(sc->mr_ndesc * sizeof(struct mem_range_desc),
-	    M_MEMDESC, M_NOWAIT | M_ZERO);
-	if (sc->mr_desc == NULL)
-		panic("%s: malloc returns NULL", __func__);
+	    M_MEMDESC, M_WAITOK | M_ZERO);
 }
 
 static int
@@ -328,3 +316,4 @@ memioctl(struct cdev *dev __unused, u_long cmd, caddr_t data, int flags,
 	}
 	return (error);
 }
+

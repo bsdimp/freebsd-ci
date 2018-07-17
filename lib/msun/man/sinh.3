@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -27,12 +27,14 @@
 .\"
 .\"	from: @(#)sinh.3	6.6 (Berkeley) 4/19/91
 .\" $FreeBSD$
-.Dd January 14, 2005
+.\"
+.Dd August 17, 2013
 .Dt SINH 3
 .Os
 .Sh NAME
 .Nm sinh ,
-.Nm sinhf
+.Nm sinhf ,
+.Nm sinhl
 .Nd hyperbolic sine function
 .Sh LIBRARY
 .Lb libm
@@ -42,11 +44,14 @@
 .Fn sinh "double x"
 .Ft float
 .Fn sinhf "float x"
+.Ft long double
+.Fn sinhl "long double x"
 .Sh DESCRIPTION
 The
-.Fn sinh
-and the
-.Fn sinhf
+.Fn sinh ,
+.Fn sinhf ,
+and
+.Fn sinhl
 functions compute the hyperbolic sine of
 .Fa x .
 .Sh SEE ALSO

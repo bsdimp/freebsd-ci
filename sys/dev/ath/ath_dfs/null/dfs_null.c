@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 Adrian Chadd, Xenion Pty Ltd
  * All rights reserved.
  *
@@ -43,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/errno.h>
 
@@ -53,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
  
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_media.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>		/* XXX for ether_sprintf */
@@ -100,7 +104,7 @@ ath_dfs_detach(struct ath_softc *sc)
 int
 ath_dfs_radar_enable(struct ath_softc *sc, struct ieee80211_channel *chan)
 {
-#if 0
+#if 1
 	HAL_PHYERR_PARAM pe;
 
 	/* Check if the hardware supports radar reporting */
@@ -153,7 +157,7 @@ ath_dfs_radar_enable(struct ath_softc *sc, struct ieee80211_channel *chan)
 int
 ath_dfs_radar_disable(struct ath_softc *sc)
 {
-#if 0
+#if 1
 	HAL_PHYERR_PARAM pe;
 
 	(void) ath_hal_getdfsthresh(sc->sc_ah, &pe);
@@ -179,7 +183,7 @@ ath_dfs_process_phy_err(struct ath_softc *sc, struct mbuf *m,
 }
 
 /*
- * Process the radar events and determine whether a DFS event has occured.
+ * Process the radar events and determine whether a DFS event has occurred.
  *
  * This is designed to run outside of the RX processing path.
  * The RX path will call ath_dfs_tasklet_needed() to see whether

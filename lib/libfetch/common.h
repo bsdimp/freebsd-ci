@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 1998-2011 Dag-Erling Smørgrav
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 1998-2014 Dag-Erling Smørgrav
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,13 +54,6 @@ struct fetchconn {
 	size_t		 bufsize;	/* buffer size */
 	size_t		 buflen;	/* length of buffer contents */
 	int		 err;		/* last protocol reply code */
-	struct {			/* data cached after an interrupted
-					   read */
-		char	*buf;
-		size_t	 size;
-		size_t	 pos;
-		size_t	 len;
-	} cache;
 #ifdef WITH_SSL
 	SSL		*ssl;		/* SSL handle */
 	SSL_CTX		*ssl_ctx;	/* SSL context */
@@ -80,14 +75,18 @@ struct iovec;
 
 void		 fetch_seterr(struct fetcherr *, int);
 void		 fetch_syserr(void);
-void		 fetch_info(const char *, ...);
+void		 fetch_info(const char *, ...) __printflike(1, 2);
 int		 fetch_default_port(const char *);
 int		 fetch_default_proxy_port(const char *);
+struct addrinfo *fetch_resolve(const char *, int, int);
 int		 fetch_bind(int, int, const char *);
 conn_t		*fetch_connect(const char *, int, int, int);
 conn_t		*fetch_reopen(int);
 conn_t		*fetch_ref(conn_t *);
-int		 fetch_ssl(conn_t *, int);
+#ifdef WITH_SSL
+int		 fetch_ssl_cb_verify_crt(int, X509_STORE_CTX*);
+#endif
+int		 fetch_ssl(conn_t *, const struct url *, int);
 ssize_t		 fetch_read(conn_t *, char *, size_t);
 int		 fetch_getln(conn_t *);
 ssize_t		 fetch_write(conn_t *, const char *, size_t);
@@ -105,9 +104,16 @@ int		 fetch_no_proxy_match(const char *);
 #define url_seterr(n)	 fetch_seterr(url_errlist, n)
 
 #ifndef NDEBUG
-#define DEBUG(x) do { if (fetchDebug) { x; } } while (0)
+#define DEBUGF(...)							\
+	do {								\
+		if (fetchDebug)						\
+			fprintf(stderr, __VA_ARGS__);			\
+	} while (0)
 #else
-#define DEBUG(x) do { } while (0)
+#define DEBUGF(...)							\
+	do {								\
+		/* nothing */						\
+	} while (0)
 #endif
 
 /*
@@ -121,6 +127,9 @@ int		 fetch_no_proxy_match(const char *);
  */
 FILE		*http_request(struct url *, const char *,
 		     struct url_stat *, struct url *, const char *);
+FILE		*http_request_body(struct url *, const char *,
+		     struct url_stat *, struct url *, const char *,
+		     const char *, const char *);
 FILE		*ftp_request(struct url *, const char *,
 		     struct url_stat *, struct url *, const char *);
 

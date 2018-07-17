@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -108,6 +110,7 @@ static const struct pccard_product an_pccard_products[] = {
 	PCMCIA_CARD(XIRCOM, CWE1130), 
 	{ NULL }
 };
+PCCARD_PNP_INFO(an_pccard_products);
 
 static int
 an_pccard_probe(device_t dev)
@@ -140,8 +143,6 @@ an_pccard_attach(device_t dev)
 		goto fail;
 
 	an_alloc_irq(dev, sc->irq_rid, 0);
-
-	sc->an_dev = dev;
 
 	error = an_attach(sc, flags);
 	if (error)

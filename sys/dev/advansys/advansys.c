@@ -3,10 +3,11 @@
  * Product specific probe and attach routines can be found in:
  * 
  * i386/isa/adv_isa.c	ABP5140, ABP542, ABP5150, ABP842, ABP852
- * i386/eisa/adv_eisa.c	ABP742, ABP752
  * pci/adv_pci.c	ABP920, ABP930, ABP930U, ABP930UA, ABP940, ABP940U,
  *			ABP940UA, ABP950, ABP960, ABP960U, ABP960UA,
  *			ABP970, ABP970U
+ *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 1996-2000 Justin Gibbs.
  * All rights reserved.
@@ -168,9 +169,9 @@ adv_clear_state_really(struct adv_softc *adv, union ccb* ccb)
 			ccb_h = LIST_FIRST(&adv->pending_ccbs);
 			while (ccb_h != NULL) {
 				cinfo = ccb_h->ccb_cinfo_ptr;
-				callout_reset(&cinfo->timer,
-				    ccb_h->timeout * hz / 1000, adv_timeout,
-				    ccb_h);
+				callout_reset_sbt(&cinfo->timer,
+				    SBT_1MS * ccb_h->timeout, 0,
+				    adv_timeout, ccb_h, 0);
 				ccb_h = LIST_NEXT(ccb_h, sim_links.le);
 			}
 			adv->state &= ~ADV_IN_TIMEOUT;
@@ -233,10 +234,6 @@ adv_action(struct cam_sim *sim, union ccb *ccb)
 		break;
 	}
 	case XPT_RESET_DEV:	/* Bus Device Reset the specified SCSI device */
-	case XPT_TARGET_IO:	/* Execute target I/O request */
-	case XPT_ACCEPT_TARGET_IO:	/* Accept Host Target Mode CDB */
-	case XPT_CONT_TARGET_IO:	/* Continue Host Target I/O Connection*/
-	case XPT_EN_LUN:		/* Enable LUN as a target */
 	case XPT_ABORT:			/* Abort the specified CCB */
 		/* XXX Implement */
 		ccb->ccb_h.status = CAM_REQ_INVALID;
@@ -429,9 +426,9 @@ adv_action(struct cam_sim *sim, union ccb *ccb)
 		cpi->initiator_id = adv->scsi_id;
 		cpi->bus_id = cam_sim_bus(sim);
 		cpi->base_transfer_speed = 3300;
-		strncpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
-		strncpy(cpi->hba_vid, "Advansys", HBA_IDLEN);
-		strncpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
+		strlcpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
+		strlcpy(cpi->hba_vid, "Advansys", HBA_IDLEN);
+		strlcpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
 		cpi->unit_number = cam_sim_unit(sim);
 		cpi->ccb_h.status = CAM_REQ_CMP;
                 cpi->transport = XPORT_SPI;
@@ -569,8 +566,8 @@ adv_execute_ccb(void *arg, bus_dma_segment_t *dm_segs,
 	ccb_h->status |= CAM_SIM_QUEUED;
 	LIST_INSERT_HEAD(&adv->pending_ccbs, ccb_h, sim_links.le);
 	/* Schedule our timeout */
-	callout_reset(&cinfo->timer, ccb_h->timeout * hz /1000, adv_timeout,
-	    csio);
+	callout_reset_sbt(&cinfo->timer, SBT_1MS * ccb_h->timeout, 0,
+	    adv_timeout, csio, 0);
 }
 
 static struct adv_ccb_info *
@@ -633,7 +630,7 @@ adv_timeout(void *arg)
 		 * means that the driver attempts to clear only one error
 		 * condition at a time.  In general, timeouts that occur
 		 * close together are related anyway, so there is no benefit
-		 * in attempting to handle errors in parrallel.  Timeouts will
+		 * in attempting to handle errors in parallel.  Timeouts will
 		 * be reinstated when the recovery process ends.
 		 */
 		adv_set_state(adv, ADV_IN_TIMEOUT);
@@ -1005,7 +1002,6 @@ adv_run_doneq(struct adv_softc *adv)
 		struct adv_ccb_info *cinfo;
 		u_int done_qaddr;
 		u_int sg_queue_cnt;
-		int   aborted;
 
 		done_qaddr = ADV_QNO_TO_QADDR(done_qno);
 
@@ -1049,8 +1045,6 @@ adv_run_doneq(struct adv_softc *adv)
 			      "queues than are active");
 #endif		
 		adv->cur_active -= sg_queue_cnt + 1;
-
-		aborted = (scsiq.q_status & QS_ABORTED) != 0;
 
 		if ((scsiq.q_status != QS_DONE)
 		 && (scsiq.q_status & QS_ABORTED) == 0)
@@ -1126,7 +1120,7 @@ adv_done(struct adv_softc *adv, union ccb *ccb, u_int done_stat,
 			 * from this initiator are in effect, but this
 			 * ignores multi-initiator setups and there is
 			 * evidence that the firmware gets its per-device
-			 * transaction counts screwed up occassionally.
+			 * transaction counts screwed up occasionally.
 			 */
 			ccb->ccb_h.status |= CAM_SCSI_STATUS_ERROR;
 			if ((ccb->ccb_h.flags & CAM_TAG_ACTION_VALID) != 0
@@ -1381,8 +1375,6 @@ adv_attach(adv)
 
 	/*
 	 * Register the bus.
-	 *
-	 * XXX Twin Channel EISA Cards???
 	 */
 	mtx_lock(&adv->lock);
 	if (xpt_bus_register(adv->sim, adv->dev, 0) != CAM_SUCCESS) {
@@ -1407,6 +1399,8 @@ adv_attach(adv)
 	csa.callback_arg = adv;
 	xpt_action((union ccb *)&csa);
 	mtx_unlock(&adv->lock);
+	gone_in_dev(adv->dev, 12, "adv(4) driver");
+
 	return (0);
 }
 MODULE_DEPEND(adv, cam, 1, 1, 1);

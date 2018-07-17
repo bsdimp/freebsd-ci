@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -69,7 +71,9 @@ __FBSDID("$FreeBSD$");
 #endif
 
 
+#ifndef VTABSIZE
 #define VTABSIZE 39
+#endif
 
 
 struct varinit {
@@ -88,14 +92,13 @@ struct var vifs;
 struct var vmail;
 struct var vmpath;
 struct var vpath;
-struct var vppid;
 struct var vps1;
 struct var vps2;
 struct var vps4;
-struct var vvers;
 static struct var voptind;
 struct var vdisvfork;
 
+struct localvar *localvars;
 int forcelocal;
 
 static const struct varinit varinit[] = {
@@ -111,8 +114,6 @@ static const struct varinit varinit[] = {
 	  NULL },
 	{ &vpath,	0,				"PATH=" _PATH_DEFPATH,
 	  changepath },
-	{ &vppid,	VUNSET,				"PPID=",
-	  NULL },
 	/*
 	 * vps1 depends on uid
 	 */
@@ -145,6 +146,7 @@ static const int locale_categories[7] = {
 static int varequal(const char *, const char *);
 static struct var *find_var(const char *, struct var ***, int *);
 static int localevar(const char *);
+static void setvareq_const(const char *s, int flags);
 
 extern char **environ;
 
@@ -180,15 +182,15 @@ initvar(void)
 		vps1.text = __DECONST(char *, geteuid() ? "PS1=$ " : "PS1=# ");
 		vps1.flags = VSTRFIXED|VTEXTFIXED;
 	}
-	if ((vppid.flags & VEXPORT) == 0) {
-		fmtstr(ppid, sizeof(ppid), "%d", (int)getppid());
-		setvarsafe("PPID", ppid, 0);
-	}
+	fmtstr(ppid, sizeof(ppid), "%d", (int)getppid());
+	setvarsafe("PPID", ppid, 0);
 	for (envp = environ ; *envp ; envp++) {
 		if (strchr(*envp, '=')) {
 			setvareq(*envp, VEXPORT|VTEXTFIXED);
 		}
 	}
+	setvareq_const("OPTIND=1", 0);
+	setvareq_const("IFS= \t\n", 0);
 }
 
 /*
@@ -224,8 +226,9 @@ void
 setvar(const char *name, const char *val, int flags)
 {
 	const char *p;
-	int len;
-	int namelen;
+	size_t len;
+	size_t namelen;
+	size_t vallen;
 	char *nameeq;
 	int isbad;
 
@@ -244,21 +247,25 @@ setvar(const char *name, const char *val, int flags)
 	}
 	namelen = p - name;
 	if (isbad)
-		error("%.*s: bad variable name", namelen, name);
+		error("%.*s: bad variable name", (int)namelen, name);
 	len = namelen + 2;		/* 2 is space for '=' and '\0' */
 	if (val == NULL) {
 		flags |= VUNSET;
+		vallen = 0;
 	} else {
-		len += strlen(val);
+		vallen = strlen(val);
+		len += vallen;
 	}
+	INTOFF;
 	nameeq = ckmalloc(len);
 	memcpy(nameeq, name, namelen);
 	nameeq[namelen] = '=';
 	if (val)
-		scopy(val, nameeq + namelen + 1);
+		memcpy(nameeq + namelen + 1, val, vallen + 1);
 	else
 		nameeq[namelen + 1] = '\0';
 	setvareq(nameeq, flags);
+	INTON;
 }
 
 static int
@@ -291,6 +298,7 @@ change_env(const char *s, int set)
 	char *eqp;
 	char *ss;
 
+	INTOFF;
 	ss = savestr(s);
 	if ((eqp = strchr(ss, '=')) != NULL)
 		*eqp = '\0';
@@ -299,6 +307,7 @@ change_env(const char *s, int set)
 	else
 		(void) unsetenv(ss);
 	ckfree(ss);
+	INTON;
 
 	return;
 }
@@ -323,10 +332,16 @@ setvareq(char *s, int flags)
 		mklocal(s);
 	vp = find_var(s, &vpp, &nlen);
 	if (vp != NULL) {
-		if (vp->flags & VREADONLY)
-			error("%.*s: is read only", vp->name_len, s);
-		if (flags & VNOSET)
+		if (vp->flags & VREADONLY) {
+			if ((flags & (VTEXTFIXED|VSTACK)) == 0)
+				ckfree(s);
+			error("%.*s: is read only", vp->name_len, vp->text);
+		}
+		if (flags & VNOSET) {
+			if ((flags & (VTEXTFIXED|VSTACK)) == 0)
+				ckfree(s);
 			return;
+		}
 		INTOFF;
 
 		if (vp->func && (flags & VNOFUNC) == 0)
@@ -359,15 +374,18 @@ setvareq(char *s, int flags)
 		return;
 	}
 	/* not found */
-	if (flags & VNOSET)
+	if (flags & VNOSET) {
+		if ((flags & (VTEXTFIXED|VSTACK)) == 0)
+			ckfree(s);
 		return;
+	}
+	INTOFF;
 	vp = ckmalloc(sizeof (*vp));
 	vp->flags = flags;
 	vp->text = s;
 	vp->name_len = nlen;
 	vp->next = *vpp;
 	vp->func = NULL;
-	INTOFF;
 	*vpp = vp;
 	if ((vp->flags & VEXPORT) && localevar(s)) {
 		change_env(s, 1);
@@ -378,20 +396,25 @@ setvareq(char *s, int flags)
 }
 
 
+static void
+setvareq_const(const char *s, int flags)
+{
+	setvareq(__DECONST(char *, s), flags | VTEXTFIXED);
+}
+
 
 /*
  * Process a linked list of variable assignments.
  */
 
 void
-listsetvar(struct strlist *list, int flags)
+listsetvar(struct arglist *list, int flags)
 {
-	struct strlist *lp;
+	int i;
 
 	INTOFF;
-	for (lp = list ; lp ; lp = lp->next) {
-		setvareq(savestr(lp->text), flags);
-	}
+	for (i = 0; i < list->count; i++)
+		setvareq(savestr(list->args[i]), flags);
 	INTON;
 }
 
@@ -423,14 +446,14 @@ lookupvar(const char *name)
 char *
 bltinlookup(const char *name, int doall)
 {
-	struct strlist *sp;
 	struct var *v;
 	char *result;
+	int i;
 
 	result = NULL;
-	for (sp = cmdenviron ; sp ; sp = sp->next) {
-		if (varequal(sp->text, name))
-			result = strchr(sp->text, '=') + 1;
+	if (cmdenviron) for (i = 0; i < cmdenviron->count; i++) {
+		if (varequal(cmdenviron->args[i], name))
+			result = strchr(cmdenviron->args[i], '=') + 1;
 	}
 	if (result != NULL)
 		return result;
@@ -449,13 +472,12 @@ bltinlookup(const char *name, int doall)
 void
 bltinsetlocale(void)
 {
-	struct strlist *lp;
 	int act = 0;
 	char *loc, *locdef;
 	int i;
 
-	for (lp = cmdenviron ; lp ; lp = lp->next) {
-		if (localevar(lp->text)) {
+	if (cmdenviron) for (i = 0; i < cmdenviron->count; i++) {
+		if (localevar(cmdenviron->args[i])) {
 			act = 1;
 			break;
 		}
@@ -488,14 +510,14 @@ bltinsetlocale(void)
 void
 bltinunsetlocale(void)
 {
-	struct strlist *lp;
+	int i;
 
 	INTOFF;
-	for (lp = cmdenviron ; lp ; lp = lp->next) {
-		if (localevar(lp->text)) {
+	if (cmdenviron) for (i = 0; i < cmdenviron->count; i++) {
+		if (localevar(cmdenviron->args[i])) {
 			setlocale(LC_ALL, "");
 			updatecharset();
-			return;
+			break;
 		}
 	}
 	INTON;
@@ -710,6 +732,7 @@ localcmd(int argc __unused, char **argv __unused)
 {
 	char *name;
 
+	nextopt("");
 	if (! in_function())
 		error("Not in a function");
 	while ((name = *argptr++) != NULL) {
@@ -736,8 +759,8 @@ mklocal(char *name)
 	INTOFF;
 	lvp = ckmalloc(sizeof (struct localvar));
 	if (name[0] == '-' && name[1] == '\0') {
-		lvp->text = ckmalloc(sizeof optlist);
-		memcpy(lvp->text, optlist, sizeof optlist);
+		lvp->text = ckmalloc(sizeof optval);
+		memcpy(lvp->text, optval, sizeof optval);
 		vp = NULL;
 	} else {
 		vp = find_var(name, &vpp, NULL);
@@ -773,24 +796,38 @@ poplocalvars(void)
 {
 	struct localvar *lvp;
 	struct var *vp;
+	int islocalevar;
 
+	INTOFF;
 	while ((lvp = localvars) != NULL) {
 		localvars = lvp->next;
 		vp = lvp->vp;
 		if (vp == NULL) {	/* $- saved */
-			memcpy(optlist, lvp->text, sizeof optlist);
+			memcpy(optval, lvp->text, sizeof optval);
 			ckfree(lvp->text);
 			optschanged();
 		} else if ((lvp->flags & (VUNSET|VSTRFIXED)) == VUNSET) {
+			vp->flags &= ~VREADONLY;
 			(void)unsetvar(vp->text);
 		} else {
+			islocalevar = (vp->flags | lvp->flags) & VEXPORT &&
+			    localevar(lvp->text);
 			if ((vp->flags & VTEXTFIXED) == 0)
 				ckfree(vp->text);
 			vp->flags = lvp->flags;
 			vp->text = lvp->text;
+			if (vp->func)
+				(*vp->func)(vp->text + vp->name_len + 1);
+			if (islocalevar) {
+				change_env(vp->text, vp->flags & VEXPORT &&
+				    (vp->flags & VUNSET) == 0);
+				setlocale(LC_ALL, "");
+				updatecharset();
+			}
 		}
 		ckfree(lvp);
 	}
+	INTON;
 }
 
 
@@ -829,18 +866,21 @@ unsetcmd(int argc __unused, char **argv __unused)
 	if (flg_func == 0 && flg_var == 0)
 		flg_var = 1;
 
+	INTOFF;
 	for (ap = argptr; *ap ; ap++) {
 		if (flg_func)
 			ret |= unsetfunc(*ap);
 		if (flg_var)
 			ret |= unsetvar(*ap);
 	}
+	INTON;
 	return ret;
 }
 
 
 /*
  * Unset the specified variable.
+ * Called with interrupts off.
  */
 
 int
@@ -854,9 +894,8 @@ unsetvar(const char *s)
 		return (0);
 	if (vp->flags & VREADONLY)
 		return (1);
-	INTOFF;
 	if (vp->text[vp->name_len + 1] != '\0')
-		setvar(s, nullstr, 0);
+		setvar(s, "", 0);
 	if ((vp->flags & VEXPORT) && localevar(vp->text)) {
 		change_env(s, 0);
 		setlocale(LC_ALL, "");
@@ -870,14 +909,13 @@ unsetvar(const char *s)
 		*vpp = vp->next;
 		ckfree(vp);
 	}
-	INTON;
 	return (0);
 }
 
 
 
 /*
- * Returns true if the two strings specify the same varable.  The first
+ * Returns true if the two strings specify the same variable.  The first
  * variable name is terminated by '='; the second may be terminated by
  * either '=' or '\0'.
  */
@@ -898,7 +936,7 @@ varequal(const char *p, const char *q)
  * Search for a variable.
  * 'name' may be terminated by '=' or a NUL.
  * vppp is set to the pointer to vp, or the list head if vp isn't found
- * lenp is set to the number of charactets in 'name'
+ * lenp is set to the number of characters in 'name'
  */
 
 static struct var *

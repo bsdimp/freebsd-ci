@@ -14,11 +14,15 @@
 #ifndef LLVM_CLANG_BASIC_LINKAGE_H
 #define LLVM_CLANG_BASIC_LINKAGE_H
 
+#include <assert.h>
+#include <stdint.h>
+#include <utility>
+
 namespace clang {
 
 /// \brief Describes the different kinds of linkage 
 /// (C++ [basic.link], C99 6.2.2) that an entity may have.
-enum Linkage {
+enum Linkage : unsigned char {
   /// \brief No linkage, which means that the entity is unique and
   /// can only be referred to from within its scope.
   NoLinkage = 0,
@@ -36,6 +40,21 @@ enum Linkage {
   /// equivalent to having internal linkage from the code-generation
   /// point of view.
   UniqueExternalLinkage,
+
+  /// \brief No linkage according to the standard, but is visible from other
+  /// translation units because of types defined in a inline function.
+  VisibleNoLinkage,
+
+  /// \brief Internal linkage according to the Modules TS, but can be referred
+  /// to from other translation units indirectly through inline functions and
+  /// templates in the module interface.
+  ModuleInternalLinkage,
+
+  /// \brief Module linkage, which indicates that the entity can be referred
+  /// to from other translation units within the same module, and indirectly
+  /// from arbitrary other translation units through inline functions and
+  /// templates in the module interface.
+  ModuleLinkage,
 
   /// \brief External linkage, which indicates that the entity can
   /// be referred to from other translation units.
@@ -55,21 +74,55 @@ enum LanguageLinkage {
 /// This is relevant to CodeGen and AST file reading.
 enum GVALinkage {
   GVA_Internal,
-  GVA_C99Inline,
-  GVA_CXXInline,
+  GVA_AvailableExternally,
+  GVA_DiscardableODR,
   GVA_StrongExternal,
-  GVA_TemplateInstantiation,
-  GVA_ExplicitTemplateInstantiation
+  GVA_StrongODR
 };
 
-/// \brief Determine whether the given linkage is semantically external.
-inline bool isExternalLinkage(Linkage L) {
-  return L == UniqueExternalLinkage || L == ExternalLinkage;
+inline bool isDiscardableGVALinkage(GVALinkage L) {
+  return L <= GVA_DiscardableODR;
 }
 
-/// \brief Compute the minimum linkage given two linages.
+inline bool isExternallyVisible(Linkage L) {
+  return L >= VisibleNoLinkage;
+}
+
+inline Linkage getFormalLinkage(Linkage L) {
+  switch (L) {
+  case UniqueExternalLinkage:
+    return ExternalLinkage;
+  case VisibleNoLinkage:
+    return NoLinkage;
+  case ModuleInternalLinkage:
+    return InternalLinkage;
+  default:
+    return L;
+  }
+}
+
+inline bool isExternalFormalLinkage(Linkage L) {
+  return getFormalLinkage(L) == ExternalLinkage;
+}
+
+/// \brief Compute the minimum linkage given two linkages.
+///
+/// The linkage can be interpreted as a pair formed by the formal linkage and
+/// a boolean for external visibility. This is just what getFormalLinkage and
+/// isExternallyVisible return. We want the minimum of both components. The
+/// Linkage enum is defined in an order that makes this simple, we just need
+/// special cases for when VisibleNoLinkage would lose the visible bit and
+/// become NoLinkage.
 inline Linkage minLinkage(Linkage L1, Linkage L2) {
-  return L1 < L2? L1 : L2;
+  if (L2 == VisibleNoLinkage)
+    std::swap(L1, L2);
+  if (L1 == VisibleNoLinkage) {
+    if (L2 == InternalLinkage)
+      return NoLinkage;
+    if (L2 == UniqueExternalLinkage)
+      return NoLinkage;
+  }
+  return L1 < L2 ? L1 : L2;
 }
 
 } // end namespace clang

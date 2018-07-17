@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1983, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -80,12 +82,12 @@ static int compar(const void *_p1, const void *_p2);
 #define	isdigitch(Anychar) isdigit((u_char)(Anychar))
 
 /*
- * Getline reads a line from the control file cfp, removes tabs, converts
+ * get_line reads a line from the control file cfp, removes tabs, converts
  *  new-line to null and leaves it in line.
  * Returns 0 at EOF or the number of characters read.
  */
 int
-getline(FILE *cfp)
+get_line(FILE *cfp)
 {
 	register int linel = 0;
 	register char *lp = line;
@@ -167,11 +169,13 @@ getq(const struct printer *pp, struct jobqueue *(*namelist[]))
 		 * realloc the maximum size.
 		 */
 		if (++nitems > arraysz) {
-			arraysz *= 2;
-			queue = (struct jobqueue **)realloc((char *)queue,
-			    arraysz * sizeof(struct jobqueue *));
-			if (queue == NULL)
+			queue = (struct jobqueue **)reallocarray((char *)queue,
+			    arraysz, 2 * sizeof(struct jobqueue *));
+			if (queue == NULL) {
+				free(q);
 				goto errdone;
+			}
+			arraysz *= 2;
 		}
 		queue[nitems-1] = q;
 	}
@@ -282,7 +286,7 @@ lock_file_name(const struct printer *pp, char *buf, size_t len)
 {
 	static char staticbuf[MAXPATHLEN];
 
-	if (buf == 0)
+	if (buf == NULL)
 		buf = staticbuf;
 	if (len == 0)
 		len = MAXPATHLEN;
@@ -300,7 +304,7 @@ status_file_name(const struct printer *pp, char *buf, size_t len)
 {
 	static char staticbuf[MAXPATHLEN];
 
-	if (buf == 0)
+	if (buf == NULL)
 		buf = staticbuf;
 	if (len == 0)
 		len = MAXPATHLEN;
@@ -640,7 +644,7 @@ trstat_write(struct printer *pp, tr_sendrecv sendrecv, size_t bytecnt,
 	 *		     a host as it receives a datafile.
 	 *   user=<userid> - user who sent the job (if known)
 	 *   secs=<n>      - seconds it took to transfer the file
-	 *   bytes=<n>     - number of bytes transfered (ie, "bytecount")
+	 *   bytes=<n>     - number of bytes transferred (ie, "bytecount")
 	 *   bps=<n.n>e<n> - Bytes/sec (if the transfer was "big enough"
 	 *		     for this to be useful)
 	 * ! top=<str>     - type of printer (if the type is defined in
@@ -757,16 +761,22 @@ fatal(const struct printer *pp, const char *msg, ...)
 
 /*
  * Close all file descriptors from START on up.
- * This is a horrific kluge, since getdtablesize() might return
- * ``infinity'', in which case we will be spending a long time
- * closing ``files'' which were never open.  Perhaps it would
- * be better to close the first N fds, for some small value of N.
  */
 void
 closeallfds(int start)
 {
-	int stop = getdtablesize();
-	for (; start < stop; start++)
-		close(start);
+	int stop;
+
+	if (USE_CLOSEFROM)		/* The faster, modern solution */
+		closefrom(start);
+	else {
+		/* This older logic can be pretty awful on some OS's.  The
+		 * getdtablesize() might return ``infinity'', and then this
+		 * will waste a lot of time closing file descriptors which
+		 * had never been open()-ed. */
+		stop = getdtablesize();
+		for (; start < stop; start++)
+			close(start);
+	}
 }
 

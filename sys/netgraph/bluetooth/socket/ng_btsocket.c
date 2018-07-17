@@ -3,6 +3,8 @@
  */
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001-2002 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
  *
@@ -45,6 +47,8 @@
 #include <sys/socketvar.h>
 #include <sys/sysctl.h>
 #include <sys/taskqueue.h>
+
+#include <net/vnet.h>
 
 #include <netgraph/ng_message.h>
 #include <netgraph/netgraph.h>
@@ -211,10 +215,9 @@ static struct protosw		ng_btsocket_protosw[] = {
 	.pr_usrreqs =		&ng_btsocket_sco_usrreqs,
 },
 };
-#define ng_btsocket_protosw_size \
-	(sizeof(ng_btsocket_protosw)/sizeof(ng_btsocket_protosw[0]))
+
 #define ng_btsocket_protosw_end \
-	&ng_btsocket_protosw[ng_btsocket_protosw_size]
+	&ng_btsocket_protosw[nitems(ng_btsocket_protosw)]
 
 /*
  * BLUETOOTH domain
@@ -285,4 +288,4 @@ ng_btsocket_modevent(module_t mod, int event, void *data)
 	return (error);
 } /* ng_btsocket_modevent */
 
-DOMAIN_SET(ng_btsocket_);
+VNET_DOMAIN_SET(ng_btsocket_);

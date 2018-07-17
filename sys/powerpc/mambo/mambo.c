@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 2008 by Nathan Whitehorn. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -75,7 +77,7 @@ static driver_t mambobus_driver = {
 
 static devclass_t mambobus_devclass;
 
-DRIVER_MODULE(mambo, nexus, mambobus_driver, mambobus_devclass, 0, 0);
+DRIVER_MODULE(mambo, ofwbus, mambobus_driver, mambobus_devclass, 0, 0);
 
 static int
 mambobus_probe(device_t dev)

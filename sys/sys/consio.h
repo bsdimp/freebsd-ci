@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991-1996 Søren Schmidt
  * All rights reserved.
  *
@@ -103,11 +105,15 @@ typedef struct ssaver	ssaver_t;
 #define CONS_SSAVER	_IOW('c', 5, ssaver_t)
 #define CONS_GSAVER	_IOWR('c', 6, ssaver_t)
 
-/* set the text cursor type (obsolete, see CONS_CURSORSHAPE below) */
 /*
-#define CONS_BLINK_CURSOR (1 << 0)
-#define CONS_CHAR_CURSOR (1 << 1)
-*/
+ * Set the text cursor type.
+ *
+ * This is an old interface extended to support the CONS_HIDDEN_CURSOR bit.
+ * New code should use CONS_CURSORSHAPE.  CONS_CURSOR_ATTRS gives the 3
+ * bits supported by the (extended) old interface.  The old interface is
+ * especially unusable for hiding the cursor (even with its extension)
+ * since it changes the cursor on all vtys.
+ */
 #define CONS_CURSORTYPE	_IOW('c', 7, int)
 
 /* set the bell type to audible or visual */
@@ -183,9 +189,12 @@ typedef struct mouse_info mouse_info_t;
 #define CONS_HIDDEN_CURSOR	(1 << 2)
 #define CONS_CURSOR_ATTRS	(CONS_BLINK_CURSOR | CONS_CHAR_CURSOR |	\
 				 CONS_HIDDEN_CURSOR)
+#define CONS_CHARCURSOR_COLORS	(1 << 26)
+#define CONS_MOUSECURSOR_COLORS	(1 << 27)
+#define CONS_DEFAULT_CURSOR	(1 << 28)
+#define CONS_SHAPEONLY_CURSOR	(1 << 29)
 #define CONS_RESET_CURSOR	(1 << 30)
-#define CONS_LOCAL_CURSOR	(1 << 31)
-#define CONS_CURSOR_FLAGS	(CONS_RESET_CURSOR | CONS_LOCAL_CURSOR)
+#define CONS_LOCAL_CURSOR	(1U << 31)
 struct cshape {
 	/* shape[0]: flags, shape[1]: base, shape[2]: height */
 	int		shape[3];
@@ -209,12 +218,37 @@ struct fnt16 {
 };
 typedef struct fnt16	fnt16_t;
 
+struct vfnt_map {
+	uint32_t	src;
+	uint16_t	dst;
+	uint16_t	len;
+};
+typedef struct vfnt_map	vfnt_map_t;
+
+#define VFNT_MAP_NORMAL		0
+#define VFNT_MAP_NORMAL_RIGHT	1
+#define VFNT_MAP_BOLD		2
+#define VFNT_MAP_BOLD_RIGHT	3
+#define VFNT_MAPS		4
+struct vfnt {
+	vfnt_map_t	*map[VFNT_MAPS];
+	uint8_t		*glyphs;
+	unsigned int	map_count[VFNT_MAPS];
+	unsigned int	glyph_count;
+	unsigned int	width;
+	unsigned int	height;
+};
+typedef struct vfnt	vfnt_t;
+
 #define PIO_FONT8x8	_IOW('c', 64, fnt8_t)
 #define GIO_FONT8x8	_IOR('c', 65, fnt8_t)
 #define PIO_FONT8x14	_IOW('c', 66, fnt14_t)
 #define GIO_FONT8x14	_IOR('c', 67, fnt14_t)
 #define PIO_FONT8x16	_IOW('c', 68, fnt16_t)
 #define GIO_FONT8x16	_IOR('c', 69, fnt16_t)
+#define PIO_VFONT	_IOW('c', 70, vfnt_t)
+#define GIO_VFONT	_IOR('c', 71, vfnt_t)
+#define PIO_VFONT_DEFAULT _IO('c', 72)
 
 /* get video mode information */
 struct colors	{
@@ -379,12 +413,6 @@ typedef struct vt_mode vtmode_t;
 #define SW_VGA_CG320	_IO('S', M_VGA13)
 #define SW_VGA_CG640	_IO('S', M_VGA_CG640)
 #define SW_VGA_MODEX	_IO('S', M_VGA_MODEX)
-
-#define SW_PC98_80x25		_IO('S', M_PC98_80x25)
-#define SW_PC98_80x30		_IO('S', M_PC98_80x30)
-#define SW_PC98_EGC640x400	_IO('S', M_PC98_EGC640x400)
-#define SW_PC98_PEGC640x400	_IO('S', M_PC98_PEGC640x400)
-#define SW_PC98_PEGC640x480	_IO('S', M_PC98_PEGC640x480)
 
 #define SW_VGA_C90x25	_IO('S', M_VGA_C90x25)
 #define SW_VGA_M90x25	_IO('S', M_VGA_M90x25)

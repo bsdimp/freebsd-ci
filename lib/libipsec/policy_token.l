@@ -1,7 +1,9 @@
 /*	$FreeBSD$	*/
 /*	$KAME: policy_token.l,v 1.13 2003/05/09 05:19:55 sakane Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (C) 1995, 1996, 1997, 1998, and 1999 WIDE Project.
  * All rights reserved.
  *
@@ -139,8 +141,8 @@ void
 __policy__strbuffer__init__(msg)
 	char *msg;
 {
-	if (yy_current_buffer)
-		yy_delete_buffer(yy_current_buffer);
+	if (YY_CURRENT_BUFFER)
+		yy_delete_buffer(YY_CURRENT_BUFFER);
 	strbuffer = (YY_BUFFER_STATE)yy_scan_string(msg);
 	yy_switch_to_buffer(strbuffer);
 

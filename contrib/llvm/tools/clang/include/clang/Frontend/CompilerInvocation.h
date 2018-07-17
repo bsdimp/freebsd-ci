@@ -13,30 +13,31 @@
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileSystemOptions.h"
 #include "clang/Basic/LangOptions.h"
-#include "clang/Basic/TargetOptions.h"
 #include "clang/Frontend/CodeGenOptions.h"
 #include "clang/Frontend/DependencyOutputOptions.h"
 #include "clang/Frontend/FrontendOptions.h"
 #include "clang/Frontend/LangStandard.h"
 #include "clang/Frontend/MigratorOptions.h"
 #include "clang/Frontend/PreprocessorOutputOptions.h"
-#include "clang/Lex/HeaderSearchOptions.h"
-#include "clang/Lex/PreprocessorOptions.h"
 #include "clang/StaticAnalyzer/Core/AnalyzerOptions.h"
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringRef.h"
 #include <string>
-#include <vector>
 
-namespace clang {
+namespace llvm {
+class Triple;
 
-class CompilerInvocation;
-class DiagnosticsEngine;
-
-namespace driver {
+namespace opt {
 class ArgList;
 }
+}
+
+namespace clang {
+class PreprocessorOptions;
+class HeaderSearchOptions;
+class TargetOptions;
+class LangOptions;
+class CompilerInvocation;
+class DiagnosticsEngine;
 
 /// \brief Fill out Opts based on the options given in Args.
 ///
@@ -45,37 +46,41 @@ class ArgList;
 ///
 /// When errors are encountered, return false and, if Diags is non-null,
 /// report the error(s).
-bool ParseDiagnosticArgs(DiagnosticOptions &Opts, driver::ArgList &Args,
-                         DiagnosticsEngine *Diags = 0);
-  
-class CompilerInvocationBase : public RefCountedBase<CompilerInvocation> {
-protected:
+bool ParseDiagnosticArgs(DiagnosticOptions &Opts, llvm::opt::ArgList &Args,
+                         DiagnosticsEngine *Diags = nullptr,
+                         bool DefaultDiagColor = true,
+                         bool DefaultShowOpt = true);
+
+class CompilerInvocationBase {
+  void operator=(const CompilerInvocationBase &) = delete;
+
+public:
   /// Options controlling the language variant.
-  IntrusiveRefCntPtr<LangOptions> LangOpts;
+  std::shared_ptr<LangOptions> LangOpts;
 
   /// Options controlling the target.
-  IntrusiveRefCntPtr<TargetOptions> TargetOpts;
+  std::shared_ptr<TargetOptions> TargetOpts;
 
   /// Options controlling the diagnostic engine.
   IntrusiveRefCntPtr<DiagnosticOptions> DiagnosticOpts;
 
   /// Options controlling the \#include directive.
-  IntrusiveRefCntPtr<HeaderSearchOptions> HeaderSearchOpts;
+  std::shared_ptr<HeaderSearchOptions> HeaderSearchOpts;
 
   /// Options controlling the preprocessor (aside from \#include handling).
-  IntrusiveRefCntPtr<PreprocessorOptions> PreprocessorOpts;
+  std::shared_ptr<PreprocessorOptions> PreprocessorOpts;
 
-public:
   CompilerInvocationBase();
+  ~CompilerInvocationBase();
 
   CompilerInvocationBase(const CompilerInvocationBase &X);
-  
-  LangOptions *getLangOpts() { return LangOpts.getPtr(); }
-  const LangOptions *getLangOpts() const { return LangOpts.getPtr(); }
 
-  TargetOptions &getTargetOpts() { return *TargetOpts.getPtr(); }
+  LangOptions *getLangOpts() { return LangOpts.get(); }
+  const LangOptions *getLangOpts() const { return LangOpts.get(); }
+
+  TargetOptions &getTargetOpts() { return *TargetOpts.get(); }
   const TargetOptions &getTargetOpts() const {
-    return *TargetOpts.getPtr();
+    return *TargetOpts.get();
   }
 
   DiagnosticOptions &getDiagnosticOpts() const { return *DiagnosticOpts; }
@@ -84,7 +89,13 @@ public:
   const HeaderSearchOptions &getHeaderSearchOpts() const {
     return *HeaderSearchOpts;
   }
+  std::shared_ptr<HeaderSearchOptions> getHeaderSearchOptsPtr() const {
+    return HeaderSearchOpts;
+  }
 
+  std::shared_ptr<PreprocessorOptions> getPreprocessorOptsPtr() {
+    return PreprocessorOpts;
+  }
   PreprocessorOptions &getPreprocessorOpts() { return *PreprocessorOpts; }
   const PreprocessorOptions &getPreprocessorOpts() const {
     return *PreprocessorOpts;
@@ -150,8 +161,11 @@ public:
   ///
   /// \param Opts - The LangOptions object to set up.
   /// \param IK - The input language.
+  /// \param T - The target triple.
+  /// \param PPOpts - The PreprocessorOptions affected.
   /// \param LangStd - The input language standard.
   static void setLangDefaults(LangOptions &Opts, InputKind IK,
+                   const llvm::Triple &T, PreprocessorOptions &PPOpts,
                    LangStandard::Kind LangStd = LangStandard::lang_unspecified);
   
   /// \brief Retrieve a module hash string that is suitable for uniquely 
@@ -202,6 +216,19 @@ public:
 
   /// @}
 };
+
+namespace vfs {
+  class FileSystem;
+}
+
+IntrusiveRefCntPtr<vfs::FileSystem>
+createVFSFromCompilerInvocation(const CompilerInvocation &CI,
+                                DiagnosticsEngine &Diags);
+
+IntrusiveRefCntPtr<vfs::FileSystem>
+createVFSFromCompilerInvocation(const CompilerInvocation &CI,
+                                DiagnosticsEngine &Diags,
+                                IntrusiveRefCntPtr<vfs::FileSystem> BaseFS);
 
 } // end namespace clang
 

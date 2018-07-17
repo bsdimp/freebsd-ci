@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999,2000 Jonathan Lemon <jlemon@FreeBSD.org>
  * All rights reserved.
  *
@@ -30,7 +32,7 @@
 #define _SYS_EVENTVAR_H_
 
 #ifndef _KERNEL
-#error "no user-servicable parts inside"
+#error "no user-serviceable parts inside"
 #endif
 
 #include <sys/_task.h>
@@ -41,7 +43,7 @@
 struct kqueue {
 	struct		mtx kq_lock;
 	int		kq_refcnt;
-	SLIST_ENTRY(kqueue)	kq_list;
+	TAILQ_ENTRY(kqueue)	kq_list;
 	TAILQ_HEAD(, knote)	kq_head;	/* list of pending event */
 	int		kq_count;		/* number of pending events */
 	struct		selinfo kq_sel;
@@ -60,6 +62,7 @@ struct kqueue {
 	u_long		kq_knhashmask;		/* size of knhash */
 	struct		klist *kq_knhash;	/* hash table for knotes */
 	struct		task kq_task;
+	struct		ucred *kq_cred;
 };
 
 #endif /* !_SYS_EVENTVAR_H_ */

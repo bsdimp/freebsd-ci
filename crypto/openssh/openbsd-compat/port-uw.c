@@ -42,16 +42,19 @@
 #include "key.h"
 #include "auth-options.h"
 #include "log.h"
+#include "misc.h"	/* servconf.h needs misc.h for struct ForwardOptions */
 #include "servconf.h"
 #include "hostfile.h"
 #include "auth.h"
 #include "ssh.h"
+#include "ssh_api.h"
 
 int nischeck(char *);
 
 int
-sys_auth_passwd(Authctxt *authctxt, const char *password)
+sys_auth_passwd(struct ssh *ssh, const char *password)
 {
+	Authctxt *authctxt = ssh->authctxt;
 	struct passwd *pw = authctxt->pw;
 	char *salt;
 	int result;

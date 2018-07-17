@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Baptiste Daroussin <bapt@FreeBSD.org>
  * All rights reserved.
  *
@@ -30,19 +32,30 @@
 #define _PKG_CONFIG_H
 
 #define _LOCALBASE "/usr/local"
+#define URL_SCHEME_PREFIX "pkg+"
 
 typedef enum {
 	PACKAGESITE = 0,
 	ABI,
 	MIRROR_TYPE,
 	ASSUME_ALWAYS_YES,
+	SIGNATURE_TYPE,
+	FINGERPRINTS,
+	REPOS_DIR,
+	PUBKEY,
 	CONFIG_SIZE
 } pkg_config_key;
 
 typedef enum {
 	PKG_CONFIG_STRING=0,
 	PKG_CONFIG_BOOL,
+	PKG_CONFIG_LIST,
 } pkg_config_t;
+
+typedef enum {
+	CONFFILE_PKG=0,
+	CONFFILE_REPO,
+} pkg_conf_file_t;
 
 int config_init(void);
 void config_finish(void);

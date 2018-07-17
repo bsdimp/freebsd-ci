@@ -1,5 +1,7 @@
-/*
- * Copyright (c) 2010-2011 Qlogic Corporation
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2011-2013 Qlogic Corporation
  * All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without

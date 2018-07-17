@@ -389,7 +389,7 @@ void send_cts(struct params *p, char *mac)
 	wh->i_fc[0] |= IEEE80211_FC0_TYPE_CTL;
 	wh->i_fc[0] |= IEEE80211_FC0_SUBTYPE_CTS;
 	wh->i_dur[0] = 0x69;
-	wh->i_dur[0] = 0x00;
+	wh->i_dur[1] = 0x00;
 	memcpy(wh->i_addr1, mac, 6);
 
 	send_frame(p, wh, 10);
@@ -509,7 +509,7 @@ void read_real_data(struct params *p, struct ieee80211_frame *wh, int len)
 	memcpy(dst, wh->i_addr3, 6);
 
 
-	if (wh->i_fc[1] & IEEE80211_FC1_WEP) {
+	if (wh->i_fc[1] & IEEE80211_FC1_PROTECTED) {
 		if (!p->wep_len) {
 			printf("Got wep but i aint wep\n");
 			return;
@@ -737,7 +737,7 @@ void read_tap(struct params *p)
 	wh->i_fc[0] |= IEEE80211_FC0_TYPE_DATA;
 	wh->i_fc[1] |= IEEE80211_FC1_DIR_FROMDS;
 	if (p->wep_len)
-		wh->i_fc[1] |= IEEE80211_FC1_WEP;
+		wh->i_fc[1] |= IEEE80211_FC1_PROTECTED;
 
 	/* LLC & SNAP */
 	ptr = (char*) (wh+1);

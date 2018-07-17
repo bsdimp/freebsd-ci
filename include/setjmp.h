@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -44,7 +46,7 @@
 #include <machine/setjmp.h>
 
 __BEGIN_DECLS
-#if __BSD_VISIBLE || __XSI_VISIBLE >= 600
+#if __XSI_VISIBLE >= 600
 void	_longjmp(jmp_buf, int) __dead2;
 int	_setjmp(jmp_buf) __returns_twice;
 #endif
@@ -53,7 +55,7 @@ void	longjmp(jmp_buf, int) __dead2;
 void	longjmperror(void);
 #endif
 int	setjmp(jmp_buf) __returns_twice;
-#if __BSD_VISIBLE || __POSIX_VISIBLE || __XSI_VISIBLE
+#if __POSIX_VISIBLE || __XSI_VISIBLE
 void	siglongjmp(sigjmp_buf, int) __dead2;
 int	sigsetjmp(sigjmp_buf, int) __returns_twice;
 #endif

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -46,16 +48,6 @@
 /*
  * First define what the actual subs. return
  */
-#define	M_HASCL(m)	((m)->m_flags & M_EXT)
-#define	NFSMINOFF(m) 							\
-		if (M_HASCL(m)) 					\
-			(m)->m_data = (m)->m_ext.ext_buf; 		\
-		else if ((m)->m_flags & M_PKTHDR) 			\
-			(m)->m_data = (m)->m_pktdat; 			\
-				else 					\
-			(m)->m_data = (m)->m_dat
-#define	NFSMSIZ(m)	((M_HASCL(m))?MCLBYTES: 			\
-				(((m)->m_flags & M_PKTHDR)?MHLEN:MLEN))
 #define	NFSM_DATAP(m, s)	(m)->m_data += (s)
 
 /*
@@ -100,7 +92,23 @@ nfsm_dissect(struct nfsrv_descript *nd, int siz)
 		retp = (void *)nd->nd_dpos; 
 		nd->nd_dpos += siz; 
 	} else { 
-		retp = nfsm_dissct(nd, siz); 
+		retp = nfsm_dissct(nd, siz, M_WAITOK); 
+	}
+	return (retp);
+}
+
+static __inline void *
+nfsm_dissect_nonblock(struct nfsrv_descript *nd, int siz)
+{
+	int tt1; 
+	void *retp;
+
+	tt1 = NFSMTOD(nd->nd_md, caddr_t) + nd->nd_md->m_len - nd->nd_dpos; 
+	if (tt1 >= siz) { 
+		retp = (void *)nd->nd_dpos; 
+		nd->nd_dpos += siz; 
+	} else { 
+		retp = nfsm_dissct(nd, siz, M_NOWAIT); 
 	}
 	return (retp);
 }
@@ -108,6 +116,15 @@ nfsm_dissect(struct nfsrv_descript *nd, int siz)
 #define	NFSM_DISSECT(a, c, s) 						\
 	do {								\
 		(a) = (c)nfsm_dissect(nd, (s));	 			\
+		if ((a) == NULL) { 					\
+			error = EBADRPC; 				\
+			goto nfsmout; 					\
+		}							\
+	} while (0)
+
+#define	NFSM_DISSECT_NONBLOCK(a, c, s) 					\
+	do {								\
+		(a) = (c)nfsm_dissect_nonblock(nd, (s));		\
 		if ((a) == NULL) { 					\
 			error = EBADRPC; 				\
 			goto nfsmout; 					\

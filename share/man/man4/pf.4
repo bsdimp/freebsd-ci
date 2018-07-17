@@ -28,7 +28,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd September 18 2012
+.Dd November 14, 2013
 .Dt PF 4
 .Os
 .Sh NAME
@@ -1077,7 +1077,7 @@ struct pfi_kif {
 };
 .Ed
 .It Dv DIOCSETIFFLAG Fa "struct pfioc_iface *io"
-Set the user setable flags (described above) of the
+Set the user settable flags (described above) of the
 .Nm
 internal interface description.
 The filtering process is the same as for
@@ -1169,7 +1169,6 @@ main(int argc, char *argv[])
 .Xr altq 4 ,
 .Xr if_bridge 4 ,
 .Xr pflog 4 ,
-.Xr pflow 4 ,
 .Xr pfsync 4 ,
 .Xr pfctl 8 ,
 .Xr altq 9
@@ -1181,5 +1180,8 @@ packet filtering mechanism first appeared in
 and then
 .Fx 5.2 .
 .Pp
-This implementation matches
+This implementation is derived from
 .Ox 4.5 .
+It has been heavily modified to be capable of running in multithreaded
+.Fx
+kernel and scale its performance on multiple CPUs.

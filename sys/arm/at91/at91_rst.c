@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Greg Ansley.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -23,6 +25,8 @@
  * SUCH DAMAGE.
  */
 
+#include "opt_platform.h"
+
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
@@ -39,10 +43,18 @@ __FBSDID("$FreeBSD$");
 #include <arm/at91/at91_rstreg.h>
 #include <arm/at91/at91board.h>
 
+#ifdef FDT
+#include <dev/ofw/ofw_bus.h>
+#include <dev/ofw/ofw_bus_subr.h>
+#define FDT_HACKS 1
+#endif
+
 #define RST_TIMEOUT (5)	/* Seconds to hold NRST for hard reset */
 #define RST_TICK (20)	/* sample NRST at hz/RST_TICK intervals */
 
+#ifndef FDT
 static int at91_rst_intr(void *arg);
+#endif
 
 static struct at91_rst_softc {
 	struct resource	*mem_res;	/* Memory resource */
@@ -93,6 +105,10 @@ at91_rst_cpu_reset(void)
 static int
 at91_rst_probe(device_t dev)
 {
+#ifdef FDT
+	if (!ofw_bus_is_compatible(dev, "atmel,at91sam9260-rstc"))
+		return (ENXIO);
+#endif
 
 	device_set_desc(dev, "AT91SAM9 Reset Controller");
 	return (0);
@@ -103,12 +119,12 @@ at91_rst_attach(device_t dev)
 {
 	struct at91_rst_softc *sc;
 	const char *cause;
-	int rid, err;
+	int rid, err = 0;
 
 	at91_rst_sc = sc = device_get_softc(dev);
 	sc->sc_dev = dev;
 
-	callout_init(&sc->tick_ch, 0);
+	callout_init(&sc->tick_ch, 1);
 
 	rid = 0;
 	sc->mem_res = bus_alloc_resource_any(dev, SYS_RES_MEMORY, &rid,
@@ -118,6 +134,8 @@ at91_rst_attach(device_t dev)
 		err = ENOMEM;
 		goto out;
 	}
+
+#ifndef FDT_HACKS
 	rid = 0;
 	sc->irq_res = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid,
 	    RF_ACTIVE | RF_SHAREABLE);
@@ -132,6 +150,7 @@ at91_rst_attach(device_t dev)
 	    at91_rst_intr, NULL, sc, &sc->intrhand);
 	if (err)
 		device_printf(dev, "could not establish interrupt handler.\n");
+#endif
 
 	WR4(at91_rst_sc, RST_MR, RST_MR_ERSTL(0xd) | RST_MR_URSIEN | RST_MR_KEY);
 
@@ -161,6 +180,7 @@ out:
 	return (err);
 }
 
+#ifndef FDT_HACKS
 static void
 at91_rst_tick(void *argp)
 {
@@ -191,6 +211,7 @@ at91_rst_intr(void *argp)
 	}
 	return (FILTER_STRAY);
 }
+#endif
 
 static device_method_t at91_rst_methods[] = {
 	DEVMETHOD(device_probe, at91_rst_probe),
@@ -206,5 +227,10 @@ static driver_t at91_rst_driver = {
 
 static devclass_t at91_rst_devclass;
 
+#ifdef FDT
+DRIVER_MODULE(at91_rst, simplebus, at91_rst_driver, at91_rst_devclass, NULL,
+    NULL);
+#else
 DRIVER_MODULE(at91_rst, atmelarm, at91_rst_driver, at91_rst_devclass, NULL,
     NULL);
+#endif

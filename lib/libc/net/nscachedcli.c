@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Michael Bushkov <bushman@rsu.ru>
  * All rights reserved.
  *
@@ -95,7 +97,7 @@ safe_write(struct cached_connection_ *connection, const void *data,
 
 /*
  * safe_read reads data from connection and tries to do it in the very safe
- * and stable way. It uses kevent to ensure, that the data are availabe for
+ * and stable way. It uses kevent to ensure, that the data are available for
  * reading. If the amount of data to be read is too large, then they would
  * be splitted.
  */
@@ -200,7 +202,7 @@ __open_cached_connection(struct cached_connection_params const *params)
 
 	assert(params != NULL);
 
-	client_socket = _socket(PF_LOCAL, SOCK_STREAM, 0);
+	client_socket = _socket(PF_LOCAL, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	client_address.sun_family = PF_LOCAL;
 	strncpy(client_address.sun_path, params->socket_path,
 	    sizeof(client_address.sun_path));

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012
  *	Ben Gray <bgray@freebsd.org>.
  * All rights reserved.
@@ -74,6 +76,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/mutex.h>
 #include <sys/condvar.h>
+#include <sys/socket.h>
 #include <sys/sysctl.h>
 #include <sys/sx.h>
 #include <sys/unistd.h>
@@ -81,6 +84,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/priv.h>
 #include <sys/random.h>
+
+#include <net/if.h>
+#include <net/if_var.h>
+
+#include <netinet/in.h>
+#include <netinet/ip.h>
 
 #include "opt_platform.h"
 
@@ -107,7 +116,7 @@ __FBSDID("$FreeBSD$");
 static int smsc_debug = 0;
 
 SYSCTL_NODE(_hw_usb, OID_AUTO, smsc, CTLFLAG_RW, 0, "USB smsc");
-SYSCTL_INT(_hw_usb_smsc, OID_AUTO, debug, CTLFLAG_RW, &smsc_debug, 0,
+SYSCTL_INT(_hw_usb_smsc, OID_AUTO, debug, CTLFLAG_RWTUN, &smsc_debug, 0,
     "Debug level");
 #endif
 
@@ -116,7 +125,24 @@ SYSCTL_INT(_hw_usb_smsc, OID_AUTO, debug, CTLFLAG_RW, &smsc_debug, 0,
  */
 static const struct usb_device_id smsc_devs[] = {
 #define	SMSC_DEV(p,i) { USB_VPI(USB_VENDOR_SMC2, USB_PRODUCT_SMC2_##p, i) }
+	SMSC_DEV(LAN89530_ETH, 0),
+	SMSC_DEV(LAN9500_ETH, 0),
+	SMSC_DEV(LAN9500_ETH_2, 0),
+	SMSC_DEV(LAN9500A_ETH, 0),
+	SMSC_DEV(LAN9500A_ETH_2, 0),
+	SMSC_DEV(LAN9505_ETH, 0),
+	SMSC_DEV(LAN9505A_ETH, 0),
 	SMSC_DEV(LAN9514_ETH, 0),
+	SMSC_DEV(LAN9514_ETH_2, 0),
+	SMSC_DEV(LAN9530_ETH, 0),
+	SMSC_DEV(LAN9730_ETH, 0),
+	SMSC_DEV(LAN9500_SAL10, 0),
+	SMSC_DEV(LAN9505_SAL10, 0),
+	SMSC_DEV(LAN9500A_SAL10, 0),
+	SMSC_DEV(LAN9505A_SAL10, 0),
+	SMSC_DEV(LAN9514_SAL10, 0),
+	SMSC_DEV(LAN9500A_HAL, 0),
+	SMSC_DEV(LAN9505A_HAL, 0),
 #undef SMSC_DEV
 };
 
@@ -128,7 +154,7 @@ static const struct usb_device_id smsc_devs[] = {
 			device_printf((sc)->sc_ue.ue_dev, "debug: " fmt, ##args); \
 	} while(0)
 #else
-#define smsc_dbg_printf(sc, fmt, args...)
+#define smsc_dbg_printf(sc, fmt, args...) do { } while (0)
 #endif
 
 #define smsc_warn_printf(sc, fmt, args...) \
@@ -426,7 +452,7 @@ smsc_miibus_readreg(device_t dev, int phy, int reg)
 		goto done;
 	}
 
-	addr = (phy << 11) | (reg << 6) | SMSC_MII_READ;
+	addr = (phy << 11) | (reg << 6) | SMSC_MII_READ | SMSC_MII_BUSY;
 	smsc_write_reg(sc, SMSC_MII_ADDR, addr);
 
 	if (smsc_wait_for_bits(sc, SMSC_MII_ADDR, SMSC_MII_BUSY) != 0)
@@ -479,7 +505,7 @@ smsc_miibus_writereg(device_t dev, int phy, int reg, int val)
 	val = htole32(val);
 	smsc_write_reg(sc, SMSC_MII_DATA, val);
 
-	addr = (phy << 11) | (reg << 6) | SMSC_MII_WRITE;
+	addr = (phy << 11) | (reg << 6) | SMSC_MII_WRITE | SMSC_MII_BUSY;
 	smsc_write_reg(sc, SMSC_MII_ADDR, addr);
 
 	if (smsc_wait_for_bits(sc, SMSC_MII_ADDR, SMSC_MII_BUSY) != 0)
@@ -606,16 +632,13 @@ smsc_ifmedia_upd(struct ifnet *ifp)
 {
 	struct smsc_softc *sc = ifp->if_softc;
 	struct mii_data *mii = uether_getmii(&sc->sc_ue);
+	struct mii_softc *miisc;
 	int err;
 
 	SMSC_LOCK_ASSERT(sc, MA_OWNED);
 
-	if (mii->mii_instance) {
-		struct mii_softc *miisc;
-
-		LIST_FOREACH(miisc, &mii->mii_phys, mii_list)
-			mii_phy_reset(miisc);
-	}
+	LIST_FOREACH(miisc, &mii->mii_phys, mii_list)
+		PHY_RESET(miisc);
 	err = mii_mediachg(mii);
 	return (err);
 }
@@ -638,13 +661,10 @@ smsc_ifmedia_sts(struct ifnet *ifp, struct ifmediareq *ifmr)
 	struct mii_data *mii = uether_getmii(&sc->sc_ue);
 
 	SMSC_LOCK(sc);
-	
 	mii_pollstat(mii);
-	
-	SMSC_UNLOCK(sc);
-	
 	ifmr->ifm_active = mii->mii_media_active;
 	ifmr->ifm_status = mii->mii_media_status;
+	SMSC_UNLOCK(sc);
 }
 
 /**
@@ -694,14 +714,14 @@ smsc_setmulti(struct usb_ether *ue)
 		/* Take the lock of the mac address list before hashing each of them */
 		if_maddr_rlock(ifp);
 
-		if (!TAILQ_EMPTY(&ifp->if_multiaddrs)) {
+		if (!CK_STAILQ_EMPTY(&ifp->if_multiaddrs)) {
 			/* We are filtering on a set of address so calculate hashes of each
 			 * of the address and set the corresponding bits in the register.
 			 */
 			sc->sc_mac_csr |= SMSC_MAC_CSR_HPFILT;
 			sc->sc_mac_csr &= ~(SMSC_MAC_CSR_PRMS | SMSC_MAC_CSR_MCPAS);
 		
-			TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+			CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 				if (ifma->ifma_addr->sa_family != AF_LINK)
 					continue;
 
@@ -804,7 +824,6 @@ static int smsc_sethwcsum(struct smsc_softc *sc)
 	return (0);
 }
 
-
 /**
  *	smsc_setmacaddress - Sets the mac address in the device
  *	@sc: driver soft context
@@ -886,6 +905,9 @@ smsc_init(struct usb_ether *ue)
 	struct ifnet *ifp = uether_getifp(ue);
 
 	SMSC_LOCK_ASSERT(sc, MA_OWNED);
+
+	if (smsc_setmacaddress(sc, IF_LLADDR(ifp)))
+		smsc_dbg_printf(sc, "setting MAC address failed\n");
 
 	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) != 0)
 		return;
@@ -988,9 +1010,9 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 			
 			if (rxhdr & SMSC_RX_STAT_ERROR) {
 				smsc_dbg_printf(sc, "rx error (hdr 0x%08x)\n", rxhdr);
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				if (rxhdr & SMSC_RX_STAT_COLLISION)
-					ifp->if_collisions++;
+					if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 			} else {
 
 				/* Check if the ethernet frame is too big or too small */
@@ -1001,7 +1023,7 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 				m = uether_newbuf();
 				if (m == NULL) {
 					smsc_warn_printf(sc, "failed to create new mbuf\n");
-					ifp->if_iqdrops++;
+					if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 					goto tr_setup;
 				}
 				
@@ -1027,25 +1049,32 @@ smsc_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 					 *
 					 * Ignore H/W csum for non-IPv4 packets.
 					 */
-					if (be16toh(eh->ether_type) == ETHERTYPE_IP && pktlen > ETHER_MIN_LEN) {
-					
-						/* Indicate the UDP/TCP csum has been calculated */
-						m->m_pkthdr.csum_flags |= CSUM_DATA_VALID;
-										 
-						/* Copy the TCP/UDP checksum from the last 2 bytes
-						 * of the transfer and put in the csum_data field.
-						 */
-						usbd_copy_out(pc, (off + pktlen),
-									  &m->m_pkthdr.csum_data, 2);
-					
-						/* The data is copied in network order, but the
-						 * csum algorithm in the kernel expects it to be
-						 * in host network order.
-						 */
-						m->m_pkthdr.csum_data = ntohs(m->m_pkthdr.csum_data);
-					
-						smsc_dbg_printf(sc, "RX checksum offloaded (0x%04x)\n",
-										m->m_pkthdr.csum_data);
+					if ((be16toh(eh->ether_type) == ETHERTYPE_IP) &&
+					    (pktlen > ETHER_MIN_LEN)) {
+						struct ip *ip;
+
+						ip = (struct ip *)(eh + 1);
+						if ((ip->ip_v == IPVERSION) &&
+						    ((ip->ip_p == IPPROTO_TCP) ||
+						     (ip->ip_p == IPPROTO_UDP))) {
+							/* Indicate the UDP/TCP csum has been calculated */
+							m->m_pkthdr.csum_flags |= CSUM_DATA_VALID;
+
+							/* Copy the TCP/UDP checksum from the last 2 bytes
+							 * of the transfer and put in the csum_data field.
+							 */
+							usbd_copy_out(pc, (off + pktlen),
+							              &m->m_pkthdr.csum_data, 2);
+
+							/* The data is copied in network order, but the
+							 * csum algorithm in the kernel expects it to be
+							 * in host network order.
+							 */
+							m->m_pkthdr.csum_data = ntohs(m->m_pkthdr.csum_data);
+
+							smsc_dbg_printf(sc, "RX checksum offloaded (0x%04x)\n",
+							                m->m_pkthdr.csum_data);
+						}
 					}
 					
 					/* Need to adjust the offset as well or we'll be off
@@ -1150,7 +1179,7 @@ tr_setup:
 			usbd_m_copy_in(pc, frm_len, m, 0, m->m_pkthdr.len);
 			frm_len += m->m_pkthdr.len;
 
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 
 			/* If there's a BPF listener, bounce a copy of this frame to him */
 			BPF_MTAP(ifp, m);
@@ -1168,7 +1197,7 @@ tr_setup:
 		return;
 
 	default:
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 		
 		if (error != USB_ERR_CANCELLED) {
@@ -1277,7 +1306,7 @@ smsc_phy_init(struct smsc_softc *sc)
 	do {
 		uether_pause(&sc->sc_ue, hz / 100);
 		bmcr = smsc_miibus_readreg(sc->sc_ue.ue_dev, sc->sc_phyno, MII_BMCR);
-	} while ((bmcr & MII_BMCR) && ((ticks - start_ticks) < max_ticks));
+	} while ((bmcr & BMCR_RESET) && ((ticks - start_ticks) < max_ticks));
 
 	if (((usb_ticks_t)(ticks - start_ticks)) >= max_ticks) {
 		smsc_err_printf(sc, "PHY reset timed-out");
@@ -1337,7 +1366,7 @@ smsc_chip_init(struct smsc_softc *sc)
 	/* Reset the PHY */
 	smsc_write_reg(sc, SMSC_PM_CTRL, SMSC_PM_CTRL_PHY_RST);
 
-	if ((err = smsc_wait_for_bits(sc, SMSC_PM_CTRL, SMSC_PM_CTRL_PHY_RST) != 0)) {
+	if ((err = smsc_wait_for_bits(sc, SMSC_PM_CTRL, SMSC_PM_CTRL_PHY_RST)) != 0) {
 		smsc_warn_printf(sc, "timed-out waiting for phy reset to complete\n");
 		goto init_failed;
 	}
@@ -1531,59 +1560,141 @@ smsc_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 }
 
 #ifdef FDT
+/*
+ * This is FreeBSD-specific compatibility strings for RPi/RPi2
+ */
+static phandle_t
+smsc_fdt_find_eth_node(phandle_t start)
+{
+	phandle_t child, node;
+
+	/* Traverse through entire tree to find usb ethernet nodes. */
+	for (node = OF_child(start); node != 0; node = OF_peer(node)) {
+		if ((ofw_bus_node_is_compatible(node, "net,ethernet") &&
+		    ofw_bus_node_is_compatible(node, "usb,device")) ||
+		    ofw_bus_node_is_compatible(node, "usb424,ec00"))
+			return (node);
+		child = smsc_fdt_find_eth_node(node);
+		if (child != -1)
+			return (child);
+	}
+
+	return (-1);
+}
+
+/*
+ * Check if node's path is <*>/usb/hub/ethernet
+ */
+static int
+smsc_fdt_is_usb_eth(phandle_t node)
+{
+	char name[16];
+	int len;
+
+	memset(name, 0, sizeof(name));
+	len = OF_getprop(node, "name", name, sizeof(name));
+	if (len <= 0)
+		return (0);
+
+	if (strcmp(name, "ethernet"))
+		return (0);
+
+	node = OF_parent(node);
+	if (node == -1)
+		return (0);
+	len = OF_getprop(node, "name", name, sizeof(name));
+	if (len <= 0)
+		return (0);
+
+	if (strcmp(name, "hub"))
+		return (0);
+
+	node = OF_parent(node);
+	if (node == -1)
+		return (0);
+	len = OF_getprop(node, "name", name, sizeof(name));
+	if (len <= 0)
+		return (0);
+
+	if (strcmp(name, "usb"))
+		return (0);
+
+	return (1);
+}
+
+static phandle_t
+smsc_fdt_find_eth_node_by_path(phandle_t start)
+{
+	phandle_t child, node;
+
+	/* Traverse through entire tree to find usb ethernet nodes. */
+	for (node = OF_child(start); node != 0; node = OF_peer(node)) {
+		if (smsc_fdt_is_usb_eth(node))
+			return (node);
+		child = smsc_fdt_find_eth_node_by_path(node);
+		if (child != -1)
+			return (child);
+	}
+
+	return (-1);
+}
+
+/*
+ * Look through known names that can contain mac address
+ * return 0 if valid MAC address has been found
+ */
+static int
+smsc_fdt_read_mac_property(phandle_t node, unsigned char *mac)
+{
+	int len;
+
+	/* Check if there is property */
+	if ((len = OF_getproplen(node, "local-mac-address")) > 0) {
+		if (len != ETHER_ADDR_LEN)
+			return (EINVAL);
+
+		OF_getprop(node, "local-mac-address", mac,
+		    ETHER_ADDR_LEN);
+		return (0);
+	}
+
+	if ((len = OF_getproplen(node, "mac-address")) > 0) {
+		if (len != ETHER_ADDR_LEN)
+			return (EINVAL);
+
+		OF_getprop(node, "mac-address", mac,
+		    ETHER_ADDR_LEN);
+		return (0);
+	}
+
+	return (ENXIO);
+}
+
 /**
- * Get MAC address from FDT blob. Firmware or loader should fill
- * mac-address or local-mac-address property Returns 0 if MAC address
- * obtained, error code otherwise
+ * Get MAC address from FDT blob.  Firmware or loader should fill
+ * mac-address or local-mac-address property.  Returns 0 if MAC address
+ * obtained, error code otherwise.
  */
 static int
 smsc_fdt_find_mac(unsigned char *mac)
 {
-	phandle_t child, parent, root;
-	int len;
+	phandle_t node, root;
 
 	root = OF_finddevice("/");
-	len = 0;
-	parent = root;
-
-	/* Traverse through entire tree to find nodes usb ethernet nodes */
-	for (child = OF_child(parent); child != 0; child = OF_peer(child)) {
-
-		/* Find a 'leaf'. Start the search from this node. */
-		while (OF_child(child)) {
-			parent = child;
-			child = OF_child(child);
-		}
-
-		if (fdt_is_compatible(child, "net,ethernet") &&
-		    fdt_is_compatible(child, "usb,device")) {
-
-			/* Check if there is property */
-			if ((len = OF_getproplen(child, "local-mac-address")) > 0) {
-				if (len != ETHER_ADDR_LEN)
-					return (EINVAL);
-
-				OF_getprop(child, "local-mac-address", mac,
-				    ETHER_ADDR_LEN);
-				return (0);
-			}
-
-			if ((len = OF_getproplen(child, "mac-address")) > 0) {
-				if (len != ETHER_ADDR_LEN)
-					return (EINVAL);
-
-				OF_getprop(child, "mac-address", mac,
-				    ETHER_ADDR_LEN);
-				return (0);
-			}
-		}
-
-		if (OF_peer(child) == 0) {
-			/* No more siblings. */
-			child = parent;
-			parent = OF_parent(child);
-		}
+	node = smsc_fdt_find_eth_node(root);
+	if (node != -1) {
+		if (smsc_fdt_read_mac_property(node, mac) == 0)
+			return (0);
 	}
+
+	/*
+	 * If it's not FreeBSD FDT blob for RPi, try more
+	 *     generic .../usb/hub/ethernet
+	 */
+	node = smsc_fdt_find_eth_node_by_path(root);
+
+	if (node != -1)
+		return smsc_fdt_read_mac_property(node, mac);
 
 	return (ENXIO);
 }
@@ -1683,7 +1794,7 @@ smsc_attach_post_sub(struct usb_ether *ue)
 	/* The chip supports TCP/UDP checksum offloading on TX and RX paths, however
 	 * currently only RX checksum is supported in the driver (see top of file).
 	 */
-	ifp->if_capabilities |= IFCAP_RXCSUM;
+	ifp->if_capabilities |= IFCAP_RXCSUM | IFCAP_VLAN_MTU;
 	ifp->if_hwassist = 0;
 	
 	/* TX checksuming is disabled (for now?)
@@ -1834,3 +1945,4 @@ MODULE_DEPEND(smsc, usb, 1, 1, 1);
 MODULE_DEPEND(smsc, ether, 1, 1, 1);
 MODULE_DEPEND(smsc, miibus, 1, 1, 1);
 MODULE_VERSION(smsc, 1);
+USB_PNP_HOST_INFO(smsc_devs);

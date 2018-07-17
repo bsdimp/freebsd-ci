@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997, 1998, 1999 Nicolas Souchu
  * All rights reserved.
  *
@@ -172,7 +174,7 @@ static char *pnp_classes[] = {
 /*
  * search_token()
  *
- * Search the first occurence of a token within a string
+ * Search the first occurrence of a token within a string
  */
 static char *
 search_token(char *str, int slen, char *token)
@@ -206,7 +208,7 @@ search_token(char *str, int slen, char *token)
 static int
 ppb_pnp_detect(device_t bus)
 {
-	char *token, *class = 0;
+	char *token, *class = NULL;
 	int i, len, error;
 	int class_id = -1;
 	char str[PPB_PnP_STRING_SIZE+1];
@@ -531,7 +533,7 @@ ppb_request_bus(device_t bus, device_t dev, int how)
 
 			/* restore the context of the device
 			 * The first time, ctx.valid is certainly false
-			 * then do not change anything. This is usefull for
+			 * then do not change anything. This is useful for
 			 * drivers that do not set there operating mode
 			 * during attachement
 			 */

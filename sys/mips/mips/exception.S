@@ -14,7 +14,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -55,26 +55,20 @@
  */
 
 #include "opt_ddb.h"
-#include "opt_kdtrace.h"
+
 #include <machine/asm.h>
 #include <machine/cpu.h>
 #include <machine/regnum.h>
 #include <machine/cpuregs.h>
 #include <machine/pte.h>
+#include <machine/pcb.h>
 
-#include "assym.s"
+#include "assym.inc"
 
 	.set	noreorder		# Noreorder is default style!
 
 #ifdef KDTRACE_HOOKS
 	.data
-	.globl	dtrace_invop_jump_addr
-	.align	4
-	.type	dtrace_invop_jump_addr, @object
-        .size	dtrace_invop_jump_addr, 8
-dtrace_invop_jump_addr:
-	.word	0
-	.word	0
 	.globl	dtrace_invop_calltrap_addr
 	.align	4
 	.type	dtrace_invop_calltrap_addr, @object
@@ -176,6 +170,12 @@ MipsDoTLBMiss:
 VECTOR(MipsException, unknown)
 /*
  * Find out what mode we came from and jump to the proper handler.
+ *
+ * Note: at turned off here because we cannot trash the at register
+ * in this exception code. Only k0 and k1 may be modified before
+ * we save registers. This is true of all functions called through
+ * the pointer magic: Mips{User,Kern}Intr, Mips{User,Kern}GenException
+ * and MipsTLBInvalidException
  */
 	.set	noat
 	mfc0	k0, MIPS_COP_0_STATUS		# Get the status register
@@ -376,7 +376,7 @@ SlowFault:
 #define	KERN_REG_SIZE		(NUMSAVEREGS * SZREG)
 #define	KERN_EXC_FRAME_SIZE	(CALLFRAME_SIZ + KERN_REG_SIZE + 16)
 
-NNON_LEAF(MipsKernGenException, KERN_EXC_FRAME_SIZE, ra)
+NESTED_NOPROFILE(MipsKernGenException, KERN_EXC_FRAME_SIZE, ra)
 	.set	noat
 	PTR_SUBU	sp, sp, KERN_EXC_FRAME_SIZE
 	.mask	0x80000000, (CALLFRAME_RA - KERN_EXC_FRAME_SIZE)
@@ -411,12 +411,6 @@ NNON_LEAF(MipsKernGenException, KERN_EXC_FRAME_SIZE, ra)
 END(MipsKernGenException)
 
 
-#define	SAVE_U_PCB_REG(reg, offs, base) \
-	REG_S	reg, U_PCB_REGS + (SZREG * offs) (base)
-
-#define	RESTORE_U_PCB_REG(reg, offs, base) \
-	REG_L	reg, U_PCB_REGS + (SZREG * offs) (base)
-
 /*----------------------------------------------------------------------------
  *
  * MipsUserGenException --
@@ -431,7 +425,7 @@ END(MipsKernGenException)
  *
  *----------------------------------------------------------------------------
  */
-NNON_LEAF(MipsUserGenException, CALLFRAME_SIZ, ra)
+NESTED_NOPROFILE(MipsUserGenException, CALLFRAME_SIZ, ra)
 	.set	noat
 	.mask	0x80000000, (CALLFRAME_RA - CALLFRAME_SIZ)
 /*
@@ -578,7 +572,7 @@ END(MipsUserGenException)
 
 	.set	push
 	.set	noat
-NON_LEAF(mips_wait, CALLFRAME_SIZ, ra)
+NESTED(mips_wait, CALLFRAME_SIZ, ra)
 	PTR_SUBU        sp, sp, CALLFRAME_SIZ
 	.mask   0x80000000, (CALLFRAME_RA - CALLFRAME_SIZ)
 	REG_S   ra, CALLFRAME_RA(sp)		# save RA
@@ -596,7 +590,11 @@ GLOBAL(MipsWaitStart)			# this is 16 byte aligned
 	mtc0	t1, MIPS_COP_0_STATUS
 	bnez	v0, MipsWaitEnd
 	nop
+#if defined(CPU_XBURST) && defined(SMP)
+	nop
+#else
 	wait
+#endif
 GLOBAL(MipsWaitEnd)			# MipsWaitStart + 16
 	jr	ra
 	PTR_ADDU        sp, sp, CALLFRAME_SIZ
@@ -620,7 +618,7 @@ END(mips_wait)
  *----------------------------------------------------------------------------
  */
 
-NNON_LEAF(MipsKernIntr, KERN_EXC_FRAME_SIZE, ra)
+NESTED_NOPROFILE(MipsKernIntr, KERN_EXC_FRAME_SIZE, ra)
 	.set	noat
 	PTR_SUBU	sp, sp, KERN_EXC_FRAME_SIZE
 	.mask	0x80000000, (CALLFRAME_RA - KERN_EXC_FRAME_SIZE)
@@ -645,7 +643,11 @@ NNON_LEAF(MipsKernIntr, KERN_EXC_FRAME_SIZE, ra)
  *  Call the interrupt handler. a0 points at the saved frame.
  */
 	PTR_LA	gp, _C_LABEL(_gp)
+#ifdef INTRNG
+	PTR_LA	k0, _C_LABEL(intr_irq_handler)
+#else
 	PTR_LA	k0, _C_LABEL(cpu_intr)
+#endif
 	jalr	k0
 	REG_S	a3, CALLFRAME_RA + KERN_REG_SIZE(sp)		# for debugging
 
@@ -687,7 +689,7 @@ END(MipsKernIntr)
  *
  *----------------------------------------------------------------------------
  */
-NNON_LEAF(MipsUserIntr, CALLFRAME_SIZ, ra)
+NESTED_NOPROFILE(MipsUserIntr, CALLFRAME_SIZ, ra)
 	.set	noat
 	.mask	0x80000000, (CALLFRAME_RA - CALLFRAME_SIZ)
 /*
@@ -757,7 +759,11 @@ NNON_LEAF(MipsUserIntr, CALLFRAME_SIZ, ra)
 /*
  * Call the interrupt handler.
  */
+#ifdef INTRNG
+	PTR_LA	k0, _C_LABEL(intr_irq_handler)
+#else
 	PTR_LA	k0, _C_LABEL(cpu_intr)
+#endif
 	jalr	k0
 	REG_S	a3, CALLFRAME_RA(sp)	# for debugging
 
@@ -843,7 +849,7 @@ NNON_LEAF(MipsUserIntr, CALLFRAME_SIZ, ra)
 	.set	at
 END(MipsUserIntr)
 
-NLEAF(MipsTLBInvalidException)
+LEAF_NOPROFILE(MipsTLBInvalidException)
 	.set push
 	.set noat
 	.set noreorder
@@ -1013,6 +1019,8 @@ tlb_insert_random:
 	 * of this handler. Otherwise the ddb backtrace code will think that
 	 * the panic() was called from MipsTLBMissException.
 	 */
+	.globl	MipsKStackOverflow
+MipsKStackOverflow:
 	nop
 
 	.set pop
@@ -1034,7 +1042,7 @@ END(MipsTLBInvalidException)
  *
  *----------------------------------------------------------------------------
  */
-NLEAF(MipsTLBMissException)
+LEAF_NOPROFILE(MipsTLBMissException)
 	.set	noat
 	MFC0		k0, MIPS_COP_0_BAD_VADDR	# k0=bad address
 	PTR_LI		k1, VM_MAX_KERNEL_ADDRESS	# check fault address against
@@ -1093,14 +1101,22 @@ END(MipsTLBMissException)
  *
  *----------------------------------------------------------------------------
  */
-NON_LEAF(MipsFPTrap, CALLFRAME_SIZ, ra)
+NESTED(MipsFPTrap, CALLFRAME_SIZ, ra)
+	.set push
+	.set hardfloat
 	PTR_SUBU	sp, sp, CALLFRAME_SIZ
 	mfc0	t0, MIPS_COP_0_STATUS
+	HAZARD_DELAY
 	REG_S	ra, CALLFRAME_RA(sp)
 	.mask	0x80000000, (CALLFRAME_RA - CALLFRAME_SIZ)
 
+#if defined(__mips_n32) || defined(__mips_n64)
+	or	t1, t0, MIPS_SR_COP_1_BIT | MIPS_SR_FR
+#else
 	or	t1, t0, MIPS_SR_COP_1_BIT
+#endif
 	mtc0	t1, MIPS_COP_0_STATUS
+	HAZARD_DELAY
 	ITLBNOPFIX
 	cfc1	t1, MIPS_FPU_CSR		# stall til FP done
 	cfc1	t1, MIPS_FPU_CSR		# now get status
@@ -1187,8 +1203,10 @@ FPReturn:
 	ITLBNOPFIX
 	j	ra
 	PTR_ADDU sp, sp, CALLFRAME_SIZ
+	.set pop
 END(MipsFPTrap)
 
+#ifndef INTRNG
 /*
  * Interrupt counters for vmstat.
  */
@@ -1215,6 +1233,7 @@ sintrcnt:
 #else
 	.int  INTRCNT_COUNT * (_MIPS_SZLONG / 8) * 2
 #endif
+#endif /* INTRNG */
 
 
 /*

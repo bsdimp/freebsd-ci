@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -18,7 +20,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -78,6 +80,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/kthread.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
@@ -94,6 +97,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/vnode.h>
 
 #include <security/mac/mac_framework.h>
+
+_Static_assert(sizeof(struct acctv3) - offsetof(struct acctv3, ac_trailer) ==
+    sizeof(struct acctv2) - offsetof(struct acctv2, ac_trailer), "trailer");
+_Static_assert(sizeof(struct acctv3) - offsetof(struct acctv3, ac_len2) ==
+    sizeof(struct acctv2) - offsetof(struct acctv2, ac_len2), "len2");
 
 /*
  * The routines implemented in this file are described in:
@@ -133,6 +141,7 @@ static int		 acct_configured;
 static int		 acct_suspended;
 static struct vnode	*acct_vp;
 static struct ucred	*acct_cred;
+static struct plimit	*acct_limit;
 static int		 acct_flags;
 static struct sx	 acct_sx;
 
@@ -196,7 +205,7 @@ int
 sys_acct(struct thread *td, struct acct_args *uap)
 {
 	struct nameidata nd;
-	int error, flags, replacing;
+	int error, flags, i, replacing;
 
 	error = priv_check(td, PRIV_ACCT);
 	if (error)
@@ -267,6 +276,15 @@ sys_acct(struct thread *td, struct acct_args *uap)
 	}
 
 	/*
+	 * Create our own plimit object without limits. It will be assigned
+	 * to exiting processes.
+	 */
+	acct_limit = lim_alloc();
+	for (i = 0; i < RLIM_NLIMITS; i++)
+		acct_limit->pl_rlimit[i].rlim_cur =
+		    acct_limit->pl_rlimit[i].rlim_max = RLIM_INFINITY;
+
+	/*
 	 * Save the new accounting file vnode, and schedule the new
 	 * free space watcher.
 	 */
@@ -284,12 +302,7 @@ sys_acct(struct thread *td, struct acct_args *uap)
 		error = kproc_create(acct_thread, NULL, NULL, 0, 0,
 		    "accounting");
 		if (error) {
-			(void) vn_close(acct_vp, acct_flags, acct_cred, td);
-			crfree(acct_cred);
-			acct_configured = 0;
-			acct_vp = NULL;
-			acct_cred = NULL;
-			acct_flags = 0;
+			(void) acct_disable(td, 0);
 			sx_xunlock(&acct_sx);
 			log(LOG_NOTICE, "Unable to start accounting thread\n");
 			return (error);
@@ -314,6 +327,7 @@ acct_disable(struct thread *td, int logging)
 	sx_assert(&acct_sx, SX_XLOCKED);
 	error = vn_close(acct_vp, acct_flags, acct_cred, td);
 	crfree(acct_cred);
+	lim_free(acct_limit);
 	acct_configured = 0;
 	acct_vp = NULL;
 	acct_cred = NULL;
@@ -332,9 +346,9 @@ acct_disable(struct thread *td, int logging)
 int
 acct_process(struct thread *td)
 {
-	struct acctv2 acct;
+	struct acctv3 acct;
 	struct timeval ut, st, tmp;
-	struct plimit *newlim, *oldlim;
+	struct plimit *oldlim;
 	struct proc *p;
 	struct rusage ru;
 	int t, ret;
@@ -383,7 +397,7 @@ acct_process(struct thread *td)
 	acct.ac_stime = encode_timeval(st);
 
 	/* (4) The elapsed time the command ran (and its starting time) */
-	tmp = boottime;
+	getboottime(&tmp);
 	timevaladd(&tmp, &p->p_stats->p_start);
 	acct.ac_btime = tmp.tv_sec;
 	microuptime(&tmp);
@@ -410,23 +424,18 @@ acct_process(struct thread *td)
 
 	/* (8) The boolean flags that tell how the process terminated, etc. */
 	acct.ac_flagx = p->p_acflag;
-	PROC_UNLOCK(p);
 
 	/* Setup ancillary structure fields. */
 	acct.ac_flagx |= ANVER;
 	acct.ac_zero = 0;
-	acct.ac_version = 2;
+	acct.ac_version = 3;
 	acct.ac_len = acct.ac_len2 = sizeof(acct);
 
 	/*
-	 * Eliminate any file size rlimit.
+	 * Eliminate rlimits (file size limit in particular).
 	 */
-	newlim = lim_alloc();
-	PROC_LOCK(p);
 	oldlim = p->p_limit;
-	lim_copy(newlim, oldlim);
-	newlim->pl_rlimit[RLIMIT_FSIZE].rlim_cur = RLIM_INFINITY;
-	p->p_limit = newlim;
+	p->p_limit = lim_hold(acct_limit);
 	PROC_UNLOCK(p);
 	lim_free(oldlim);
 
@@ -551,7 +560,7 @@ encode_long(long val)
 static void
 acctwatch(void)
 {
-	struct statfs sb;
+	struct statfs *sp;
 
 	sx_assert(&acct_sx, SX_XLOCKED);
 
@@ -579,21 +588,25 @@ acctwatch(void)
 	 * Stopping here is better than continuing, maybe it will be VBAD
 	 * next time around.
 	 */
-	if (VFS_STATFS(acct_vp->v_mount, &sb) < 0)
+	sp = malloc(sizeof(struct statfs), M_STATFS, M_WAITOK);
+	if (VFS_STATFS(acct_vp->v_mount, sp) < 0) {
+		free(sp, M_STATFS);
 		return;
+	}
 	if (acct_suspended) {
-		if (sb.f_bavail > (int64_t)(acctresume * sb.f_blocks /
+		if (sp->f_bavail > (int64_t)(acctresume * sp->f_blocks /
 		    100)) {
 			acct_suspended = 0;
 			log(LOG_NOTICE, "Accounting resumed\n");
 		}
 	} else {
-		if (sb.f_bavail <= (int64_t)(acctsuspend * sb.f_blocks /
+		if (sp->f_bavail <= (int64_t)(acctsuspend * sp->f_blocks /
 		    100)) {
 			acct_suspended = 1;
 			log(LOG_NOTICE, "Accounting suspended\n");
 		}
 	}
+	free(sp, M_STATFS);
 }
 
 /*

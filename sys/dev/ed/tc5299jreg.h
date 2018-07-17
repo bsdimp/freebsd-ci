@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005, M. Warner Losh.
  * All rights reserved.
  *
@@ -34,5 +36,5 @@
 
 #define ED_TC5299J_MII_CLK	0x01
 #define ED_TC5299J_MII_DATAOUT	0x02
-#define ED_TC5299J_MII_DIROUT	0x04
+#define ED_TC5299J_MII_DIRIN	0x04
 #define ED_TC5299J_MII_DATAIN	0x08

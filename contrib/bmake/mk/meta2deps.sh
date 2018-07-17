@@ -49,10 +49,10 @@
 #	The output, is a set of absolute paths with "SB" like:
 #.nf
 #
-#	$SB/obj-i386/junos/gnu/lib/csu
-#	$SB/obj-i386/junos/gnu/lib/libgcc
+#	$SB/obj-i386/bsd/gnu/lib/csu
+#	$SB/obj-i386/bsd/gnu/lib/libgcc
 #	$SB/obj-i386/bsd/include
-#	$SB/obj-i386/bsd/lib/csu/i386-elf
+#	$SB/obj-i386/bsd/lib/csu/i386
 #	$SB/obj-i386/bsd/lib/libc
 #	$SB/src/bsd/include
 #	$SB/src/bsd/sys/i386/include
@@ -77,9 +77,9 @@
 
 
 # RCSid:
-#	$Id: meta2deps.sh,v 1.5 2013/02/10 19:21:46 sjg Exp $
+#	$Id: meta2deps.sh,v 1.12 2016/12/13 20:44:16 sjg Exp $
 
-# Copyright (c) 2010-2012, Juniper Networks, Inc.
+# Copyright (c) 2010-2013, Juniper Networks, Inc.
 # All rights reserved.
 # 
 # Redistribution and use in source and binary forms, with or without
@@ -115,16 +115,95 @@ meta2dirs() {
     sort -u
 }
 
+add_list() {
+    sep=' '
+    suffix=
+    while :
+    do
+	case "$1" in
+	"|") sep="$1"; shift;;
+	-s) suffix="$2"; shift 2;;
+	*) break;;
+	esac
+    done
+    name=$1
+    shift
+    eval list="\$$name"
+    for top in "$@"
+    do
+	case "$sep$list$sep" in
+	*"$sep$top$suffix$sep"*) continue;;
+	esac
+	list="${list:+$list$sep}$top$suffix"
+    done
+    eval "$name=\"$list\""
+}
+
+_excludes_f() {
+    egrep -v "$EXCLUDES"
+}
+
 meta2deps() {
     DPDEPS=
+    SRCTOPS=$SRCTOP
+    OBJROOTS=
+    EXCLUDES=
     while :
     do
 	case "$1" in
 	*=*) eval export "$1"; shift;;
+	-a) MACHINE_ARCH=$2; shift 2;;
+	-m) MACHINE=$2; shift 2;;
+	-C) CURDIR=$2; shift 2;;
+	-H) HOST_TARGET=$2; shift 2;;
+	-S) add_list SRCTOPS $2; shift 2;;
+	-O) add_list OBJROOTS $2; shift 2;;
+	-X) add_list EXCLUDES '|' $2; shift 2;;
+	-R) RELDIR=$2; shift 2;;
+	-T) TARGET_SPEC=$2; shift 2;;
 	*) break;;
 	esac
     done
 
+    _th= _o=
+    case "$MACHINE" in
+    host) _ht=$HOST_TARGET;;
+    esac
+    
+    for o in $OBJROOTS
+    do
+	case "$MACHINE,/$o/" in
+	host,*$HOST_TARGET*) ;;
+	*$MACHINE*|*${TARGET_SPEC:-$MACHINE}*) ;;
+	*) add_list _o $o; continue;;
+	esac
+	for x in $_ht $TARGET_SPEC $MACHINE
+	do
+	    case "$o" in
+	    "") continue;;
+	    */$x/) add_list _o ${o%$x/}; o=;;
+	    */$x) add_list _o ${o%$x}; o=;;
+	    *$x/) add_list _o ${o%$x/}; o=;;
+	    *$x) add_list _o ${o%$x}; o=;;
+	    esac
+	done
+    done
+    OBJROOTS="$_o"
+
+    case "$OBJTOP" in
+    "")
+	for o in $OBJROOTS
+	do
+	    OBJTOP=$o${TARGET_SPEC:-$MACHINE}
+	    break
+	done
+	;;
+    esac
+    src_re=
+    obj_re=
+    add_list '|' -s '/*' src_re $SRCTOPS
+    add_list '|' -s '*' obj_re $OBJROOTS
+    
     [ -z "$RELDIR" ] && unset DPDEPS
     tf=/tmp/m2d$$-$USER
     rm -f $tf.*
@@ -139,8 +218,26 @@ meta2deps() {
     seenit=
     seensrc=
     lpid=
-    cat /dev/null "$@" |
-    sed -e 's,^CWD,C C,;/^[CREFL] /!d' -e "s,',,g" |
+    case "$EXCLUDES" in
+    "") _excludes=cat;;
+    *) _excludes=_excludes_f;;
+    esac
+    # handle @list files
+    case "$@" in
+    *@[!.]*)
+	for f in "$@"
+	do
+	    case "$f" in
+	    *.meta) cat $f;;
+	    @*) xargs cat < ${f#@};;
+	    *) cat $f;;
+	    esac
+	done
+	;;
+    *) cat /dev/null "$@";;
+    esac 2> /dev/null |
+    sed -e 's,^CWD,C C,;/^[CREFLM] /!d' -e "s,',,g" |
+    $_excludes |
     while read op pid path junk
     do
 	: op=$op pid=$pid path=$path
@@ -158,7 +255,7 @@ meta2deps() {
 	*)
 	    case "$lpid" in
 	    "") ;;
-	    *) eval ldir_$lpid=$ldir cwd_$lpid=$cwd;;
+	    *) eval ldir_$lpid=$ldir;;
 	    esac
 	    eval ldir=\${ldir_$pid:-$CWD} cwd=\${cwd_$pid:-$CWD}
 	    lpid=$pid
@@ -166,8 +263,7 @@ meta2deps() {
 	esac
 
 	case "$op,$path" in
-	*.dirdep)  continue;;
-	W,*srcrel) continue;;
+	W,*srcrel|*.dirdep) continue;;
 	C,*)
 	    case "$path" in
 	    /*) cwd=$path;;
@@ -175,15 +271,16 @@ meta2deps() {
 	    esac
 	    # watch out for temp dirs that no longer exist
 	    test -d ${cwd:-/dev/null/no/such} || cwd=$CWD
+	    eval cwd_$pid=$cwd
 	    continue
 	    ;;
-	F,*)  eval cwd_$path=$cwd ldir_$path=$ldir
+	F,*) # $path is new pid  
+	    eval cwd_$path=$cwd ldir_$path=$ldir
 	    continue
 	    ;;	  
 	*)  dir=${path%/*}
 	    case "$path" in
-	    $SB/*|${SB_BACKING_SB:-$SB}/*) ;;
-	    $SB_OBJROOT*) ;;
+	    $src_re|$obj_re) ;;
 	    /*/stage/*) ;;
 	    /*) continue;;
 	    *)	for path in $ldir/$path $cwd/$path
@@ -214,8 +311,8 @@ meta2deps() {
 	*)  seen=$dir;;
 	esac
 	case "$dir" in
-	${CURDIR:-.}|${CURDIR:-.}/*|"") continue;;
-	$SRCTOP/*|${SB_BACKING_SB:-$SB}/src/*)
+	${CURDIR:-.}|"") continue;;
+	$src_re)
 	    # avoid repeating ourselves...
 	    case "$DPDEPS,$seensrc," in
 	    ,*)
@@ -241,7 +338,7 @@ meta2deps() {
 	[ -f $path ] || continue
 	case "$dir" in
 	$CWD) continue;;		# ignore
-	$SRCTOP/*|${SB_BACKING_SB:-$SB}/src/*)
+	$src_re)
 	    seenit="$seenit,$seen"
 	    echo $dir >> $tf.srcdep
 	    case "$DPDEPS,$reldir,$seensrc," in
@@ -267,7 +364,7 @@ meta2deps() {
 	fi
 	seenit="$seenit,$seen"
 	case "$dir" in
-	$SB/*|${SB_OBJROOT:-$SB/}*|${SB_BACKING_SB:-$SB}/*)
+	$obj_re)
 	    echo $dir;;
 	esac
     done > $tf.dirdep
@@ -277,13 +374,13 @@ meta2deps() {
 	[ -s $f ] || continue
 	case $f in
 	*qual) # a list of .dirdep files
-	    # we can prefix everthing with $OBJTOP to
+	    # we can prefix everything with $OBJTOP to
 	    # tell gendirdeps.mk that these are
 	    # DIRDEP entries, since they are already
 	    # qualified with .<machine> as needed.
 	    # We strip .$MACHINE though
 	    xargs cat < $f | sort -u |
-	    sed "s,^# ,,;s,^,$OBJTOP/,;s,\.$MACHINE\$,,"
+	    sed "s,^# ,,;s,^,$OBJTOP/,;s,\.${TARGET_SPEC:-$MACHINE}\$,,;s,\.$MACHINE\$,,"
 	    ;;
 	*)  sort -u $f;;
 	esac

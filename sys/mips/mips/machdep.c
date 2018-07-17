@@ -1,6 +1,8 @@
     /*	$OpenBSD: machdep.c,v 1.33 1998/09/15 10:58:54 pefo Exp $	*/
 /* tracked to 1.38 */
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -18,7 +20,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -167,9 +169,6 @@ extern char MipsCache[], MipsCacheEnd[];
 extern char MipsWaitStart[], MipsWaitEnd[];
 
 extern char edata[], end[];
-#ifdef DDB
-extern vm_offset_t ksym_start, ksym_end;
-#endif
 
 u_int32_t bootdev;
 struct bootinfo bootinfo;
@@ -211,8 +210,8 @@ cpu_startup(void *dummy)
 	vm_ksubmap_init(&kmi);
 
 	printf("avail memory = %ju (%juMB)\n", 
-	    ptoa((uintmax_t)cnt.v_free_count),
-	    ptoa((uintmax_t)cnt.v_free_count) / 1048576);
+	    ptoa((uintmax_t)vm_free_count()),
+	    ptoa((uintmax_t)vm_free_count()) / 1048576);
 	cpu_init_interrupts();
 
 	/*
@@ -319,8 +318,6 @@ cpu_initclocks(void)
 	cpu_initclocks_bsp();
 }
 
-struct msgbuf *msgbufp=0;
-
 /*
  * Initialize the hardware exception vectors, and the jump table used to
  * call locore cache and TLB management functions, based on the kind
@@ -351,7 +348,7 @@ mips_vector_init(void)
 	 * XXXRW: Why don't we install the XTLB handler for all 64-bit
 	 * architectures?
 	 */
-#if defined(__mips_n64) || defined(CPU_RMI) || defined(CPU_NLM) || defined (CPU_BERI)
+#if defined(__mips_n64) || defined(CPU_RMI) || defined(CPU_NLM) || defined(CPU_BERI)
 /* Fake, but sufficient, for the 32-bit with 64-bit hardware addresses  */
 	bcopy(MipsTLBMiss, (void *)MIPS_XTLB_MISS_EXC_VEC,
 	      MipsTLBMissEnd - MipsTLBMiss);
@@ -386,7 +383,11 @@ mips_vector_init(void)
 void
 mips_postboot_fixup(void)
 {
-	static char fake_preload[256];
+	/*
+	 * We store u_long sized objects into the reload area, so the array
+	 * must be so aligned. The standard allows any alignment for char data.
+	 */
+	_Alignas(_Alignof(u_long)) static char fake_preload[256];
 	caddr_t preload_ptr = (caddr_t)&fake_preload[0];
 	size_t size = 0;
 
@@ -434,6 +435,8 @@ mips_postboot_fixup(void)
 #ifdef DDB
 	Elf_Size *trampoline_data = (Elf_Size*)kernel_kseg0_end;
 	Elf_Size symtabsize = 0;
+	vm_offset_t ksym_start;
+	vm_offset_t ksym_end;
 
 	if (trampoline_data[0] == SYMTAB_MAGIC) {
 		symtabsize = trampoline_data[1];
@@ -443,6 +446,7 @@ mips_postboot_fixup(void)
 		kernel_kseg0_end += symtabsize;
 		/* end of .strtab */
 		ksym_end = kernel_kseg0_end;
+		db_fetch_ksymtab(ksym_start, ksym_end);
 	}
 #endif
 }
@@ -475,6 +479,7 @@ cpu_pcpu_init(struct pcpu *pcpu, int cpuid, size_t size)
 
 	pcpu->pc_next_asid = 1;
 	pcpu->pc_asid_generation = 1;
+	pcpu->pc_self = pcpu;
 #ifdef SMP
 	if ((vm_offset_t)pcpup >= VM_MIN_KERNEL_ADDRESS &&
 	    (vm_offset_t)pcpup <= VM_MAX_KERNEL_ADDRESS) {

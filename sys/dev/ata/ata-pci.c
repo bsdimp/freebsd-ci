@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 - 2008 Søren Schmidt <sos@FreeBSD.org>
  * All rights reserved.
  *
@@ -98,11 +100,8 @@ ata_pci_attach(device_t dev)
     ctlr->dev = dev;
 
     /* if needed try to enable busmastering */
+    pci_enable_busmaster(dev);
     cmd = pci_read_config(dev, PCIR_COMMAND, 2);
-    if (!(cmd & PCIM_CMD_BUSMASTEREN)) {
-	pci_write_config(dev, PCIR_COMMAND, cmd | PCIM_CMD_BUSMASTEREN, 2);
-	cmd = pci_read_config(dev, PCIR_COMMAND, 2);
-    }
 
     /* if busmastering mode "stuck" use it */
     if ((cmd & PCIM_CMD_BUSMASTEREN) == PCIM_CMD_BUSMASTEREN) {
@@ -220,7 +219,8 @@ ata_pci_write_config(device_t dev, device_t child, int reg,
 
 struct resource *
 ata_pci_alloc_resource(device_t dev, device_t child, int type, int *rid,
-		       u_long start, u_long end, u_long count, u_int flags)
+		       rman_res_t start, rman_res_t end, rman_res_t count,
+		       u_int flags)
 {
 	struct ata_pci_controller *controller = device_get_softc(dev);
 	struct resource *res = NULL;
@@ -571,6 +571,13 @@ ata_pci_child_location_str(device_t dev, device_t child, char *buf,
 	return (0);
 }
 
+static bus_dma_tag_t
+ata_pci_get_dma_tag(device_t bus, device_t child)
+{
+
+	return (bus_get_dma_tag(bus));
+}
+
 static device_method_t ata_pci_methods[] = {
     /* device interface */
     DEVMETHOD(device_probe,             ata_pci_probe),
@@ -593,6 +600,7 @@ static device_method_t ata_pci_methods[] = {
     DEVMETHOD(pci_write_config,		ata_pci_write_config),
     DEVMETHOD(bus_print_child,		ata_pci_print_child),
     DEVMETHOD(bus_child_location_str,	ata_pci_child_location_str),
+    DEVMETHOD(bus_get_dma_tag,		ata_pci_get_dma_tag),
 
     DEVMETHOD_END
 };

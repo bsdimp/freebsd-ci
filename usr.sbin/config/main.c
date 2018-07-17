@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -84,12 +86,14 @@ int	incignore;
  * literally).
  */
 int	filebased = 0;
+int	versreq;
 
 static void configfile(void);
 static void get_srcdir(void);
 static void usage(void);
 static void cleanheaders(char *);
 static void kernconfdump(const char *);
+static void badversion(void);
 static void checkversion(void);
 extern int yyparse(void);
 
@@ -110,14 +114,24 @@ main(int argc, char **argv)
 	int ch, len;
 	char *p;
 	char *kernfile;
+	struct includepath* ipath;
 	int printmachine;
 
 	printmachine = 0;
 	kernfile = NULL;
-	while ((ch = getopt(argc, argv, "Cd:gmpVx:")) != -1)
+	SLIST_INIT(&includepath);
+	while ((ch = getopt(argc, argv, "CI:d:gmps:Vx:")) != -1)
 		switch (ch) {
 		case 'C':
 			filebased = 1;
+			break;
+		case 'I':
+			ipath = (struct includepath *) \
+			    	calloc(1, sizeof (struct includepath));
+			if (ipath == NULL)
+				err(EXIT_FAILURE, "calloc");
+			ipath->path = optarg;
+			SLIST_INSERT_HEAD(&includepath, ipath, path_next);
 			break;
 		case 'm':
 			printmachine = 1;
@@ -133,6 +147,12 @@ main(int argc, char **argv)
 			break;
 		case 'p':
 			profiling++;
+			break;
+		case 's':
+			if (*srcdir == '\0')
+				strlcpy(srcdir, optarg, sizeof(srcdir));
+			else
+				errx(EXIT_FAILURE, "src directory already set");
 			break;
 		case 'V':
 			printf("%d\n", CONFIGVERS);
@@ -170,7 +190,8 @@ main(int argc, char **argv)
 		len = strlen(destdir);
 		while (len > 1 && destdir[len - 1] == '/')
 			destdir[--len] = '\0';
-		get_srcdir();
+		if (*srcdir == '\0')
+			get_srcdir();
 	} else {
 		strlcpy(destdir, CDIR, sizeof(destdir));
 		strlcat(destdir, PREFIX, sizeof(destdir));
@@ -185,6 +206,7 @@ main(int argc, char **argv)
 	STAILQ_INIT(&fntab);
 	STAILQ_INIT(&ftab);
 	STAILQ_INIT(&hints);
+	STAILQ_INIT(&envvars);
 	if (yyparse())
 		exit(3);
 
@@ -265,7 +287,8 @@ static void
 usage(void)
 {
 
-	fprintf(stderr, "usage: config [-CgmpV] [-d destdir] sysname\n");
+	fprintf(stderr,
+	    "usage: config [-CgmpV] [-d destdir] [-s srcdir] sysname\n");
 	fprintf(stderr, "       config -x kernel\n");
 	exit(EX_USAGE);
 }
@@ -304,6 +327,11 @@ begin:
 	}
 	cp = line;
 	*cp++ = ch;
+	/* Negation operator is a word by itself. */
+	if (ch == '!') {
+		*cp = 0;
+		return (line);
+	}
 	while ((ch = getc(fp)) != EOF) {
 		if (isspace(ch))
 			break;
@@ -663,7 +691,7 @@ kernconfdump(const char *file)
 {
 	struct stat st;
 	FILE *fp, *pp;
-	int error, len, osz, r;
+	int error, osz, r;
 	unsigned int i, off, size, t1, t2, align;
 	char *cmd, *o;
 
@@ -691,7 +719,7 @@ kernconfdump(const char *file)
 	if (pp == NULL)
 		errx(EXIT_FAILURE, "popen() failed");
 	free(cmd);
-	len = fread(o, osz, 1, pp);
+	(void)fread(o, osz, 1, pp);
 	pclose(pp);
 	r = sscanf(o, "%d%d%d%d%d", &off, &size, &t1, &t2, &align);
 	free(o);
@@ -706,24 +734,18 @@ kernconfdump(const char *file)
 		r = fgetc(fp);
 		if (r == EOF)
 			break;
-		/* 
-		 * If '\0' is present in the middle of the configuration
-		 * string, this means something very weird is happening.
-		 * Make such case very visible.  However, some architectures
-		 * pad the length of the section with NULs to a multiple of
-		 * sh_addralign, allow a NUL in that part of the section.
-		 */
-		if (r == '\0' && (size - i) < align)
+		if (r == '\0') {
+			assert(i == size - 1 &&
+			    ("\\0 found in the middle of a file"));
 			break;
-		assert(r != '\0' && ("Char present in the configuration "
-		    "string mustn't be equal to 0"));
+		}
 		fputc(r, stdout);
 	}
 	fclose(fp);
 }
 
-static void 
-badversion(int versreq)
+static void
+badversion(void)
 {
 	fprintf(stderr, "ERROR: version of config(8) does not match kernel!\n");
 	fprintf(stderr, "config version = %d, ", CONFIGVERS);
@@ -743,7 +765,6 @@ checkversion(void)
 {
 	FILE *ifp;
 	char line[BUFSIZ];
-	int versreq;
 
 	ifp = open_makefile_template();
 	while (fgets(line, BUFSIZ, ifp) != 0) {
@@ -755,7 +776,7 @@ checkversion(void)
 		if (MAJOR_VERS(versreq) == MAJOR_VERS(CONFIGVERS) &&
 		    versreq <= CONFIGVERS)
 			continue;
-		badversion(versreq);
+		badversion();
 	}
 	fclose(ifp);
 }

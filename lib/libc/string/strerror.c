@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -41,6 +43,8 @@ __FBSDID("$FreeBSD$");
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
+
+#include "errlst.h"
 
 #define	UPREFIX		"Unknown error"
 
@@ -87,7 +91,7 @@ strerror_r(int errnum, char *strerrbuf, size_t buflen)
 	catd = catopen("libc", NL_CAT_LOCALE);
 #endif
 
-	if (errnum < 0 || errnum >= sys_nerr) {
+	if (errnum < 0 || errnum >= __hidden_sys_nerr) {
 		errstr(errnum,
 #if defined(NLS)
 			catgets(catd, 1, 0xffff, UPREFIX),
@@ -99,9 +103,9 @@ strerror_r(int errnum, char *strerrbuf, size_t buflen)
 	} else {
 		if (strlcpy(strerrbuf,
 #if defined(NLS)
-			catgets(catd, 1, errnum, sys_errlist[errnum]),
+			catgets(catd, 1, errnum, __hidden_sys_errlist[errnum]),
 #else
-			sys_errlist[errnum],
+			__hidden_sys_errlist[errnum],
 #endif
 			buflen) >= buflen)
 		retval = ERANGE;

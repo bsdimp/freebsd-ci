@@ -32,15 +32,12 @@ int broadcast;
 char cln[MAX_MACHINE_NAME+1];
 char dmn[MAX_MACHINE_NAME+1];
 char path[MAX_PATH_LEN+1];
-extern char *inet_ntoa();
 static void usage(void);
 int printgetfile(bp_getfile_res *);
 int printwhoami(bp_whoami_res *);
 
-bool_t
-eachres_whoami(resultp, raddr)
-bp_whoami_res *resultp;
-struct sockaddr_in *raddr;
+static bool_t
+eachres_whoami(bp_whoami_res *resultp, struct sockaddr_in *raddr)
 {
   struct hostent *he;
 
@@ -51,10 +48,8 @@ struct sockaddr_in *raddr;
   return(0);
 }
 
-bool_t
-eachres_getfile(resultp, raddr)
-bp_getfile_res *resultp;
-struct sockaddr_in *raddr;
+static bool_t
+eachres_getfile(bp_getfile_res *resultp, struct sockaddr_in *raddr)
 {
   struct hostent *he;
 
@@ -67,9 +62,7 @@ struct sockaddr_in *raddr;
 
 
 int
-main(argc, argv)
-int argc;
-char **argv;
+main(int argc, char **argv)
 {
   char *server;
 
@@ -104,7 +97,7 @@ char **argv;
   case 3:
     whoami_arg.client_address.address_type = IP_ADDR_TYPE;
     the_inet_addr = inet_addr(argv[2]);
-    if ( the_inet_addr == -1)
+    if ( the_inet_addr == INADDR_NONE)
       errx(2, "bogus addr %s", argv[2]);
     bcopy(&the_inet_addr,&whoami_arg.client_address.bp_address_u.ip_addr,4);
 

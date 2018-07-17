@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2005 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
  *
@@ -83,6 +85,7 @@ struct g_concat_softc {
 
 	struct g_concat_disk *sc_disks;
 	uint16_t	 sc_ndisks;
+	struct mtx	 sc_lock;
 };
 #define	sc_name	sc_geom->name
 #endif	/* _KERNEL */

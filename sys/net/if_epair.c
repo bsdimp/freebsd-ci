@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 The FreeBSD Foundation
  * Copyright (c) 2009-2010 Bjoern A. Zeeb <bz@FreeBSD.org>
  * All rights reserved.
@@ -51,9 +53,14 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/hash.h>
+#include <sys/jail.h>
 #include <sys/kernel.h>
+#include <sys/libkern.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/module.h>
+#include <sys/proc.h>
 #include <sys/refcount.h>
 #include <sys/queue.h>
 #include <sys/smp.h>
@@ -65,6 +72,7 @@ __FBSDID("$FreeBSD$");
 #include <net/bpf.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_clone.h>
 #include <net/if_media.h>
 #include <net/if_var.h>
@@ -100,7 +108,7 @@ static int epair_clone_destroy(struct if_clone *, struct ifnet *);
 
 static const char epairname[] = "epair";
 
-/* Netisr realted definitions and sysctl. */
+/* Netisr related definitions and sysctl. */
 static struct netisr_handler epair_nh = {
 	.nh_name	= epairname,
 	.nh_proto	= NETISR_EPAIR,
@@ -171,7 +179,8 @@ STAILQ_HEAD(eid_list, epair_ifp_drain);
 static MALLOC_DEFINE(M_EPAIR, epairname,
     "Pair of virtual cross-over connected Ethernet-like interfaces");
 
-static struct if_clone *epair_cloner;
+static VNET_DEFINE(struct if_clone *, epair_cloner);
+#define	V_epair_cloner	VNET(epair_cloner)
 
 /*
  * DPCPU area and functions.
@@ -246,7 +255,7 @@ static void
 epair_nh_sintr(struct mbuf *m)
 {
 	struct ifnet *ifp;
-	struct epair_softc *sc;
+	struct epair_softc *sc __unused;
 
 	ifp = m->m_pkthdr.rcvif;
 	(*ifp->if_input)(ifp, m);
@@ -291,7 +300,7 @@ epair_nh_drainedcpu(u_int cpuid)
 
 		IFQ_LOCK(&ifp->if_snd);
 		if (IFQ_IS_EMPTY(&ifp->if_snd)) {
-			struct epair_softc *sc;
+			struct epair_softc *sc __unused;
 
 			STAILQ_REMOVE(&epair_dpcpu->epair_ifp_drain_list,
 			    elm, epair_ifp_drain, ifp_next);
@@ -332,7 +341,7 @@ epair_remove_ifp_from_draining(struct ifnet *ifp)
 		STAILQ_FOREACH_SAFE(elm, &epair_dpcpu->epair_ifp_drain_list,
 		    ifp_next, tvar) {
 			if (ifp == elm->ifp) {
-				struct epair_softc *sc;
+				struct epair_softc *sc __unused;
 
 				STAILQ_REMOVE(
 				    &epair_dpcpu->epair_ifp_drain_list, elm,
@@ -399,8 +408,8 @@ epair_start_locked(struct ifnet *ifp)
 		return;
 
 	/*
-	 * We get patckets here from ether_output via if_handoff()
-	 * and ned to put them into the input queue of the oifp
+	 * We get packets here from ether_output via if_handoff()
+	 * and need to put them into the input queue of the oifp
 	 * and call oifp->if_input() via netisr/epair_sintr().
 	 */
 	oifp = sc->oifp;
@@ -417,7 +426,7 @@ epair_start_locked(struct ifnet *ifp)
 		 */
 		if ((oifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
 		    (oifp->if_flags & IFF_UP) ==0) {
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			m_freem(m);
 			continue;
 		}
@@ -433,15 +442,15 @@ epair_start_locked(struct ifnet *ifp)
 		error = netisr_queue(NETISR_EPAIR, m);
 		CURVNET_RESTORE();
 		if (!error) {
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 			/* Someone else received the packet. */
-			oifp->if_ipackets++;
+			if_inc_counter(oifp, IFCOUNTER_IPACKETS, 1);
 		} else {
 			/* The packet was freed already. */
 			epair_dpcpu->epair_drv_flags |= IFF_DRV_OACTIVE;
 			ifp->if_drv_flags |= IFF_DRV_OACTIVE;
 			(void) epair_add_ifp_for_draining(ifp);
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			EPAIR_REFCOUNT_RELEASE(&sc->refcount);
 			EPAIR_REFCOUNT_ASSERT((int)sc->refcount >= 1,
 			    ("%s: ifp=%p sc->refcount not >= 1: %d",
@@ -502,7 +511,7 @@ epair_transmit_locked(struct ifnet *ifp, struct mbuf *m)
 	oifp = sc->oifp;
 	if ((oifp->if_drv_flags & IFF_DRV_RUNNING) == 0 ||
 	    (oifp->if_flags & IFF_UP) ==0) {
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m);
 		return (0);
 	}
@@ -511,17 +520,17 @@ epair_transmit_locked(struct ifnet *ifp, struct mbuf *m)
 	DPRINTF("packet %s -> %s\n", ifp->if_xname, oifp->if_xname);
 
 #ifdef ALTQ
-	/* Support ALTQ via the clasic if_start() path. */
+	/* Support ALTQ via the classic if_start() path. */
 	IF_LOCK(&ifp->if_snd);
 	if (ALTQ_IS_ENABLED(&ifp->if_snd)) {
 		ALTQ_ENQUEUE(&ifp->if_snd, m, NULL, error);
 		if (error)
-			ifp->if_snd.ifq_drops++;
+			if_inc_counter(ifp, IFCOUNTER_OQDROPS, 1);
 		IF_UNLOCK(&ifp->if_snd);
 		if (!error) {
-			ifp->if_obytes += len;
+			if_inc_counter(ifp, IFCOUNTER_OBYTES, len);
 			if (mflags & (M_BCAST|M_MCAST))
-				ifp->if_omcasts++;
+				if_inc_counter(ifp, IFCOUNTER_OMCASTS, 1);
 			
 			if ((ifp->if_drv_flags & IFF_DRV_OACTIVE) == 0)
 				epair_start_locked(ifp);
@@ -555,22 +564,22 @@ epair_transmit_locked(struct ifnet *ifp, struct mbuf *m)
 	error = netisr_queue(NETISR_EPAIR, m);
 	CURVNET_RESTORE();
 	if (!error) {
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		/*
 		 * IFQ_HANDOFF_ADJ/ip_handoff() update statistics,
 		 * but as we bypass all this we have to duplicate
 		 * the logic another time.
 		 */
-		ifp->if_obytes += len;
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, len);
 		if (mflags & (M_BCAST|M_MCAST))
-			ifp->if_omcasts++;
+			if_inc_counter(ifp, IFCOUNTER_OMCASTS, 1);
 		/* Someone else received the packet. */
-		oifp->if_ipackets++;
+		if_inc_counter(oifp, IFCOUNTER_IPACKETS, 1);
 	} else {
 		/* The packet was freed already. */
 		epair_dpcpu->epair_drv_flags |= IFF_DRV_OACTIVE;
 		ifp->if_drv_flags |= IFF_DRV_OACTIVE;
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		EPAIR_REFCOUNT_RELEASE(&sc->refcount);
 		EPAIR_REFCOUNT_ASSERT((int)sc->refcount >= 1,
 		    ("%s: ifp=%p sc->refcount not >= 1: %d",
@@ -708,6 +717,9 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	struct ifnet *ifp;
 	char *dp;
 	int error, unit, wildcard;
+	uint64_t hostid;
+	uint32_t key[3];
+	uint32_t hash;
 	uint8_t eaddr[ETHER_ADDR_LEN];	/* 00:00:00:00:00:00 */
 
 	/*
@@ -719,14 +731,12 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	if (params) {
 		scb = (struct epair_softc *)params;
 		ifp = scb->ifp;
-		/* Assign a hopefully unique, locally administered etheraddr. */
-		eaddr[0] = 0x02;
-		eaddr[3] = (ifp->if_index >> 8) & 0xff;
-		eaddr[4] = ifp->if_index & 0xff;
+		/* Copy epairNa etheraddr and change the last byte. */
+		memcpy(eaddr, scb->oifp->if_hw_addr, ETHER_ADDR_LEN);
 		eaddr[5] = 0x0b;
 		ether_ifattach(ifp, eaddr);
 		/* Correctly set the name for the cloner list. */
-		strlcpy(name, scb->ifp->if_xname, len);
+		strlcpy(name, ifp->if_xname, len);
 		return (0);
 	}
 
@@ -759,9 +769,16 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 		ifc_free_unit(ifc, unit);
 		return (ENOSPC);
 	}
-	*dp = 'a';
+	*dp = 'b';
 	/* Must not change dp so we can replace 'a' by 'b' later. */
 	*(dp+1) = '\0';
+
+	/* Check if 'a' and 'b' interfaces already exist. */ 
+	if (ifunit(name) != NULL)
+		return (EEXIST);
+	*dp = 'a';
+	if (ifunit(name) != NULL)
+		return (EEXIST);
 
 	/* Allocate memory for both [ab] interfaces */
 	sca = malloc(sizeof(struct epair_softc), M_EPAIR, M_WAITOK | M_ZERO);
@@ -797,9 +814,17 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	 * cache locality but we can at least allow parallelism.
 	 */
 	sca->cpuid =
-	    netisr_get_cpuid(sca->ifp->if_index % netisr_get_cpucount());
+	    netisr_get_cpuid(sca->ifp->if_index);
 	scb->cpuid =
-	    netisr_get_cpuid(scb->ifp->if_index % netisr_get_cpucount());
+	    netisr_get_cpuid(scb->ifp->if_index);
+
+	/* Initialise pseudo media types. */
+	ifmedia_init(&sca->media, 0, epair_media_change, epair_media_status);
+	ifmedia_add(&sca->media, IFM_ETHER | IFM_10G_T, 0, NULL);
+	ifmedia_set(&sca->media, IFM_ETHER | IFM_10G_T);
+	ifmedia_init(&scb->media, 0, epair_media_change, epair_media_status);
+	ifmedia_add(&scb->media, IFM_ETHER | IFM_10G_T, 0, NULL);
+	ifmedia_set(&scb->media, IFM_ETHER | IFM_10G_T);
 	
 	/* Finish initialization of interface <n>a. */
 	ifp = sca->ifp;
@@ -813,17 +838,29 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	ifp->if_start = epair_start;
 	ifp->if_ioctl = epair_ioctl;
 	ifp->if_init  = epair_init;
-	ifp->if_snd.ifq_maxlen = ifqmaxlen;
-	/* Assign a hopefully unique, locally administered etheraddr. */
+	if_setsendqlen(ifp, ifqmaxlen);
+	if_setsendqready(ifp);
+
+	/*
+	 * Calculate the etheraddr hashing the hostid and the
+	 * interface index. The result would be hopefully unique
+	 */
+	getcredhostid(curthread->td_ucred, (unsigned long *)&hostid);
+	if (hostid == 0) 
+		arc4rand(&hostid, sizeof(hostid), 0);
+	key[0] = (uint32_t)ifp->if_index;
+	key[1] = (uint32_t)(hostid & 0xffffffff);
+	key[2] = (uint32_t)((hostid >> 32) & 0xfffffffff);
+	hash = jenkins_hash32(key, 3, 0);
+
 	eaddr[0] = 0x02;
-	eaddr[3] = (ifp->if_index >> 8) & 0xff;
-	eaddr[4] = ifp->if_index & 0xff;
+	memcpy(&eaddr[1], &hash, 4);
 	eaddr[5] = 0x0a;
 	ether_ifattach(ifp, eaddr);
 	sca->if_qflush = ifp->if_qflush;
 	ifp->if_qflush = epair_qflush;
 	ifp->if_transmit = epair_transmit;
-	if_initbaudrate(ifp, IF_Gbps(10));	/* arbitrary maximum */
+	ifp->if_baudrate = IF_Gbps(10);	/* arbitrary maximum */
 
 	/* Swap the name and finish initialization of interface <n>b. */
 	*dp = 'b';
@@ -839,7 +876,8 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	ifp->if_start = epair_start;
 	ifp->if_ioctl = epair_ioctl;
 	ifp->if_init  = epair_init;
-	ifp->if_snd.ifq_maxlen = ifqmaxlen;
+	if_setsendqlen(ifp, ifqmaxlen);
+	if_setsendqready(ifp);
 	/* We need to play some tricks here for the second interface. */
 	strlcpy(name, epairname, len);
 	error = if_clone_create(name, len, (caddr_t)scb);
@@ -849,7 +887,7 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	scb->if_qflush = ifp->if_qflush;
 	ifp->if_qflush = epair_qflush;
 	ifp->if_transmit = epair_transmit;
-	if_initbaudrate(ifp, IF_Gbps(10));	/* arbitrary maximum */
+	ifp->if_baudrate = IF_Gbps(10);	/* arbitrary maximum */
 
 	/*
 	 * Restore name to <n>a as the ifp for this will go into the
@@ -857,14 +895,6 @@ epair_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 	 */
 	strlcpy(name, sca->ifp->if_xname, len);
 	DPRINTF("name='%s/%db' created sca=%p scb=%p\n", name, unit, sca, scb);
-
-	/* Initialise pseudo media types. */
-	ifmedia_init(&sca->media, 0, epair_media_change, epair_media_status);
-	ifmedia_add(&sca->media, IFM_ETHER | IFM_10G_T, 0, NULL);
-	ifmedia_set(&sca->media, IFM_ETHER | IFM_10G_T);
-	ifmedia_init(&scb->media, 0, epair_media_change, epair_media_status);
-	ifmedia_add(&scb->media, IFM_ETHER | IFM_10G_T, 0, NULL);
-	ifmedia_set(&scb->media, IFM_ETHER | IFM_10G_T);
 
 	/* Tell the world, that we are ready to rock. */
 	sca->ifp->if_drv_flags |= IFF_DRV_RUNNING;
@@ -943,6 +973,42 @@ epair_clone_destroy(struct if_clone *ifc, struct ifnet *ifp)
 	return (0);
 }
 
+static void
+vnet_epair_init(const void *unused __unused)
+{
+
+	V_epair_cloner = if_clone_advanced(epairname, 0,
+	    epair_clone_match, epair_clone_create, epair_clone_destroy);
+#ifdef VIMAGE
+	netisr_register_vnet(&epair_nh);
+#endif
+}
+VNET_SYSINIT(vnet_epair_init, SI_SUB_PSEUDO, SI_ORDER_ANY,
+    vnet_epair_init, NULL);
+
+static void
+vnet_epair_uninit(const void *unused __unused)
+{
+
+#ifdef VIMAGE
+	netisr_unregister_vnet(&epair_nh);
+#endif
+	if_clone_detach(V_epair_cloner);
+}
+VNET_SYSUNINIT(vnet_epair_uninit, SI_SUB_INIT_IF, SI_ORDER_ANY,
+    vnet_epair_uninit, NULL);
+
+static void
+epair_uninit(const void *unused __unused)
+{
+	netisr_unregister(&epair_nh);
+	epair_dpcpu_detach();
+	if (bootverbose)
+		printf("%s unloaded.\n", epairname);
+}
+SYSUNINIT(epair_uninit, SI_SUB_INIT_IF, SI_ORDER_MIDDLE,
+    epair_uninit, NULL);
+
 static int
 epair_modevent(module_t mod, int type, void *data)
 {
@@ -956,17 +1022,11 @@ epair_modevent(module_t mod, int type, void *data)
 		if (TUNABLE_INT_FETCH("net.link.epair.netisr_maxqlen", &qlimit))
 		    epair_nh.nh_qlimit = qlimit;
 		netisr_register(&epair_nh);
-		epair_cloner = if_clone_advanced(epairname, 0,
-		    epair_clone_match, epair_clone_create, epair_clone_destroy);
 		if (bootverbose)
 			printf("%s initialized.\n", epairname);
 		break;
 	case MOD_UNLOAD:
-		if_clone_detach(epair_cloner);
-		netisr_unregister(&epair_nh);
-		epair_dpcpu_detach();
-		if (bootverbose)
-			printf("%s unloaded.\n", epairname);
+		/* Handled in epair_uninit() */
 		break;
 	default:
 		return (EOPNOTSUPP);
@@ -980,5 +1040,5 @@ static moduledata_t epair_mod = {
 	0
 };
 
-DECLARE_MODULE(if_epair, epair_mod, SI_SUB_PSEUDO, SI_ORDER_ANY);
+DECLARE_MODULE(if_epair, epair_mod, SI_SUB_PSEUDO, SI_ORDER_MIDDLE);
 MODULE_VERSION(if_epair, 1);

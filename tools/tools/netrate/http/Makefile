@@ -1,9 +1,7 @@
 # $FreeBSD$
 
 PROG=	http
-NO_MAN=
-WARNS?=	3
-DPADD=	${LIBPTHREAD}
-LDADD=	-lpthread
+MAN=
+LIBADD=	pthread
 
 .include <bsd.prog.mk>

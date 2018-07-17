@@ -1,255 +1,217 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/4/93
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-# To satisfy shared library or ELF linkage when only the libraries being
-# built are visible:
-#
-# csu must be built before all shared libaries for ELF.
-# libc must be built before all other shared libraries.
-# libbsm must be built before libauditd.
-# libcom_err must be built before libpam.
-# libcrypt must be built before libpam.
-# libkvm must be built before libdevstat.
-# msun must be built before libg++ and libstdc++.
-# libmd must be built before libatm, libopie, libradius, and libtacplus.
-# ncurses must be built before libdialog, libedit and libreadline.
-# libnetgraph must be built before libbsnmp/modules/snmp_netgraph.
-# libopie must be built before libpam.
-# libradius must be built before libpam.
-# librpcsvc must be built before libpam.
-# libsbuf must be built before libcam.
-# libtacplus must be built before libpam.
-# libutil must be built before libpam.
-# libypclnt must be built before libpam.
-# libgssapi must be built before librpcsec_gss
-#
-# Otherwise, the SUBDIR list should be in alphabetical order.
-#
-# Except it appears bind needs to be compiled last
+# The SUBDIR_BOOTSTRAP list is a small set of libraries which are used by many
+# of the other libraries.  These are built first with a .WAIT between them
+# and the main list to avoid needing a SUBDIR_DEPEND line on every library
+# naming just these few items.
 
-SUBDIR_ORDERED=	${_csu} \
+SUBDIR_BOOTSTRAP= \
+	csu \
+	.WAIT \
 	libc \
-	libbsm \
-	libauditd \
+	libc_nonshared \
 	libcompiler_rt \
-	libcrypt \
-	libelf \
-	${_libiconv_modules} \
-	libkvm \
-	msun \
-	libmd \
-	ncurses \
-	${_libnetgraph} \
-	libradius \
-	librpcsvc \
-	libsbuf \
-	libtacplus \
-	libutil \
-	${_libypclnt} \
+	${_libclang_rt} \
+	${_libcplusplus} \
 	${_libcxxrt} \
-	${_libcplusplus}
+	libelf \
+	msun
 
-.if ${MK_KERBEROS_SUPPORT} != "no"
-SUBDIR_ORDERED+=	libcom_err
-.endif
+# The main list; please keep these sorted alphabetically.
 
-SUBDIR=	${SUBDIR_ORDERED} \
+SUBDIR=	${SUBDIR_BOOTSTRAP} \
+	.WAIT \
+	geom \
 	libalias \
 	libarchive \
-	${_libatm} \
+	libauditd \
 	libbegemot \
 	libblocksruntime \
-	${_libbluetooth} \
-	${_libbsnmp} \
+	libbsdstat \
+	libbsm \
 	libbz2 \
 	libcalendar \
 	libcam \
+	libcapsicum \
+	libcasper \
 	libcompat \
+	libcrypt \
+	libdevctl \
 	libdevinfo \
 	libdevstat \
+	${_libdl} \
 	libdwarf \
 	libedit \
-	${_libefi} \
+	libelftc \
+	libevent \
+	libexecinfo \
 	libexpat \
 	libfetch \
+	libfigpar \
 	libgeom \
-	${_libgpib} \
-	${_libgssapi} \
-	${_librpcsec_gss} \
+	libifconfig \
 	libipsec \
-	${_libipx} \
 	libjail \
 	libkiconv \
-	${_libldns} \
+	libkvm \
 	liblzma \
-	libmagic \
-	libmandoc \
 	libmemstat \
-	${_libmilter} \
-	${_libmp} \
-	${_libnandfs} \
+	libmd \
+	libmt \
+	lib80211 \
 	libnetbsd \
-	${_libngatm} \
+	libnv \
+	libopenbsd \
 	libopie \
 	libpam \
+	libpathconv \
 	libpcap \
-	${_libpmc} \
+	libpjdlog \
 	${_libproc} \
 	libprocstat \
+	libregex \
+	librpcsvc \
+	librss \
 	librt \
 	${_librtld_db} \
-	${_libsdp} \
-	${_libsm} \
-	${_libsmdb} \
-	${_libsmutil} \
-	libstand \
+	libsbuf \
+	libsmb \
+	libsqlite3 \
 	libstdbuf \
 	libstdthreads \
-	${_libtelnet} \
-	${_libthr} \
+	libsysdecode \
+	libtacplus \
 	libthread_db \
+	libucl \
 	libufs \
 	libugidfw \
 	libulog \
-	${_libusbhid} \
-	${_libusb} \
+	libutil \
 	${_libvgl} \
-	${_libvmmapi} \
 	libwrap \
+	libxo \
 	liby \
-	libyaml \
 	libz \
-	${_atf} \
-	${_bind} \
-	${_clang}
+	libzstd \
+	ncurses
 
-.if exists(${.CURDIR}/csu/${MACHINE_ARCH}-elf)
-_csu=csu/${MACHINE_ARCH}-elf
-.elif exists(${.CURDIR}/csu/${MACHINE_ARCH})
-_csu=csu/${MACHINE_ARCH}
-.elif exists(${.CURDIR}/csu/${MACHINE_CPUARCH}/Makefile)
-_csu=csu/${MACHINE_CPUARCH}
-.else
-_csu=csu
+# Inter-library dependencies.  When the makefile for a library contains LDADD
+# libraries, those libraries should be listed as build order dependencies here.
+
+SUBDIR_DEPEND_geom=	libufs
+SUBDIR_DEPEND_libarchive= libz libbz2 libexpat liblzma libmd
+SUBDIR_DEPEND_libauditdm= libbsm
+SUBDIR_DEPEND_libbsnmp= ${_libnetgraph}
+SUBDIR_DEPEND_libc++:= libcxxrt
+SUBDIR_DEPEND_libc= libcompiler_rt
+SUBDIR_DEPEND_libcam= libsbuf
+SUBDIR_DEPEND_libcasper= libnv
+SUBDIR_DEPEND_libdevstat= libkvm
+SUBDIR_DEPEND_libdpv= libfigpar ncurses libutil
+SUBDIR_DEPEND_libedit= ncurses
+SUBDIR_DEPEND_libgeom= libexpat libsbuf
+SUBDIR_DEPEND_librpcsec_gss= libgssapi
+SUBDIR_DEPEND_libmagic= libz
+SUBDIR_DEPEND_libmemstat= libkvm
+SUBDIR_DEPEND_libopie= libmd
+SUBDIR_DEPEND_libpam= libcrypt libopie ${_libradius} librpcsvc libtacplus libutil ${_libypclnt} ${_libcom_err} 
+SUBDIR_DEPEND_libpjdlog= libutil
+SUBDIR_DEPEND_libprocstat= libkvm libutil
+SUBDIR_DEPEND_libradius= libmd
+SUBDIR_DEPEND_libsmb= libkiconv
+SUBDIR_DEPEND_libtacplus= libmd
+SUBDIR_DEPEND_libulog= libmd
+SUBDIR_DEPEND_libunbound= ${_libldns}
+SUBDIR_DEPEND_liblzma= ${_libthr}
+.if ${MK_OFED} != "no"
+SUBDIR_DEPEND_libpcap= ofed
 .endif
 
 # NB: keep these sorted by MK_* knobs
 
-.if ${MK_ATF} != "no"
-_atf=		atf
+SUBDIR.${MK_ATM}+=	libngatm
+SUBDIR.${MK_BLACKLIST}+=libblacklist
+SUBDIR.${MK_BLUETOOTH}+=libbluetooth libsdp
+SUBDIR.${MK_BSNMP}+=	libbsnmp
+
+.if !defined(COMPAT_32BIT) && !defined(COMPAT_SOFTFP)
+SUBDIR.${MK_CLANG}+=	clang
 .endif
 
-.if ${MK_ATM} != "no"
-_libngatm=	libngatm
-.endif
+SUBDIR.${MK_CUSE}+= 	libcuse
+SUBDIR.${MK_CXX}+=	libdevdctl
+SUBDIR.${MK_TOOLCHAIN}+=libpe
+SUBDIR.${MK_DIALOG}+=	libdpv
+SUBDIR.${MK_FILE}+=	libmagic
+SUBDIR.${MK_GPIO}+=	libgpio
+SUBDIR.${MK_GSSAPI}+=	libgssapi librpcsec_gss
+SUBDIR.${MK_ICONV}+=	libiconv_modules
+SUBDIR.${MK_KERBEROS_SUPPORT}+=	libcom_err
+SUBDIR.${MK_LDNS}+=	libldns
 
-.if ${MK_BIND} != "no"
-_bind=		bind
-.endif
-
-.if ${MK_BLUETOOTH} != "no"
-_libbluetooth=	libbluetooth
-_libsdp=	libsdp
-.endif
-
-.if ${MK_BSNMP} != "no"
-_libbsnmp=	libbsnmp
-.endif
-
-.if ${MK_CLANG} != "no" && !defined(COMPAT_32BIT)
-_clang=		clang
-.endif
-
-.if ${MK_GPIB} != "no"
-_libgpib=	libgpib
-.endif
-
-.if ${MK_GSSAPI} != "no"
-_libgssapi=	libgssapi
-_librpcsec_gss=	librpcsec_gss
-.endif
-
-.if ${MK_ICONV} != "no"
-_libiconv_modules=	libiconv_modules
-.endif
-
-.if ${MK_IPX} != "no"
-_libipx=	libipx
-.endif
-
-.if ${MK_LDNS} != "no"
-_libldns=	libldns
+# The libraries under libclang_rt can only be built by clang, and only make
+# sense to build when clang is enabled at all.  Furthermore, they can only be
+# built for certain architectures.
+.if ${MK_CLANG} != "no" && ${COMPILER_TYPE} == "clang" && \
+    (${MACHINE_CPUARCH} == "aarch64" || ${MACHINE_CPUARCH} == "amd64" || \
+    ${MACHINE_CPUARCH} == "arm" || ${MACHINE_CPUARCH} == "i386")
+_libclang_rt=	libclang_rt
 .endif
 
 .if ${MK_LIBCPLUSPLUS} != "no"
 _libcxxrt=	libcxxrt
 _libcplusplus=	libc++
+_libcplusplus+=	libc++experimental
 .endif
 
-.if ${MK_LIBTHR} != "no"
-_libthr=	libthr
-.endif
-
-.if ${MK_NAND} != "no"
-_libnandfs=	libnandfs
-.endif
-
-.if ${MK_NETGRAPH} != "no"
-_libnetgraph=	libnetgraph
-.endif
-
-.if ${MK_NIS} != "no"
-_libypclnt=	libypclnt
-.endif
+SUBDIR.${MK_EFI}+=	libefivar
+SUBDIR.${MK_LIBTHR}+=	libthr
+SUBDIR.${MK_LLVM_LIBUNWIND}+=	libgcc_eh
+SUBDIR.${MK_LLVM_LIBUNWIND}+=	libgcc_s
+SUBDIR.${MK_NAND}+=	libnandfs
+SUBDIR.${MK_NETGRAPH}+=	libnetgraph
+SUBDIR.${MK_NIS}+=	libypclnt
 
 .if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 _libvgl=	libvgl
-_libproc=	libproc
-_librtld_db=	librtld_db
+.endif
+
+.if ${MACHINE_CPUARCH} == "aarch64"
+SUBDIR.${MK_PMC}+=	libopencsd
 .endif
 
 .if ${MACHINE_CPUARCH} == "amd64"
-_libvmmapi=	libvmmapi
+SUBDIR.${MK_PMC}+=	libipt
+SUBDIR.${MK_BHYVE}+=	libvmmapi
 .endif
 
-.if ${MACHINE_CPUARCH} == "ia64"
-_libefi=	libefi
-.endif
-
-.if ${MACHINE_CPUARCH} == "mips"
+.if ${MACHINE_CPUARCH} != "sparc64"
 _libproc=	libproc
 _librtld_db=	librtld_db
 .endif
 
-.if ${MACHINE_CPUARCH} == "powerpc"
-_libproc=	libproc
-_librtld_db=	librtld_db
+.if defined(LINKER_FEATURES) && ${LINKER_FEATURES:Mfilter}
+_libdl=		libdl
 .endif
 
-.if ${MK_OPENSSL} != "no"
-_libmp=		libmp
+SUBDIR.${MK_OPENSSL}+=	libmp
+.if (${COMPILER_TYPE} == "clang" || (${COMPILER_TYPE} == "gcc" && ${COMPILER_VERSION} >= 60100 && ${MACHINE_CPUARCH} != "riscv"))
+SUBDIR.${MK_PMC}+=	libpmc libpmcstat
 .endif
+SUBDIR.${MK_RADIUS_SUPPORT}+=	libradius
+SUBDIR.${MK_SENDMAIL}+=	libmilter libsm libsmdb libsmutil
+SUBDIR.${MK_TELNET}+=	libtelnet
+SUBDIR.${MK_TESTS_SUPPORT}+=	atf
+SUBDIR.${MK_TESTS}+=	tests
+SUBDIR.${MK_UNBOUND}+=	libunbound
+SUBDIR.${MK_USB}+=	libusbhid libusb
+SUBDIR.${MK_OFED}+=	ofed
 
-.if ${MK_PMC} != "no"
-_libpmc=	libpmc
-.endif
-
-.if ${MK_SENDMAIL} != "no"
-_libmilter=	libmilter
-_libsm=		libsm
-_libsmdb=	libsmdb
-_libsmutil=	libsmutil
-.endif
-
-.if ${MK_TELNET} != "no"
-_libtelnet=	libtelnet
-.endif
-
-.if ${MK_USB} != "no"
-_libusbhid=	libusbhid
-_libusb=	libusb
+.if !make(install)
+SUBDIR_PARALLEL=
 .endif
 
 .include <bsd.subdir.mk>

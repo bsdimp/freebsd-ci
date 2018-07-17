@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Ed Schouten <ed@FreeBSD.org>
  * All rights reserved.
  *
@@ -94,14 +96,11 @@ ttydisc_close(struct tty *tp)
 	/* Clean up our flags when leaving the discipline. */
 	tp->t_flags &= ~(TF_STOPPED|TF_HIWAT|TF_ZOMBIE);
 
-	/* POSIX states we should flush when close() is called. */
-	ttyinq_flush(&tp->t_inq);
-	ttyoutq_flush(&tp->t_outq);
-
-	if (!tty_gone(tp)) {
-		ttydevsw_inwakeup(tp);
-		ttydevsw_outwakeup(tp);
-	}
+	/*
+	 * POSIX states that we must drain output and flush input on
+	 * last close.  Draining has already been done if possible.
+	 */
+	tty_flush(tp, FREAD | FWRITE);
 
 	if (ttyhook_hashook(tp, close))
 		ttyhook_close(tp);

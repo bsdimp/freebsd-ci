@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2008, 2009, 2010 Nikolay Denev <ndenev@gmail.com>
  * Copyright (c) 2007, 2008 Alexander Pohoyda <alexander.pohoyda@gmx.net>
  * Copyright (c) 1997, 1998, 1999
@@ -284,7 +286,7 @@ struct sge_desc {
 #define	SGE_RX_RING_CNT		256 /* [8, 1024] */
 #define	SGE_TX_RING_CNT		256 /* [8, 8192] */
 #define	SGE_DESC_ALIGN		16
-#define	SGE_MAXTXSEGS		32
+#define	SGE_MAXTXSEGS		35
 #define	SGE_TSO_MAXSIZE		(65535 + sizeof(struct ether_vlan_header))
 #define	SGE_TSO_MAXSEGSIZE	4096
 #define	SGE_RX_BUF_ALIGN	sizeof(uint64_t)

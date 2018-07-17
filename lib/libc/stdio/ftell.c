@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -49,8 +51,7 @@ __FBSDID("$FreeBSD$");
  * standard ftell function.
  */
 long
-ftell(fp)
-	FILE *fp;
+ftell(FILE *fp)
 {
 	off_t rv;
 
@@ -66,8 +67,7 @@ ftell(fp)
  * ftello: return current offset.
  */
 off_t
-ftello(fp)
-	FILE *fp;
+ftello(FILE *fp)
 {
 	fpos_t rv;
 	int ret;
@@ -85,9 +85,7 @@ ftello(fp)
 }
 
 int
-_ftello(fp, offset)
-	FILE *fp;
-	fpos_t *offset;
+_ftello(FILE *fp, fpos_t *offset)
 {
 	fpos_t pos;
 	size_t n;
@@ -101,7 +99,13 @@ _ftello(fp, offset)
 	 * Find offset of underlying I/O object, then
 	 * adjust for buffered bytes.
 	 */
-	if (fp->_flags & __SOFF)
+	if (!(fp->_flags & __SRD) && (fp->_flags & __SWR) &&
+	    fp->_p != NULL && fp->_p - fp->_bf._base > 0 &&
+	    ((fp->_flags & __SAPP) || (fp->_flags2 & __S2OAP))) {
+		pos = _sseek(fp, (fpos_t)0, SEEK_END);
+		if (pos == -1)
+			return (1);
+	} else if (fp->_flags & __SOFF)
 		pos = fp->_offset;
 	else {
 		pos = _sseek(fp, (fpos_t)0, SEEK_CUR);
@@ -121,13 +125,13 @@ _ftello(fp, offset)
 		}
 		if (HASUB(fp))
 			pos -= fp->_r;  /* Can be negative at this point. */
-	} else if ((fp->_flags & __SWR) && fp->_p != NULL) {
+	} else if ((fp->_flags & __SWR) && fp->_p != NULL &&
+	    (n = fp->_p - fp->_bf._base) > 0) {
 		/*
 		 * Writing.  Any buffered characters cause the
 		 * position to be greater than that in the
 		 * underlying object.
 		 */
-		n = fp->_p - fp->_bf._base;
 		if (pos > OFF_MAX - n) {
 			errno = EOVERFLOW;
 			return (1);

@@ -1,16 +1,17 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 SUBDIR= \
 	ctfconvert \
 	ctfdump \
 	ctfmerge \
-	sgsmsg \
 	${_zinject} \
 	${_zlook} \
 	${_zstreamdump} \
 	${_ztest}
+
+SUBDIR.${MK_TESTS}+= tests
 
 .if ${MK_ZFS} != "no"
 _zinject= zinject
@@ -20,5 +21,7 @@ _ztest=	ztest
 _zstreamdump = zstreamdump
 .endif
 .endif
+
+SUBDIR_PARALLEL=
 
 .include <bsd.subdir.mk>

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1994-1995 Søren Schmidt
  * All rights reserved.
  *
@@ -31,10 +33,11 @@
 %{
 
 #include "lex.h"
-#define YY_NO_UNPUT
-#define YY_NO_INPUT
 
 %}
+
+%option nounput
+%option noinput
 
 D	[0-9]
 X	[0-9a-fA-F]

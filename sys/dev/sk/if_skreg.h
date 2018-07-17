@@ -1,6 +1,8 @@
 /*	$OpenBSD: if_skreg.h,v 1.10 2003/08/12 05:23:06 nate Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999, 2000
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -1289,7 +1291,7 @@
 struct sk_type {
 	u_int16_t		sk_vid;
 	u_int16_t		sk_did;
-	char			*sk_name;
+	const char		*sk_name;
 };
 
 #define SK_ADDR_LO(x)	((u_int64_t) (x) & 0xffffffff)

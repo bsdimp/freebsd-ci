@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -90,9 +92,8 @@ static int usb_pcount;
 static int usb_proc_debug;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, proc, CTLFLAG_RW, 0, "USB process");
-SYSCTL_INT(_hw_usb_proc, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_TUN, &usb_proc_debug, 0,
+SYSCTL_INT(_hw_usb_proc, OID_AUTO, debug, CTLFLAG_RWTUN, &usb_proc_debug, 0,
     "Debug level");
-TUNABLE_INT("hw.usb.proc.debug", &usb_proc_debug);
 #endif
 
 /*------------------------------------------------------------------------*
@@ -116,7 +117,7 @@ usb_process(void *arg)
 	sched_prio(td, up->up_prio);
 	thread_unlock(td);
 
-	mtx_lock(up->up_mtx);
+	USB_MTX_LOCK(up->up_mtx);
 
 	up->up_curtd = td;
 
@@ -185,7 +186,7 @@ usb_process(void *arg)
 
 			continue;
 		}
-		/* end if messages - check if anyone is waiting for sync */
+		/* end of messages - check if anyone is waiting for sync */
 		if (up->up_dsleep) {
 			up->up_dsleep = 0;
 			cv_broadcast(&up->up_drain);
@@ -196,7 +197,7 @@ usb_process(void *arg)
 
 	up->up_ptr = NULL;
 	cv_signal(&up->up_cv);
-	mtx_unlock(up->up_mtx);
+	USB_MTX_UNLOCK(up->up_mtx);
 #if (__FreeBSD_version >= 800000)
 	/* Clear the proc pointer if this is the last thread. */
 	if (--usb_pcount == 0)
@@ -292,11 +293,12 @@ usb_proc_msignal(struct usb_process *up, void *_pm0, void *_pm1)
 	usb_size_t d;
 	uint8_t t;
 
-	/* check if gone, return dummy value */
-	if (up->up_gone)
+	/* check if gone or in polling mode, return dummy value */
+	if (up->up_gone != 0 ||
+	    USB_IN_POLLING_MODE_FUNC() != 0)
 		return (_pm0);
 
-	mtx_assert(up->up_mtx, MA_OWNED);
+	USB_MTX_ASSERT(up->up_mtx, MA_OWNED);
 
 	t = 0;
 
@@ -377,7 +379,7 @@ usb_proc_is_gone(struct usb_process *up)
 	 * structure is initialised.
 	 */
 	if (up->up_mtx != NULL)
-		mtx_assert(up->up_mtx, MA_OWNED);
+		USB_MTX_ASSERT(up->up_mtx, MA_OWNED);
 	return (0);
 }
 
@@ -398,7 +400,7 @@ usb_proc_mwait(struct usb_process *up, void *_pm0, void *_pm1)
 	if (up->up_gone)
 		return;
 
-	mtx_assert(up->up_mtx, MA_OWNED);
+	USB_MTX_ASSERT(up->up_mtx, MA_OWNED);
 
 	if (up->up_curtd == curthread) {
 		/* Just remove the messages from the queue. */
@@ -438,9 +440,9 @@ usb_proc_drain(struct usb_process *up)
 		return;
 	/* handle special case with Giant */
 	if (up->up_mtx != &Giant)
-		mtx_assert(up->up_mtx, MA_NOTOWNED);
+		USB_MTX_ASSERT(up->up_mtx, MA_NOTOWNED);
 
-	mtx_lock(up->up_mtx);
+	USB_MTX_LOCK(up->up_mtx);
 
 	/* Set the gone flag */
 
@@ -455,14 +457,15 @@ usb_proc_drain(struct usb_process *up)
 			up->up_csleep = 0;
 			cv_signal(&up->up_cv);
 		}
+#ifndef EARLY_AP_STARTUP
 		/* Check if we are still cold booted */
-
 		if (cold) {
 			USB_THREAD_SUSPEND(up->up_ptr);
 			printf("WARNING: A USB process has "
 			    "been left suspended\n");
 			break;
 		}
+#endif
 		cv_wait(&up->up_cv, up->up_mtx);
 	}
 	/* Check if someone is waiting - should not happen */
@@ -473,7 +476,7 @@ usb_proc_drain(struct usb_process *up)
 		DPRINTF("WARNING: Someone is waiting "
 		    "for USB process drain!\n");
 	}
-	mtx_unlock(up->up_mtx);
+	USB_MTX_UNLOCK(up->up_mtx);
 }
 
 /*------------------------------------------------------------------------*
@@ -494,10 +497,22 @@ usb_proc_rewakeup(struct usb_process *up)
 	if (up->up_gone)
 		return;
 
-	mtx_assert(up->up_mtx, MA_OWNED);
+	USB_MTX_ASSERT(up->up_mtx, MA_OWNED);
 
 	if (up->up_msleep == 0) {
 		/* re-wakeup */
 		cv_signal(&up->up_cv);
 	}
+}
+
+/*------------------------------------------------------------------------*
+ *	usb_proc_is_called_from
+ *
+ * This function will return non-zero if called from inside the USB
+ * process passed as first argument. Else this function returns zero.
+ *------------------------------------------------------------------------*/
+int
+usb_proc_is_called_from(struct usb_process *up)
+{
+	return (up->up_curtd == curthread);
 }

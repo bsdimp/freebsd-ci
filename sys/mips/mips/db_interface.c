@@ -1,6 +1,8 @@
 /*	$OpenBSD: db_machdep.c,v 1.2 1998/09/15 10:50:13 pefo Exp $ */
 
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,8 +57,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/mips_opcode.h>
 #include <machine/vmparam.h>
 #include <machine/md_var.h>
-#define	NO_REG_DEFS	1	/* Prevent asm.h from including regdef.h */
-#include <machine/asm.h>
 #include <machine/setjmp.h>
 
 #include <ddb/ddb.h>
@@ -77,6 +77,16 @@ struct db_variable db_regs[] = {
 	{ "a1",  DB_OFFSET(a1),		db_frame },
 	{ "a2",  DB_OFFSET(a2),		db_frame },
 	{ "a3",  DB_OFFSET(a3),		db_frame },
+#if defined(__mips_n32) || defined(__mips_n64)
+	{ "a4",  DB_OFFSET(a4),		db_frame },
+	{ "a5",  DB_OFFSET(a5),		db_frame },
+	{ "a6",  DB_OFFSET(a6),		db_frame },
+	{ "a7",  DB_OFFSET(a7),		db_frame },
+	{ "t0",  DB_OFFSET(t0),		db_frame },
+	{ "t1",  DB_OFFSET(t1),		db_frame },
+	{ "t2",  DB_OFFSET(t2),		db_frame },
+	{ "t3",  DB_OFFSET(t3),		db_frame },
+#else
 	{ "t0",  DB_OFFSET(t0),		db_frame },
 	{ "t1",  DB_OFFSET(t1),		db_frame },
 	{ "t2",  DB_OFFSET(t2),		db_frame },
@@ -85,6 +95,7 @@ struct db_variable db_regs[] = {
 	{ "t5",  DB_OFFSET(t5),		db_frame },
 	{ "t6",  DB_OFFSET(t6),		db_frame },
 	{ "t7",  DB_OFFSET(t7),		db_frame },
+#endif
 	{ "s0",  DB_OFFSET(s0),		db_frame },
 	{ "s1",  DB_OFFSET(s1),		db_frame },
 	{ "s2",  DB_OFFSET(s2),		db_frame },
@@ -108,7 +119,7 @@ struct db_variable db_regs[] = {
 	{ "cs",  DB_OFFSET(cause),	db_frame },
 	{ "pc",  DB_OFFSET(pc),		db_frame },
 };
-struct db_variable *db_eregs = db_regs + sizeof(db_regs)/sizeof(db_regs[0]);
+struct db_variable *db_eregs = db_regs + nitems(db_regs);
 
 int (*do_db_log_stack_trace_cmd)(char *);
 
@@ -141,6 +152,7 @@ db_read_bytes(vm_offset_t addr, size_t size, char *data)
 		/*
 		 * 'addr' could be a memory-mapped I/O address.  Try to
 		 * do atomic load/store in unit of size requested.
+		 * size == 8 is only atomic on 64bit or n32 kernel.
 		 */
 		if ((size == 2 || size == 4 || size == 8) &&
 		    ((addr & (size -1)) == 0) &&
@@ -153,9 +165,8 @@ db_read_bytes(vm_offset_t addr, size_t size, char *data)
 				*(uint32_t *)data = *(uint32_t *)addr;
 				break;
 			case 8:
-				atomic_load_64((volatile u_int64_t *)addr,
-				    (u_int64_t *)data);
-			break;
+				*(uint64_t *)data = *(uint64_t *)addr;
+				break;
 			}
 		} else {
 			char *src;
@@ -184,6 +195,7 @@ db_write_bytes(vm_offset_t addr, size_t size, char *data)
 		/*
 		 * 'addr' could be a memory-mapped I/O address.  Try to
 		 * do atomic load/store in unit of size requested.
+		 * size == 8 is only atomic on 64bit or n32 kernel.
 		 */
 		if ((size == 2 || size == 4 || size == 8) &&
 		    ((addr & (size -1)) == 0) &&
@@ -196,9 +208,8 @@ db_write_bytes(vm_offset_t addr, size_t size, char *data)
 				*(uint32_t *)addr = *(uint32_t *)data;
 				break;
 			case 8:
-				atomic_store_64((volatile u_int64_t *)addr,
-				    (u_int64_t *)data);
-			break;
+				*(uint64_t *)addr = *(uint64_t *)data;
+				break;
 			}
 		} else {
 			char *dst;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: (BSD-3-Clause AND MIT-CMU)
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -70,34 +72,85 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/proc.h>
 #include <sys/rwlock.h>
+#include <sys/malloc.h>
 #include <sys/sysctl.h>
 #include <sys/systm.h>
 #include <sys/selinfo.h>
+#include <sys/smp.h>
 #include <sys/pipe.h>
 #include <sys/bio.h>
 #include <sys/buf.h>
+#include <sys/vmem.h>
+#include <sys/vmmeter.h>
 
 #include <vm/vm.h>
 #include <vm/vm_param.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_page.h>
+#include <vm/vm_phys.h>
+#include <vm/vm_pagequeue.h>
 #include <vm/vm_map.h>
 #include <vm/vm_pager.h>
 #include <vm/vm_extern.h>
 
-long physmem;
+extern void	uma_startup1(void);
+extern void	uma_startup2(void);
+extern void	vm_radix_reserve_kva(void);
 
-static int exec_map_entries = 16;
-TUNABLE_INT("vm.exec_map_entries", &exec_map_entries);
-SYSCTL_INT(_vm, OID_AUTO, exec_map_entries, CTLFLAG_RD, &exec_map_entries, 0,
-    "Maximum number of simultaneous execs");
+#if VM_NRESERVLEVEL > 0
+#define	KVA_QUANTUM	(1 << (VM_LEVEL_0_ORDER + PAGE_SHIFT))
+#else
+	/* On non-superpage architectures want large import sizes. */
+#define	KVA_QUANTUM	(PAGE_SIZE * 1024)
+#endif
+long physmem;
 
 /*
  * System initialization
  */
 static void vm_mem_init(void *);
 SYSINIT(vm_mem, SI_SUB_VM, SI_ORDER_FIRST, vm_mem_init, NULL);
+
+/*
+ * Import kva into the kernel arena.
+ */
+static int
+kva_import(void *unused, vmem_size_t size, int flags, vmem_addr_t *addrp)
+{
+	vm_offset_t addr;
+	int result;
+
+	KASSERT((size % KVA_QUANTUM) == 0,
+	    ("kva_import: Size %jd is not a multiple of %d",
+	    (intmax_t)size, (int)KVA_QUANTUM));
+	addr = vm_map_min(kernel_map);
+	result = vm_map_find(kernel_map, NULL, 0, &addr, size, 0,
+	    VMFS_SUPER_SPACE, VM_PROT_ALL, VM_PROT_ALL, MAP_NOFAULT);
+	if (result != KERN_SUCCESS)
+                return (ENOMEM);
+
+	*addrp = addr;
+
+	return (0);
+}
+
+#if VM_NRESERVLEVEL > 0
+/*
+ * Import a superpage from the normal kernel arena into the special
+ * arena for allocations with different permissions.
+ */
+static int
+kernel_rwx_alloc(void *arena, vmem_size_t size, int flags, vmem_addr_t *addrp)
+{
+
+	KASSERT((size % KVA_QUANTUM) == 0,
+	    ("kernel_rwx_alloc: Size %jd is not a multiple of %d",
+	    (intmax_t)size, (int)KVA_QUANTUM));
+	return (vmem_xalloc(arena, size, KVA_QUANTUM, 0, 0, VMEM_ADDR_MIN,
+	    VMEM_ADDR_MAX, flags, addrp));
+}
+#endif
 
 /*
  *	vm_init initializes the virtual memory system.
@@ -110,19 +163,67 @@ static void
 vm_mem_init(dummy)
 	void *dummy;
 {
+	int domain;
+
 	/*
 	 * Initializes resident memory structures. From here on, all physical
 	 * memory is accounted for, and we use only virtual addresses.
 	 */
 	vm_set_page_size();
 	virtual_avail = vm_page_startup(virtual_avail);
-	
+
+#ifdef	UMA_MD_SMALL_ALLOC
+	/* Announce page availability to UMA. */
+	uma_startup1();
+#endif
 	/*
 	 * Initialize other VM packages
 	 */
+	vmem_startup();
 	vm_object_init();
 	vm_map_startup();
 	kmem_init(virtual_avail, virtual_end);
+
+	/*
+	 * Initialize the kernel_arena.  This can grow on demand.
+	 */
+	vmem_init(kernel_arena, "kernel arena", 0, 0, PAGE_SIZE, 0, 0);
+	vmem_set_import(kernel_arena, kva_import, NULL, NULL, KVA_QUANTUM);
+
+#if VM_NRESERVLEVEL > 0
+	/*
+	 * In an architecture with superpages, maintain a separate arena
+	 * for allocations with permissions that differ from the "standard"
+	 * read/write permissions used for memory in the kernel_arena.
+	 */
+	kernel_rwx_arena = vmem_create("kernel rwx arena", 0, 0, PAGE_SIZE,
+	    0, M_WAITOK);
+	vmem_set_import(kernel_rwx_arena, kernel_rwx_alloc,
+	    (vmem_release_t *)vmem_xfree, kernel_arena, KVA_QUANTUM);
+#endif
+
+	for (domain = 0; domain < vm_ndomains; domain++) {
+		vm_dom[domain].vmd_kernel_arena = vmem_create(
+		    "kernel arena domain", 0, 0, PAGE_SIZE, 0, M_WAITOK);
+		vmem_set_import(vm_dom[domain].vmd_kernel_arena,
+		    (vmem_import_t *)vmem_alloc, NULL, kernel_arena,
+		    KVA_QUANTUM);
+#if VM_NRESERVLEVEL > 0
+		vm_dom[domain].vmd_kernel_rwx_arena = vmem_create(
+		    "kernel rwx arena domain", 0, 0, PAGE_SIZE, 0, M_WAITOK);
+		vmem_set_import(vm_dom[domain].vmd_kernel_rwx_arena,
+		    kernel_rwx_alloc, (vmem_release_t *)vmem_xfree,
+		    vm_dom[domain].vmd_kernel_arena, KVA_QUANTUM);
+#endif
+	}
+
+#ifndef	UMA_MD_SMALL_ALLOC
+	/* Set up radix zone to use noobj_alloc. */
+	vm_radix_reserve_kva();
+#endif
+	/* Announce full page availability to UMA. */
+	uma_startup2();
+	kmem_init_zero_region();
 	pmap_init();
 	vm_pager_init();
 }
@@ -136,7 +237,6 @@ vm_ksubmap_init(struct kva_md_info *kmi)
 	long physmem_est;
 	vm_offset_t minaddr;
 	vm_offset_t maxaddr;
-	vm_map_t clean_map;
 
 	/*
 	 * Allocate space for system data structures.
@@ -144,8 +244,6 @@ vm_ksubmap_init(struct kva_md_info *kmi)
 	 * As pages of kernel virtual memory are allocated, "v" is incremented.
 	 * As pages of memory are allocated and cleared,
 	 * "firstaddr" is incremented.
-	 * An index into the kernel page table corresponding to the
-	 * virtual memory address maintained in "v" is kept in "mapaddr".
 	 */
 
 	/*
@@ -171,7 +269,18 @@ again:
 	 */
 	if (firstaddr == 0) {
 		size = (vm_size_t)v;
-		firstaddr = kmem_alloc(kernel_map, round_page(size));
+#ifdef VM_FREELIST_DMA32
+		/*
+		 * Try to protect 32-bit DMAable memory from the largest
+		 * early alloc of wired mem.
+		 */
+		firstaddr = kmem_alloc_attr(kernel_arena, size,
+		    M_ZERO | M_NOWAIT, (vm_paddr_t)1 << 32,
+		    ~(vm_paddr_t)0, VM_MEMATTR_DEFAULT);
+		if (firstaddr == 0)
+#endif
+			firstaddr = kmem_malloc(kernel_arena, size,
+			    M_ZERO | M_WAITOK);
 		if (firstaddr == 0)
 			panic("startup: no room for tables");
 		goto again;
@@ -183,29 +292,61 @@ again:
 	if ((vm_size_t)((char *)v - firstaddr) != size)
 		panic("startup: table size inconsistency");
 
-	clean_map = kmem_suballoc(kernel_map, &kmi->clean_sva, &kmi->clean_eva,
-	    (long)nbuf * BKVASIZE + (long)nswbuf * MAXPHYS +
-	    (long)bio_transient_maxcnt * MAXPHYS, TRUE);
-	buffer_map = kmem_suballoc(clean_map, &kmi->buffer_sva,
-	    &kmi->buffer_eva, (long)nbuf * BKVASIZE, FALSE);
-	buffer_map->system_map = 1;
-	if (bio_transient_maxcnt != 0) {
-		bio_transient_map = kmem_suballoc(clean_map,
-		    &kmi->bio_transient_sva, &kmi->bio_transient_eva,
-		    (long)bio_transient_maxcnt * MAXPHYS, FALSE);
-		bio_transient_map->system_map = 1;
-	}
-	pager_map = kmem_suballoc(clean_map, &kmi->pager_sva, &kmi->pager_eva,
-	    (long)nswbuf * MAXPHYS, FALSE);
-	pager_map->system_map = 1;
-	exec_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr,
-	    exec_map_entries * round_page(PATH_MAX + ARG_MAX), FALSE);
-	pipe_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr, maxpipekva,
-	    FALSE);
+	/*
+	 * Allocate the clean map to hold all of the paging and I/O virtual
+	 * memory.
+	 */
+	size = (long)nbuf * BKVASIZE + (long)nswbuf * MAXPHYS +
+	    (long)bio_transient_maxcnt * MAXPHYS;
+	kmi->clean_sva = firstaddr = kva_alloc(size);
+	kmi->clean_eva = firstaddr + size;
 
 	/*
-	 * XXX: Mbuf system machine-specific initializations should
-	 *      go here, if anywhere.
+	 * Allocate the buffer arena.
+	 *
+	 * Enable the quantum cache if we have more than 4 cpus.  This
+	 * avoids lock contention at the expense of some fragmentation.
 	 */
-}
+	size = (long)nbuf * BKVASIZE;
+	kmi->buffer_sva = firstaddr;
+	kmi->buffer_eva = kmi->buffer_sva + size;
+	vmem_init(buffer_arena, "buffer arena", kmi->buffer_sva, size,
+	    PAGE_SIZE, (mp_ncpus > 4) ? BKVASIZE * 8 : 0, 0);
+	firstaddr += size;
 
+	/*
+	 * Now swap kva.
+	 */
+	swapbkva = firstaddr;
+	size = (long)nswbuf * MAXPHYS;
+	firstaddr += size;
+
+	/*
+	 * And optionally transient bio space.
+	 */
+	if (bio_transient_maxcnt != 0) {
+		size = (long)bio_transient_maxcnt * MAXPHYS;
+		vmem_init(transient_arena, "transient arena",
+		    firstaddr, size, PAGE_SIZE, 0, 0);
+		firstaddr += size;
+	}
+	if (firstaddr != kmi->clean_eva)
+		panic("Clean map calculation incorrect");
+
+	/*
+	 * Allocate the pageable submaps.  We may cache an exec map entry per
+	 * CPU, so we therefore need to reserve space for at least ncpu+1
+	 * entries to avoid deadlock.  The exec map is also used by some image
+	 * activators, so we leave a fixed number of pages for their use.
+	 */
+#ifdef __LP64__
+	exec_map_entries = 8 * mp_ncpus;
+#else
+	exec_map_entries = 2 * mp_ncpus + 4;
+#endif
+	exec_map_entry_size = round_page(PATH_MAX + ARG_MAX);
+	exec_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr,
+	    exec_map_entries * exec_map_entry_size + 64 * PAGE_SIZE, FALSE);
+	pipe_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr, maxpipekva,
+	    FALSE);
+}

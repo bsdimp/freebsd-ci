@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1999, 2000 Matthew R. Green
  * All rights reserved.
  *
@@ -129,7 +131,6 @@ ofw_isa_route_intr(device_t bridge, phandle_t node, struct ofw_bus_iinfo *ii,
     ofw_isa_intr_t intr)
 {
 	struct isa_regs reg;
-	uint8_t maskbuf[sizeof(reg) + sizeof(intr)];
 	device_t pbridge;
 	ofw_isa_intr_t mintr;
 
@@ -139,7 +140,7 @@ ofw_isa_route_intr(device_t bridge, phandle_t node, struct ofw_bus_iinfo *ii,
 	 * fully specified, so we may not continue to map.
 	 */
 	if (!ofw_bus_lookup_imap(node, ii, &reg, sizeof(reg),
-	    &intr, sizeof(intr), &mintr, sizeof(mintr), NULL, maskbuf)) {
+	    &intr, sizeof(intr), &mintr, sizeof(mintr), NULL)) {
 		/* Try routing at the parent bridge. */
 		mintr = PCIB_ROUTE_INTERRUPT(pbridge, bridge, intr);
 	}

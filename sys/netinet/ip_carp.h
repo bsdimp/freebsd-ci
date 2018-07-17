@@ -1,7 +1,9 @@
 /*	$FreeBSD$	*/
 /*	$OpenBSD: ip_carp.h,v 1.8 2004/07/29 22:12:15 mcbride Exp $	*/
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2002 Michael Shalayeff. All rights reserved.
  * Copyright (c) 2003 Ryan McBride. All rights reserved.
  *
@@ -117,11 +119,6 @@ struct carpstats {
 	uint64_t	carps_preempt;		/* if enabled, preemptions */
 };
 
-#ifdef _KERNEL
-#define	CARPSTATS_ADD(name, val)	carpstats.name += (val)
-#define	CARPSTATS_INC(name)		CARPSTATS_ADD(name, 1)
-#endif
-
 /*
  * Configuration structure for SIOCSVH SIOCGVH
  */
@@ -143,11 +140,12 @@ struct carpreq {
 #ifdef _KERNEL
 int		carp_ioctl(struct ifreq *, u_long, struct thread *);
 int		carp_attach(struct ifaddr *, int);
-void		carp_detach(struct ifaddr *);
+void		carp_detach(struct ifaddr *, bool);
 void		carp_carpdev_state(struct ifnet *);
-void		carp_input (struct mbuf *, int);
+int		carp_input(struct mbuf **, int *, int);
 int		carp6_input (struct mbuf **, int *, int);
-int		carp_output (struct ifnet *, struct mbuf *, struct sockaddr *);
+int		carp_output (struct ifnet *, struct mbuf *,
+		    const struct sockaddr *);
 int		carp_master(struct ifaddr *);
 int		carp_iamatch(struct ifaddr *, uint8_t **);
 struct ifaddr	*carp_iamatch6(struct ifnet *, struct in6_addr *);
@@ -158,7 +156,7 @@ int		carp_forus(struct ifnet *, u_char *);
 /* net/if.c */
 extern int (*carp_ioctl_p)(struct ifreq *, u_long, struct thread *);
 extern int (*carp_attach_p)(struct ifaddr *, int);
-extern void (*carp_detach_p)(struct ifaddr *);
+extern void (*carp_detach_p)(struct ifaddr *, bool);
 extern void (*carp_linkstate_p)(struct ifnet *);
 extern void (*carp_demote_adj_p)(int, char *);
 extern int (*carp_master_p)(struct ifaddr *);
@@ -166,7 +164,7 @@ extern int (*carp_master_p)(struct ifaddr *);
 extern int (*carp_forus_p)(struct ifnet *, u_char *);
 /* net/if_ethersubr.c */
 extern int (*carp_output_p)(struct ifnet *, struct mbuf *,
-    struct sockaddr *);
+    const struct sockaddr *);
 /* net/rtsock.c */
 extern int (*carp_get_vhid_p)(struct ifaddr *);
 #ifdef INET

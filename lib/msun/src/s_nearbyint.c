@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
  *
@@ -36,12 +38,16 @@ __FBSDID("$FreeBSD$");
  * instead of feclearexcept()/feupdateenv() to restore the environment
  * because the only exception defined for rint() is overflow, and
  * rounding can't overflow as long as emax >= p.
+ *
+ * The volatile keyword is needed below because clang incorrectly assumes
+ * that rint won't raise any floating-point exceptions. Declaring ret volatile
+ * is sufficient to trick the compiler into doing the right thing.
  */
 #define	DECL(type, fn, rint)	\
 type				\
 fn(type x)			\
 {				\
-	type ret;		\
+	volatile type ret;	\
 	fenv_t env;		\
 				\
 	fegetenv(&env);		\

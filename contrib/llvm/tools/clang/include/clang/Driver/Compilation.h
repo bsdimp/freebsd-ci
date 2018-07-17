@@ -7,20 +7,25 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef CLANG_DRIVER_COMPILATION_H_
-#define CLANG_DRIVER_COMPILATION_H_
+#ifndef LLVM_CLANG_DRIVER_COMPILATION_H
+#define LLVM_CLANG_DRIVER_COMPILATION_H
 
+#include "clang/Driver/Action.h"
 #include "clang/Driver/Job.h"
 #include "clang/Driver/Util.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/Support/Path.h"
+#include <map>
+
+namespace llvm {
+namespace opt {
+  class DerivedArgList;
+  class InputArgList;
+}
+}
 
 namespace clang {
 namespace driver {
-  class DerivedArgList;
   class Driver;
-  class InputArgList;
-  class JobAction;
   class JobList;
   class ToolChain;
 
@@ -33,26 +38,59 @@ class Compilation {
   /// The default tool chain.
   const ToolChain &DefaultToolChain;
 
+  /// A mask of all the programming models the host has to support in the
+  /// current compilation.
+  unsigned ActiveOffloadMask;
+
+  /// Array with the toolchains of offloading host and devices in the order they
+  /// were requested by the user. We are preserving that order in case the code
+  /// generation needs to derive a programming-model-specific semantic out of
+  /// it.
+  std::multimap<Action::OffloadKind, const ToolChain *>
+      OrderedOffloadingToolchains;
+
   /// The original (untranslated) input argument list.
-  InputArgList *Args;
+  llvm::opt::InputArgList *Args;
 
   /// The driver translated arguments. Note that toolchains may perform their
   /// own argument translation.
-  DerivedArgList *TranslatedArgs;
+  llvm::opt::DerivedArgList *TranslatedArgs;
 
-  /// The list of actions.
+  /// The list of actions we've created via MakeAction.  This is not accessible
+  /// to consumers; it's here just to manage ownership.
+  std::vector<std::unique_ptr<Action>> AllActions;
+
+  /// The list of actions.  This is maintained and modified by consumers, via
+  /// getActions().
   ActionList Actions;
 
   /// The root list of jobs.
   JobList Jobs;
 
-  /// Cache of translated arguments for a particular tool chain and bound
-  /// architecture.
-  llvm::DenseMap<std::pair<const ToolChain*, const char*>,
-                 DerivedArgList*> TCArgs;
+  /// Cache of translated arguments for a particular tool chain, bound
+  /// architecture, and device offload kind.
+  struct TCArgsKey final {
+    const ToolChain *TC = nullptr;
+    StringRef BoundArch;
+    Action::OffloadKind DeviceOffloadKind = Action::OFK_None;
+    bool operator<(const TCArgsKey &K) const {
+      if (TC < K.TC)
+        return true;
+      else if (TC == K.TC && BoundArch < K.BoundArch)
+        return true;
+      else if (TC == K.TC && BoundArch == K.BoundArch &&
+               DeviceOffloadKind < K.DeviceOffloadKind)
+        return true;
+      return false;
+    }
+    TCArgsKey(const ToolChain *TC, StringRef BoundArch,
+              Action::OffloadKind DeviceOffloadKind)
+        : TC(TC), BoundArch(BoundArch), DeviceOffloadKind(DeviceOffloadKind) {}
+  };
+  std::map<TCArgsKey, llvm::opt::DerivedArgList *> TCArgs;
 
   /// Temporary files which should be removed on exit.
-  ArgStringList TempFiles;
+  llvm::opt::ArgStringList TempFiles;
 
   /// Result files which should be removed on failure.
   ArgStringMap ResultFiles;
@@ -61,33 +99,96 @@ class Compilation {
   /// only be removed if we crash.
   ArgStringMap FailureResultFiles;
 
-  /// Redirection for stdout, stderr, etc.
-  const llvm::sys::Path **Redirects;
+  /// Optional redirection for stdin, stdout, stderr.
+  std::vector<Optional<StringRef>> Redirects;
+
+  /// Whether we're compiling for diagnostic purposes.
+  bool ForDiagnostics;
+
+  /// Whether an error during the parsing of the input args.
+  bool ContainsError;
 
 public:
   Compilation(const Driver &D, const ToolChain &DefaultToolChain,
-              InputArgList *Args, DerivedArgList *TranslatedArgs);
+              llvm::opt::InputArgList *Args,
+              llvm::opt::DerivedArgList *TranslatedArgs, bool ContainsError);
   ~Compilation();
 
   const Driver &getDriver() const { return TheDriver; }
 
   const ToolChain &getDefaultToolChain() const { return DefaultToolChain; }
 
-  const InputArgList &getInputArgs() const { return *Args; }
+  unsigned isOffloadingHostKind(Action::OffloadKind Kind) const {
+    return ActiveOffloadMask & Kind;
+  }
 
-  const DerivedArgList &getArgs() const { return *TranslatedArgs; }
+  /// Iterator that visits device toolchains of a given kind.
+  typedef const std::multimap<Action::OffloadKind,
+                              const ToolChain *>::const_iterator
+      const_offload_toolchains_iterator;
+  typedef std::pair<const_offload_toolchains_iterator,
+                    const_offload_toolchains_iterator>
+      const_offload_toolchains_range;
 
-  DerivedArgList &getArgs() { return *TranslatedArgs; }
+  template <Action::OffloadKind Kind>
+  const_offload_toolchains_range getOffloadToolChains() const {
+    return OrderedOffloadingToolchains.equal_range(Kind);
+  }
+
+  /// Return true if an offloading tool chain of a given kind exists.
+  template <Action::OffloadKind Kind> bool hasOffloadToolChain() const {
+    return OrderedOffloadingToolchains.find(Kind) !=
+           OrderedOffloadingToolchains.end();
+  }
+
+  /// Return an offload toolchain of the provided kind. Only one is expected to
+  /// exist.
+  template <Action::OffloadKind Kind>
+  const ToolChain *getSingleOffloadToolChain() const {
+    auto TCs = getOffloadToolChains<Kind>();
+
+    assert(TCs.first != TCs.second &&
+           "No tool chains of the selected kind exist!");
+    assert(std::next(TCs.first) == TCs.second &&
+           "More than one tool chain of the this kind exist.");
+    return TCs.first->second;
+  }
+
+  void addOffloadDeviceToolChain(const ToolChain *DeviceToolChain,
+                                 Action::OffloadKind OffloadKind) {
+    assert(OffloadKind != Action::OFK_Host && OffloadKind != Action::OFK_None &&
+           "This is not a device tool chain!");
+
+    // Update the host offload kind to also contain this kind.
+    ActiveOffloadMask |= OffloadKind;
+    OrderedOffloadingToolchains.insert(
+        std::make_pair(OffloadKind, DeviceToolChain));
+  }
+
+  const llvm::opt::InputArgList &getInputArgs() const { return *Args; }
+
+  const llvm::opt::DerivedArgList &getArgs() const { return *TranslatedArgs; }
+
+  llvm::opt::DerivedArgList &getArgs() { return *TranslatedArgs; }
 
   ActionList &getActions() { return Actions; }
   const ActionList &getActions() const { return Actions; }
 
+  /// Creates a new Action owned by this Compilation.
+  ///
+  /// The new Action is *not* added to the list returned by getActions().
+  template <typename T, typename... Args> T *MakeAction(Args &&... Arg) {
+    T *RawPtr = new T(std::forward<Args>(Arg)...);
+    AllActions.push_back(std::unique_ptr<Action>(RawPtr));
+    return RawPtr;
+  }
+
   JobList &getJobs() { return Jobs; }
   const JobList &getJobs() const { return Jobs; }
 
-  void addCommand(Command *C) { Jobs.addJob(C); }
+  void addCommand(std::unique_ptr<Command> C) { Jobs.addJob(std::move(C)); }
 
-  const ArgStringList &getTempFiles() const { return TempFiles; }
+  const llvm::opt::ArgStringList &getTempFiles() const { return TempFiles; }
 
   const ArgStringMap &getResultFiles() const { return ResultFiles; }
 
@@ -100,10 +201,15 @@ public:
 
   /// getArgsForToolChain - Return the derived argument list for the
   /// tool chain \p TC (or the default tool chain, if TC is not specified).
+  /// If a device offloading kind is specified, a translation specific for that
+  /// kind is performed, if any.
   ///
   /// \param BoundArch - The bound architecture name, or 0.
-  const DerivedArgList &getArgsForToolChain(const ToolChain *TC,
-                                            const char *BoundArch);
+  /// \param DeviceOffloadKind - The offload device kind that should be used in
+  /// the translation, if any.
+  const llvm::opt::DerivedArgList &
+  getArgsForToolChain(const ToolChain *TC, StringRef BoundArch,
+                      Action::OffloadKind DeviceOffloadKind);
 
   /// addTempFile - Add a file to remove on exit, and returns its
   /// argument.
@@ -136,7 +242,7 @@ public:
   ///
   /// \param IssueErrors - Report failures as errors.
   /// \return Whether all files were removed successfully.
-  bool CleanupFileList(const ArgStringList &Files,
+  bool CleanupFileList(const llvm::opt::ArgStringList &Files,
                        bool IssueErrors = false) const;
 
   /// CleanupFileMap - Remove the files in the given map.
@@ -149,23 +255,6 @@ public:
                       const JobAction *JA,
                       bool IssueErrors = false) const;
 
-  /// PrintJob - Print one job in -### format.
-  ///
-  /// \param OS - The stream to print on.
-  /// \param J - The job to print.
-  /// \param Terminator - A string to print at the end of the line.
-  /// \param Quote - Should separate arguments be quoted.
-  void PrintJob(raw_ostream &OS, const Job &J,
-                const char *Terminator, bool Quote) const;
-
-  /// PrintDiagnosticJob - Print one job in -### format, but with the 
-  /// superfluous options removed, which are not necessary for 
-  /// reproducing the crash.
-  ///
-  /// \param OS - The stream to print on.
-  /// \param J - The job to print.
-  void PrintDiagnosticJob(raw_ostream &OS, const Job &J) const;
-
   /// ExecuteCommand - Execute an actual command.
   ///
   /// \param FailingCommand - For non-zero results, this will be set to the
@@ -177,13 +266,27 @@ public:
   ///
   /// \param FailingCommands - For non-zero results, this will be a vector of
   /// failing commands and their associated result code.
-  void ExecuteJob(const Job &J,
-     SmallVectorImpl< std::pair<int, const Command *> > &FailingCommands) const;
+  void ExecuteJobs(
+      const JobList &Jobs,
+      SmallVectorImpl<std::pair<int, const Command *>> &FailingCommands) const;
 
   /// initCompilationForDiagnostics - Remove stale state and suppress output
   /// so compilation can be reexecuted to generate additional diagnostic
   /// information (e.g., preprocessed source(s)).
   void initCompilationForDiagnostics();
+
+  /// Return true if we're compiling for diagnostics.
+  bool isForDiagnostics() const { return ForDiagnostics; }
+
+  /// Return whether an error during the parsing of the input args.
+  bool containsError() const { return ContainsError; }
+
+  /// Redirect - Redirect output of this compilation. Can only be done once.
+  ///
+  /// \param Redirects - array of optional paths. The array should have a size
+  /// of three. The inferior process's stdin(0), stdout(1), and stderr(2) will
+  /// be redirected to the corresponding paths, if provided (not llvm::None).
+  void Redirect(ArrayRef<Optional<StringRef>> Redirects);
 };
 
 } // end namespace driver

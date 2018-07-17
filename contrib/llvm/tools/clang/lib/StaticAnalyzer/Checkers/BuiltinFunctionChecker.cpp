@@ -37,20 +37,43 @@ bool BuiltinFunctionChecker::evalCall(const CallExpr *CE,
   if (!FD)
     return false;
 
-  unsigned id = FD->getBuiltinID();
-
-  if (!id)
+  switch (FD->getBuiltinID()) {
+  default:
     return false;
 
-  switch (id) {
-  case Builtin::BI__builtin_expect: {
-    // For __builtin_expect, just return the value of the subexpression.
+  case Builtin::BI__builtin_assume: {
+    assert (CE->arg_begin() != CE->arg_end());
+    SVal ArgSVal = state->getSVal(CE->getArg(0), LCtx);
+    if (ArgSVal.isUndef())
+      return true; // Return true to model purity.
+
+    state = state->assume(ArgSVal.castAs<DefinedOrUnknownSVal>(), true);
+    // FIXME: do we want to warn here? Not right now. The most reports might
+    // come from infeasible paths, thus being false positives.
+    if (!state) {
+      C.generateSink(C.getState(), C.getPredecessor());
+      return true;
+    }
+
+    C.addTransition(state);
+    return true;
+  }
+
+  case Builtin::BI__builtin_unpredictable:
+  case Builtin::BI__builtin_expect:
+  case Builtin::BI__builtin_assume_aligned:
+  case Builtin::BI__builtin_addressof: {
+    // For __builtin_unpredictable, __builtin_expect, and
+    // __builtin_assume_aligned, just return the value of the subexpression.
+    // __builtin_addressof is going from a reference to a pointer, but those
+    // are represented the same way in the analyzer.
     assert (CE->arg_begin() != CE->arg_end());
     SVal X = state->getSVal(*(CE->arg_begin()), LCtx);
     C.addTransition(state->BindExpr(CE, LCtx, X));
     return true;
   }
 
+  case Builtin::BI__builtin_alloca_with_align:
   case Builtin::BI__builtin_alloca: {
     // FIXME: Refactor into StoreManager itself?
     MemRegionManager& RM = C.getStoreManager().getRegionManager();
@@ -73,9 +96,24 @@ bool BuiltinFunctionChecker::evalCall(const CallExpr *CE,
     C.addTransition(state->BindExpr(CE, LCtx, loc::MemRegionVal(R)));
     return true;
   }
-  }
 
-  return false;
+  case Builtin::BI__builtin_object_size: {
+    // This must be resolvable at compile time, so we defer to the constant
+    // evaluator for a value.
+    SVal V = UnknownVal();
+    llvm::APSInt Result;
+    if (CE->EvaluateAsInt(Result, C.getASTContext(), Expr::SE_NoSideEffects)) {
+      // Make sure the result has the correct type.
+      SValBuilder &SVB = C.getSValBuilder();
+      BasicValueFactory &BVF = SVB.getBasicValueFactory();
+      BVF.getAPSIntType(CE->getType()).apply(Result);
+      V = SVB.makeIntVal(Result);
+    }
+
+    C.addTransition(state->BindExpr(CE, LCtx, V));
+    return true;
+  }
+  }
 }
 
 void ento::registerBuiltinFunctionChecker(CheckerManager &mgr) {

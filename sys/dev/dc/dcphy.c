@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999
  *	Bill Paul <wpaul@ee.columbia.edu>.  All rights reserved.
  *
@@ -53,6 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_media.h>
 
@@ -152,7 +155,7 @@ dcphy_attach(device_t dev)
 	    &dcphy_funcs, 0);
 
 	/*PHY_RESET(sc);*/
-	dc_sc = sc->mii_pdata->mii_ifp->if_softc;
+	dc_sc = if_getsoftc(sc->mii_pdata->mii_ifp);
 	CSR_WRITE_4(dc_sc, DC_10BTSTAT, 0);
 	CSR_WRITE_4(dc_sc, DC_10BTCTRL, 0);
 
@@ -190,7 +193,7 @@ dcphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 	int reg;
 	u_int32_t		mode;
 
-	dc_sc = mii->mii_ifp->if_softc;
+	dc_sc = if_getsoftc(mii->mii_ifp);
 
 	switch (cmd) {
 	case MII_POLLSTAT:
@@ -200,7 +203,7 @@ dcphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		/*
 		 * If the interface is not up, don't do anything.
 		 */
-		if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
+		if ((if_getflags(mii->mii_ifp) & IFF_UP) == 0)
 			break;
 
 		mii->mii_media_active = IFM_NONE;
@@ -250,7 +253,7 @@ dcphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		/*
 		 * Is the interface even up?
 		 */
-		if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
+		if ((if_getflags(mii->mii_ifp) & IFF_UP) == 0)
 			return (0);
 
 		/*
@@ -297,12 +300,12 @@ dcphy_status(struct mii_softc *sc)
 	int anlpar, tstat;
 	struct dc_softc		*dc_sc;
 
-	dc_sc = mii->mii_ifp->if_softc;
+	dc_sc = if_getsoftc(mii->mii_ifp);
 
 	mii->mii_media_status = IFM_AVALID;
 	mii->mii_media_active = IFM_ETHER;
 
-	if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
+	if ((if_getflags(mii->mii_ifp) & IFF_UP) == 0)
 		return;
 
 	tstat = CSR_READ_4(dc_sc, DC_10BTSTAT);
@@ -377,7 +380,7 @@ dcphy_auto(struct mii_softc *mii)
 {
 	struct dc_softc		*sc;
 
-	sc = mii->mii_pdata->mii_ifp->if_softc;
+	sc = if_getsoftc(mii->mii_pdata->mii_ifp);
 
 	DC_CLRBIT(sc, DC_NETCFG, DC_NETCFG_PORTSEL);
 	DC_SETBIT(sc, DC_NETCFG, DC_NETCFG_FULLDUPLEX);
@@ -398,7 +401,7 @@ dcphy_reset(struct mii_softc *mii)
 {
 	struct dc_softc		*sc;
 
-	sc = mii->mii_pdata->mii_ifp->if_softc;
+	sc = if_getsoftc(mii->mii_pdata->mii_ifp);
 
 	DC_CLRBIT(sc, DC_SIARESET, DC_SIA_RESET);
 	DELAY(1000);

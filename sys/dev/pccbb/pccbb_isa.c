@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2004 M. Warner Losh.
  * All rights reserved.
  *
@@ -51,6 +53,9 @@ __FBSDID("$FreeBSD$");
 
 #include <isa/isavar.h>
 
+#include <dev/pci/pcivar.h>
+#include <dev/pci/pcib_private.h>
+
 #include <dev/pccard/pccardreg.h>
 #include <dev/pccard/pccardvar.h>
 
@@ -71,13 +76,12 @@ __FBSDID("$FreeBSD$");
 static SYSCTL_NODE(_hw, OID_AUTO, pcic, CTLFLAG_RD, 0, "PCIC parameters");
 
 static int isa_intr_mask = EXCA_INT_MASK_ALLOWED;
-TUNABLE_INT("hw.cbb.intr_mask", &isa_intr_mask);
-SYSCTL_INT(_hw_pcic, OID_AUTO, intr_mask, CTLFLAG_RD, &isa_intr_mask, 0,
-    "Mask of allowable interrupts for this laptop.  The default is generally\n\
-correct, but some laptops do not route all the IRQ pins to the bridge to\n\
-save wires.  Sometimes you need a more restrictive mask because some of the\n\
-hardware in your laptop may not have a driver so its IRQ might not be\n\
-allocated.");
+SYSCTL_INT(_hw_pcic, OID_AUTO, intr_mask, CTLFLAG_RDTUN, &isa_intr_mask, 0,
+    "Mask of allowable interrupts for this laptop.  The default is generally"
+    " correct, but some laptops do not route all the IRQ pins to the bridge to"
+    " save wires.  Sometimes you need a more restrictive mask because some of"
+    " the hardware in your laptop may not have a driver so its IRQ might not be"
+    " allocated.");
 
 /*
  * CL-PD6722's VSENSE method
@@ -86,16 +90,15 @@ allocated.");
  *     2: 6729's method
  */
 int pcic_pd6722_vsense = 1;
-TUNABLE_INT("hw.pcic.pd6722_vsense", &pcic_pd6722_vsense);
 SYSCTL_INT(_hw_pcic, OID_AUTO, pd6722_vsense, CTLFLAG_RDTUN,
     &pcic_pd6722_vsense, 1,
-    "Select CL-PD6722's VSENSE method.  VSENSE is used to determine the\n\
-volatage of inserted cards.  The CL-PD6722 has two methods to determine the\n\
-voltage of the card.  0 means assume a 5.0V card and do not check.  1 means\n\
-use the same method that the CL-PD6710 uses (default).  2 means use the\n\
-same method as the CL-PD6729.  2 is documented in the datasheet as being\n\
-the correct way, but 1 seems to give better results on more laptops.");
-
+    "Select CL-PD6722's VSENSE method.  VSENSE is used to determine the"
+    " voltage of inserted cards.  The CL-PD6722 has two methods to determine"
+    " the voltage of the card.  0 means assume a 5.0V card and do not check.  1"
+    " means use the same method that the CL-PD6710 uses (default).  2 means use"
+    " the same method as the CL-PD6729.  2 is documented in the datasheet as"
+    " being the correct way, but 1 seems to give better results on more"
+    " laptops."); 
 /*****************************************************************************
  * End of configurable parameters.
  *****************************************************************************/
@@ -103,7 +106,6 @@ the correct way, but 1 seems to give better results on more laptops.");
 #define	DPRINTF(x) do { if (cbb_debug) printf x; } while (0)
 #define	DEVPRINTF(x) do { if (cbb_debug) device_printf x; } while (0)
 
-/* XXX Not sure that PNP0E03 should be claimed, except maybe on pc98 */
 static struct isa_pnp_id pcic_ids[] = {
 	{EXCA_PNP_ACTIONTEC,		NULL},		/* AEI0218 */
 	{EXCA_PNP_IBM3765,		NULL},		/* IBM3765 */
@@ -112,8 +114,6 @@ static struct isa_pnp_id pcic_ids[] = {
 	{EXCA_PNP_VLSI_82C146,		NULL},		/* PNP0E02 */
 	{EXCA_PNP_82365_CARDBUS,	NULL},		/* PNP0E03 */
 	{EXCA_PNP_SCM_SWAPBOX,		NULL},		/* SCM0469 */
-	{EXCA_NEC_PC9801_102,		NULL},		/* NEC8091 */
-	{EXCA_NEC_PC9821RA_E01,         NULL},          /* NEC8121 */
 	{0}
 };
 
@@ -202,13 +202,25 @@ cbb_isa_attach(device_t dev)
 	return (ENOMEM);
 }
 
+static int
+cbb_isa_suspend(device_t dev)
+{
+	return (0);
+}
+
+static int
+cbb_isa_resume(device_t dev)
+{
+	return (0);
+}
+
 static device_method_t cbb_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,			cbb_isa_probe),
 	DEVMETHOD(device_attach,		cbb_isa_attach),
 	DEVMETHOD(device_detach,		cbb_detach),
-	DEVMETHOD(device_suspend,		cbb_suspend),
-	DEVMETHOD(device_resume,		cbb_resume),
+	DEVMETHOD(device_suspend,		cbb_isa_suspend),
+	DEVMETHOD(device_resume,		cbb_isa_resume),
 
 	/* bus methods */
 	DEVMETHOD(bus_read_ivar,		cbb_read_ivar),
@@ -242,3 +254,4 @@ static driver_t cbb_isa_driver = {
 
 DRIVER_MODULE(cbb, isa, cbb_isa_driver, cbb_devclass, 0, 0);
 MODULE_DEPEND(cbb, exca, 1, 1, 1);
+ISA_PNP_INFO(pcic_ids);

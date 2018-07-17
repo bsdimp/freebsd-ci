@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Robert N. M. Watson
  * All rights reserved.
  *
@@ -62,7 +64,7 @@ altera_jtag_uart_nexus_probe(device_t dev)
 {
 
 	device_set_desc(dev, "Altera JTAG UART");
-	return (BUS_PROBE_DEFAULT);
+	return (BUS_PROBE_NOWILDCARD);
 }
 
 static int

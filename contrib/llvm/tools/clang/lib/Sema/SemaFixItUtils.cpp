@@ -42,7 +42,7 @@ bool ConversionFixItGenerator::compareTypesSimple(CanQualType From,
   const CanQualType FromUnq = From.getUnqualifiedType();
   const CanQualType ToUnq = To.getUnqualifiedType();
 
-  if ((FromUnq == ToUnq || (S.IsDerivedFrom(FromUnq, ToUnq)) ) &&
+  if ((FromUnq == ToUnq || (S.IsDerivedFrom(Loc, FromUnq, ToUnq)) ) &&
       To.isAtLeastAsQualifiedAs(From))
     return true;
   return false;
@@ -58,8 +58,8 @@ bool ConversionFixItGenerator::tryToFixConversion(const Expr *FullExpr,
   const CanQualType FromQTy = S.Context.getCanonicalType(FromTy);
   const CanQualType ToQTy = S.Context.getCanonicalType(ToTy);
   const SourceLocation Begin = FullExpr->getSourceRange().getBegin();
-  const SourceLocation End = S.PP.getLocForEndOfToken(FullExpr->getSourceRange()
-                                                      .getEnd());
+  const SourceLocation End = S.getLocForEndOfToken(FullExpr->getSourceRange()
+                                                   .getEnd());
 
   // Strip the implicit casts - those are implied by the compiler, not the
   // original source code.
@@ -160,27 +160,30 @@ bool ConversionFixItGenerator::tryToFixConversion(const Expr *FullExpr,
   return false;
 }
 
-static bool isMacroDefined(const Sema &S, StringRef Name) {
-  return S.PP.getMacroInfo(&S.getASTContext().Idents.get(Name));
+static bool isMacroDefined(const Sema &S, SourceLocation Loc, StringRef Name) {
+  return (bool)S.PP.getMacroDefinitionAtLoc(&S.getASTContext().Idents.get(Name),
+                                            Loc);
 }
 
-static std::string getScalarZeroExpressionForType(const Type& T, const Sema& S) {
+static std::string getScalarZeroExpressionForType(
+    const Type &T, SourceLocation Loc, const Sema &S) {
   assert(T.isScalarType() && "use scalar types only");
   // Suggest "0" for non-enumeration scalar types, unless we can find a
   // better initializer.
   if (T.isEnumeralType())
     return std::string();
   if ((T.isObjCObjectPointerType() || T.isBlockPointerType()) &&
-      isMacroDefined(S, "nil"))
+      isMacroDefined(S, Loc, "nil"))
     return "nil";
   if (T.isRealFloatingType())
     return "0.0";
-  if (T.isBooleanType() && S.LangOpts.CPlusPlus)
+  if (T.isBooleanType() &&
+      (S.LangOpts.CPlusPlus || isMacroDefined(S, Loc, "false")))
     return "false";
   if (T.isPointerType() || T.isMemberPointerType()) {
     if (S.LangOpts.CPlusPlus11)
       return "nullptr";
-    if (isMacroDefined(S, "NULL"))
+    if (isMacroDefined(S, Loc, "NULL"))
       return "NULL";
   }
   if (T.isCharType())
@@ -194,9 +197,10 @@ static std::string getScalarZeroExpressionForType(const Type& T, const Sema& S) 
   return "0";
 }
 
-std::string Sema::getFixItZeroInitializerForType(QualType T) const {
+std::string
+Sema::getFixItZeroInitializerForType(QualType T, SourceLocation Loc) const {
   if (T->isScalarType()) {
-    std::string s = getScalarZeroExpressionForType(*T, *this);
+    std::string s = getScalarZeroExpressionForType(*T, Loc, *this);
     if (!s.empty())
       s = " = " + s;
     return s;
@@ -212,6 +216,7 @@ std::string Sema::getFixItZeroInitializerForType(QualType T) const {
   return std::string();
 }
 
-std::string Sema::getFixItZeroLiteralForType(QualType T) const {
-  return getScalarZeroExpressionForType(*T, *this);
+std::string
+Sema::getFixItZeroLiteralForType(QualType T, SourceLocation Loc) const {
+  return getScalarZeroExpressionForType(*T, Loc, *this);
 }

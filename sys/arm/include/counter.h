@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Konstantin Belousov <kib@FreeBSD.org>
  * All rights reserved.
  *
@@ -30,25 +32,62 @@
 #define __MACHINE_COUNTER_H__
 
 #include <sys/pcpu.h>
-#ifdef INVARIANTS
-#include <sys/proc.h>
+#include <machine/atomic.h>
+
+extern struct pcpu __pcpu[];
+
+#define	EARLY_COUNTER	&__pcpu[0].pc_early_dummy_counter
+
+#define	counter_enter()	do {} while (0)
+#define	counter_exit()	do {} while (0)
+
+#ifdef IN_SUBR_COUNTER_C
+
+static inline uint64_t
+counter_u64_read_one(uint64_t *p, int cpu)
+{
+
+	return (atomic_load_64((uint64_t *)((char *)p + UMA_PCPU_ALLOC_SIZE *
+	    cpu)));
+}
+
+static inline uint64_t
+counter_u64_fetch_inline(uint64_t *p)
+{
+	uint64_t r;
+	int i;
+
+	r = 0;
+	CPU_FOREACH(i)
+		r += counter_u64_read_one((uint64_t *)p, i);
+
+	return (r);
+}
+
+static void
+counter_u64_zero_one_cpu(void *arg)
+{
+
+	atomic_store_64((uint64_t *)((char *)arg + UMA_PCPU_ALLOC_SIZE *
+	    PCPU_GET(cpuid)), 0);
+}
+
+static inline void
+counter_u64_zero_inline(counter_u64_t c)
+{
+
+	smp_rendezvous(smp_no_rendezvous_barrier, counter_u64_zero_one_cpu,
+	    smp_no_rendezvous_barrier, c);
+}
 #endif
 
-#define	counter_enter()	critical_enter()
-#define	counter_exit()	critical_exit()
-
-#define	counter_u64_add_protected(c, inc)	do {	\
-	CRITICAL_ASSERT(curthread);			\
-	*(uint64_t *)zpcpu_get(c) += (inc);		\
-} while (0)
+#define	counter_u64_add_protected(c, inc)	counter_u64_add(c, inc)
 
 static inline void
 counter_u64_add(counter_u64_t c, int64_t inc)
 {
 
-	counter_enter();
-	counter_u64_add_protected(c, inc);
-	counter_exit();
+	atomic_add_64((uint64_t *)zpcpu_get(c), inc);
 }
 
 #endif	/* ! __MACHINE_COUNTER_H__ */

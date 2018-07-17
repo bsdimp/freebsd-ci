@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007 Marvell Semiconductor, Inc.
  * Copyright (c) 2007 Sam Leffler, Errno Consulting
  * Copyright (c) 2008 Weongyo Jeong <weongyo@freebsd.org>
@@ -38,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 #include <sys/firmware.h>
 #include <sys/socket.h>
 
@@ -45,8 +48,10 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
+#include <net/ethernet.h>
 
 #include <net80211/ieee80211_var.h>
 
@@ -134,13 +139,6 @@ malo_hal_attach(device_t dev, uint16_t devid,
 	}
 
 	/* allocate descriptors */
-	error = bus_dmamap_create(mh->mh_dmat, BUS_DMA_NOWAIT, &mh->mh_dmamap);
-	if (error != 0) {
-		device_printf(dev, "unable to create dmamap for cmd buffers, "
-			"error %u\n", error);
-		goto fail;
-	}
-
 	error = bus_dmamem_alloc(mh->mh_dmat, (void**) &mh->mh_cmdbuf,
 				 BUS_DMA_NOWAIT | BUS_DMA_COHERENT, 
 				 &mh->mh_dmamap);
@@ -163,13 +161,9 @@ malo_hal_attach(device_t dev, uint16_t devid,
 	return (mh);
 
 fail:
-	if (mh->mh_dmamap != NULL) {
-		bus_dmamap_unload(mh->mh_dmat, mh->mh_dmamap);
-		if (mh->mh_cmdbuf != NULL)
-			bus_dmamem_free(mh->mh_dmat, mh->mh_cmdbuf,
-			    mh->mh_dmamap);
-		bus_dmamap_destroy(mh->mh_dmat, mh->mh_dmamap);
-	}
+	if (mh->mh_cmdbuf != NULL)
+		bus_dmamem_free(mh->mh_dmat, mh->mh_cmdbuf,
+		    mh->mh_dmamap);
 	if (mh->mh_dmat)
 		bus_dma_tag_destroy(mh->mh_dmat);
 	free(mh, M_DEVBUF);
@@ -589,7 +583,6 @@ malo_hal_detach(struct malo_hal *mh)
 {
 
 	bus_dmamem_free(mh->mh_dmat, mh->mh_cmdbuf, mh->mh_dmamap);
-	bus_dmamap_destroy(mh->mh_dmat, mh->mh_dmamap);
 	bus_dma_tag_destroy(mh->mh_dmat);
 	mtx_destroy(&mh->mh_mtx);
 	free(mh, M_DEVBUF);

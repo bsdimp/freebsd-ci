@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -41,47 +43,56 @@ static char sccsid[] = "@(#)kdump.c	8.1 (Berkeley) 6/6/93";
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#define _KERNEL
-extern int errno;
-#include <sys/errno.h>
-#undef _KERNEL
+#define _WANT_KERNEL_ERRNO
+#ifdef __LP64__
+#define	_WANT_KEVENT32
+#endif
+#define	_WANT_FREEBSD11_KEVENT
 #include <sys/param.h>
+#include <sys/capsicum.h>
 #include <sys/errno.h>
-#define _KERNEL
 #include <sys/time.h>
-#undef _KERNEL
 #include <sys/uio.h>
+#include <sys/event.h>
 #include <sys/ktrace.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/sysent.h>
+#include <sys/umtx.h>
 #include <sys/un.h>
 #include <sys/queue.h>
-#ifdef IPX
-#include <sys/types.h>
-#include <netipx/ipx.h>
-#endif
-#ifdef NETATALK
-#include <netatalk/at.h>
+#include <sys/wait.h>
+#ifdef WITH_CASPER
+#include <sys/nv.h>
 #endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <ctype.h>
-#include <dlfcn.h>
+#include <capsicum_helpers.h>
 #include <err.h>
 #include <grp.h>
 #include <inttypes.h>
 #include <locale.h>
+#include <netdb.h>
+#include <nl_types.h>
 #include <pwd.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sysdecode.h>
 #include <time.h>
 #include <unistd.h>
 #include <vis.h>
 #include "ktrace.h"
-#include "kdump_subr.h"
+
+#ifdef WITH_CASPER
+#include <libcasper.h>
+
+#include <casper/cap_grp.h>
+#include <casper/cap_pwd.h>
+#endif
 
 u_int abidump(struct ktr_header *);
 int fetchprocinfo(struct ktr_header *, u_int *);
@@ -96,25 +107,52 @@ void ktrgenio(struct ktr_genio *, int);
 void ktrpsig(struct ktr_psig *);
 void ktrcsw(struct ktr_csw *);
 void ktrcsw_old(struct ktr_csw_old *);
-void ktruser_malloc(unsigned char *);
-void ktruser_rtld(int, unsigned char *);
-void ktruser(int, unsigned char *);
+void ktruser(int, void *);
+void ktrcaprights(cap_rights_t *);
+void ktritimerval(struct itimerval *it);
 void ktrsockaddr(struct sockaddr *);
 void ktrstat(struct stat *);
 void ktrstruct(char *, size_t);
 void ktrcapfail(struct ktr_cap_fail *);
 void ktrfault(struct ktr_fault *);
 void ktrfaultend(struct ktr_faultend *);
+void ktrkevent(struct kevent *);
+void ktrstructarray(struct ktr_struct_array *, size_t);
 void usage(void);
-void ioctlname(unsigned long, int);
 
-int timestamp, decimal, fancy = 1, suppressdata, tail, threads, maxdata,
-    resolv = 0, abiflag = 0;
-const char *tracefile = DEF_TRACEFILE;
-struct ktr_header ktr_header;
+#define	TIMESTAMP_NONE		0x0
+#define	TIMESTAMP_ABSOLUTE	0x1
+#define	TIMESTAMP_ELAPSED	0x2
+#define	TIMESTAMP_RELATIVE	0x4
+
+static int timestamp, decimal, fancy = 1, suppressdata, tail, threads, maxdata,
+    resolv = 0, abiflag = 0, syscallno = 0;
+static const char *tracefile = DEF_TRACEFILE;
+static struct ktr_header ktr_header;
 
 #define TIME_FORMAT	"%b %e %T %Y"
 #define eqs(s1, s2)	(strcmp((s1), (s2)) == 0)
+
+#define	print_number64(first,i,n,c) do {				\
+	uint64_t __v;							\
+									\
+	if (quad_align && (((ptrdiff_t)((i) - (first))) & 1) == 1) {	\
+		(i)++;							\
+		(n)--;							\
+	}								\
+	if (quad_slots == 2)						\
+		__v = (uint64_t)(uint32_t)(i)[0] |			\
+		    ((uint64_t)(uint32_t)(i)[1]) << 32;			\
+	else								\
+		__v = (uint64_t)*(i);					\
+	if (decimal)							\
+		printf("%c%jd", (c), (intmax_t)__v);			\
+	else								\
+		printf("%c%#jx", (c), (uintmax_t)__v);			\
+	(i) += quad_slots;						\
+	(n) -= quad_slots;						\
+	(c) = ',';							\
+} while (0)
 
 #define print_number(i,n,c) do {					\
 	if (decimal)							\
@@ -126,31 +164,6 @@ struct ktr_header ktr_header;
 	c = ',';							\
 } while (0)
 
-#if defined(__amd64__) || defined(__i386__)
-
-void linux_ktrsyscall(struct ktr_syscall *);
-void linux_ktrsysret(struct ktr_sysret *);
-extern char *linux_syscallnames[];
-extern int nlinux_syscalls;
-
-/*
- * from linux.h
- * Linux syscalls return negative errno's, we do positive and map them
- */
-static int bsd_to_linux_errno[ELAST + 1] = {
-	-0,  -1,  -2,  -3,  -4,  -5,  -6,  -7,  -8,  -9,
-	-10, -35, -12, -13, -14, -15, -16, -17, -18, -19,
-	-20, -21, -22, -23, -24, -25, -26, -27, -28, -29,
-	-30, -31, -32, -33, -34, -11,-115,-114, -88, -89,
-	-90, -91, -92, -93, -94, -95, -96, -97, -98, -99,
-	-100,-101,-102,-103,-104,-105,-106,-107,-108,-109,
-	-110,-111, -40, -36,-112,-113, -39, -11, -87,-122,
-	-116, -66,  -6,  -6,  -6,  -6,  -6, -37, -38,  -9,
-	-6,  -6, -43, -42, -75,-125, -84, -95, -16, -74,
-	-72, -67, -71
-};
-#endif
-
 struct proc_info
 {
 	TAILQ_ENTRY(proc_info)	info;
@@ -158,7 +171,180 @@ struct proc_info
 	pid_t			pid;
 };
 
-TAILQ_HEAD(trace_procs, proc_info) trace_procs;
+static TAILQ_HEAD(trace_procs, proc_info) trace_procs;
+
+#ifdef WITH_CASPER
+static cap_channel_t *cappwd, *capgrp;
+
+static int
+cappwdgrp_setup(cap_channel_t **cappwdp, cap_channel_t **capgrpp)
+{
+	cap_channel_t *capcas, *cappwdloc, *capgrploc;
+	const char *cmds[1], *fields[1];
+
+	capcas = cap_init();
+	if (capcas == NULL) {
+		err(1, "unable to create casper process");
+		exit(1);
+	}
+	cappwdloc = cap_service_open(capcas, "system.pwd");
+	capgrploc = cap_service_open(capcas, "system.grp");
+	/* Casper capability no longer needed. */
+	cap_close(capcas);
+	if (cappwdloc == NULL || capgrploc == NULL) {
+		if (cappwdloc == NULL)
+			warn("unable to open system.pwd service");
+		if (capgrploc == NULL)
+			warn("unable to open system.grp service");
+		exit(1);
+	}
+	/* Limit system.pwd to only getpwuid() function and pw_name field. */
+	cmds[0] = "getpwuid";
+	if (cap_pwd_limit_cmds(cappwdloc, cmds, 1) < 0)
+		err(1, "unable to limit system.pwd service");
+	fields[0] = "pw_name";
+	if (cap_pwd_limit_fields(cappwdloc, fields, 1) < 0)
+		err(1, "unable to limit system.pwd service");
+	/* Limit system.grp to only getgrgid() function and gr_name field. */
+	cmds[0] = "getgrgid";
+	if (cap_grp_limit_cmds(capgrploc, cmds, 1) < 0)
+		err(1, "unable to limit system.grp service");
+	fields[0] = "gr_name";
+	if (cap_grp_limit_fields(capgrploc, fields, 1) < 0)
+		err(1, "unable to limit system.grp service");
+
+	*cappwdp = cappwdloc;
+	*capgrpp = capgrploc;
+	return (0);
+}
+#endif	/* WITH_CASPER */
+
+static void
+print_integer_arg(const char *(*decoder)(int), int value)
+{
+	const char *str;
+
+	str = decoder(value);
+	if (str != NULL)
+		printf("%s", str);
+	else {
+		if (decimal)
+			printf("<invalid=%d>", value);
+		else
+			printf("<invalid=%#x>", value);
+	}
+}
+
+/* Like print_integer_arg but unknown values are treated as valid. */
+static void
+print_integer_arg_valid(const char *(*decoder)(int), int value)
+{
+	const char *str;
+
+	str = decoder(value);
+	if (str != NULL)
+		printf("%s", str);
+	else {
+		if (decimal)
+			printf("%d", value);
+		else
+			printf("%#x", value);
+	}
+}
+
+static void
+print_mask_arg(bool (*decoder)(FILE *, int, int *), int value)
+{
+	bool invalid;
+	int rem;
+
+	printf("%#x<", value);
+	invalid = !decoder(stdout, value, &rem);
+	printf(">");
+	if (invalid)
+		printf("<invalid>%u", rem);
+}
+
+static void
+print_mask_arg0(bool (*decoder)(FILE *, int, int *), int value)
+{
+	bool invalid;
+	int rem;
+
+	if (value == 0) {
+		printf("0");
+		return;
+	}
+	printf("%#x<", value);
+	invalid = !decoder(stdout, value, &rem);
+	printf(">");
+	if (invalid)
+		printf("<invalid>%u", rem);
+}
+
+static void
+decode_fileflags(fflags_t value)
+{
+	bool invalid;
+	fflags_t rem;
+
+	if (value == 0) {
+		printf("0");
+		return;
+	}
+	printf("%#x<", value);
+	invalid = !sysdecode_fileflags(stdout, value, &rem);
+	printf(">");
+	if (invalid)
+		printf("<invalid>%u", rem);
+}
+
+static void
+decode_filemode(int value)
+{
+	bool invalid;
+	int rem;
+
+	if (value == 0) {
+		printf("0");
+		return;
+	}
+	printf("%#o<", value);
+	invalid = !sysdecode_filemode(stdout, value, &rem);
+	printf(">");
+	if (invalid)
+		printf("<invalid>%u", rem);
+}
+
+static void
+print_mask_arg32(bool (*decoder)(FILE *, uint32_t, uint32_t *), uint32_t value)
+{
+	bool invalid;
+	uint32_t rem;
+
+	printf("%#x<", value);
+	invalid = !decoder(stdout, value, &rem);
+	printf(">");
+	if (invalid)
+		printf("<invalid>%u", rem);
+}
+
+static void
+print_mask_argul(bool (*decoder)(FILE *, u_long, u_long *), u_long value)
+{
+	bool invalid;
+	u_long rem;
+
+	if (value == 0) {
+		printf("0");
+		return;
+	}
+	printf("%#lx<", value);
+	invalid = !decoder(stdout, value, &rem);
+	printf(">");
+	if (invalid)
+		printf("<invalid>%lu", rem);
+}
 
 int
 main(int argc, char *argv[])
@@ -172,7 +358,9 @@ main(int argc, char *argv[])
 
 	setlocale(LC_CTYPE, "");
 
-	while ((ch = getopt(argc,argv,"f:dElm:np:AHRrsTt:")) != -1)
+	timestamp = TIMESTAMP_NONE;
+
+	while ((ch = getopt(argc,argv,"f:dElm:np:AHRrSsTt:")) != -1)
 		switch (ch) {
 		case 'A':
 			abiflag = 1;
@@ -198,20 +386,23 @@ main(int argc, char *argv[])
 		case 'r':
 			resolv = 1;
 			break;
+		case 'S':
+			syscallno = 1;
+			break;
 		case 's':
 			suppressdata = 1;
 			break;
 		case 'E':
-			timestamp = 3;	/* elapsed timestamp */
+			timestamp |= TIMESTAMP_ELAPSED;
 			break;
 		case 'H':
 			threads = 1;
 			break;
 		case 'R':
-			timestamp = 2;	/* relative timestamp */
+			timestamp |= TIMESTAMP_RELATIVE;
 			break;
 		case 'T':
-			timestamp = 1;
+			timestamp |= TIMESTAMP_ABSOLUTE;
 			break;
 		case 't':
 			trpoints = getpoints(optarg);
@@ -228,8 +419,33 @@ main(int argc, char *argv[])
 	m = malloc(size = 1025);
 	if (m == NULL)
 		errx(1, "%s", strerror(ENOMEM));
-	if (!freopen(tracefile, "r", stdin))
-		err(1, "%s", tracefile);
+	if (strcmp(tracefile, "-") != 0)
+		if (!freopen(tracefile, "r", stdin))
+			err(1, "%s", tracefile);
+
+	caph_cache_catpages();
+	caph_cache_tzdata();
+
+#ifdef WITH_CASPER
+	if (resolv != 0) {
+		if (cappwdgrp_setup(&cappwd, &capgrp) < 0) {
+			cappwd = NULL;
+			capgrp = NULL;
+		}
+	}
+	if (resolv == 0 || (cappwd != NULL && capgrp != NULL)) {
+		if (caph_enter() < 0)
+			err(1, "unable to enter capability mode");
+	}
+#else
+	if (resolv == 0) {
+		if (caph_enter() < 0)
+			err(1, "unable to enter capability mode");
+	}
+#endif
+	if (caph_limit_stdio() == -1)
+		err(1, "unable to limit stdio");
+
 	TAILQ_INIT(&trace_procs);
 	drop_logged = 0;
 	while (fread_tail(&ktr_header, sizeof(struct ktr_header), 1)) {
@@ -275,20 +491,10 @@ main(int argc, char *argv[])
 		drop_logged = 0;
 		switch (ktr_header.ktr_type) {
 		case KTR_SYSCALL:
-#if defined(__amd64__) || defined(__i386__)
-			if ((sv_flags & SV_ABI_MASK) == SV_ABI_LINUX)
-				linux_ktrsyscall((struct ktr_syscall *)m);
-			else
-#endif
-				ktrsyscall((struct ktr_syscall *)m, sv_flags);
+			ktrsyscall((struct ktr_syscall *)m, sv_flags);
 			break;
 		case KTR_SYSRET:
-#if defined(__amd64__) || defined(__i386__)
-			if ((sv_flags & SV_ABI_MASK) == SV_ABI_LINUX)
-				linux_ktrsysret((struct ktr_sysret *)m);
-			else
-#endif
-				ktrsysret((struct ktr_sysret *)m, sv_flags);
+			ktrsysret((struct ktr_sysret *)m, sv_flags);
 			break;
 		case KTR_NAMEI:
 		case KTR_SYSCTL:
@@ -320,6 +526,9 @@ main(int argc, char *argv[])
 			break;
 		case KTR_FAULTEND:
 			ktrfaultend((struct ktr_faultend *)m);
+			break;
+		case KTR_STRUCT_ARRAY:
+			ktrstructarray((struct ktr_struct_array *)m, ktrlen);
 			break;
 		default:
 			printf("\n");
@@ -403,17 +612,19 @@ abidump(struct ktr_header *kth)
 	case SV_ABI_FREEBSD:
 		abi = "F";
 		break;
+	case SV_ABI_CLOUDABI:
+		abi = "C";
+		break;
 	default:
 		abi = "U";
 		break;
 	}
 
-	if (flags != 0) {
-		if (flags & SV_LP64)
-			arch = "64";
-		else
-			arch = "32";
-	} else
+	if (flags & SV_LP64)
+		arch = "64";
+	else if (flags & SV_ILP32)
+		arch = "32";
+	else
 		arch = "00";
 
 	printf("%s%s  ", abi, arch);
@@ -425,8 +636,10 @@ void
 dumpheader(struct ktr_header *kth)
 {
 	static char unknown[64];
-	static struct timeval prevtime, temp;
+	static struct timeval prevtime, prevtime_e;
+	struct timeval temp;
 	const char *type;
+	const char *sign;
 
 	switch (kth->ktr_type) {
 	case KTR_SYSCALL:
@@ -451,6 +664,7 @@ dumpheader(struct ktr_header *kth)
 		type = "USER";
 		break;
 	case KTR_STRUCT:
+	case KTR_STRUCT_ARRAY:
 		type = "STRU";
 		break;
 	case KTR_SYSCTL:
@@ -489,51 +703,154 @@ dumpheader(struct ktr_header *kth)
 	else
 		printf("%6jd %-8.*s ", (intmax_t)kth->ktr_pid, MAXCOMLEN,
 		    kth->ktr_comm);
-	if (timestamp) {
-		if (timestamp == 3) {
+        if (timestamp) {
+		if (timestamp & TIMESTAMP_ABSOLUTE) {
+			printf("%jd.%06ld ", (intmax_t)kth->ktr_time.tv_sec,
+			    kth->ktr_time.tv_usec);
+		}
+		if (timestamp & TIMESTAMP_ELAPSED) {
+			if (prevtime_e.tv_sec == 0)
+				prevtime_e = kth->ktr_time;
+			timersub(&kth->ktr_time, &prevtime_e, &temp);
+			printf("%jd.%06ld ", (intmax_t)temp.tv_sec,
+			    temp.tv_usec);
+		}
+		if (timestamp & TIMESTAMP_RELATIVE) {
 			if (prevtime.tv_sec == 0)
 				prevtime = kth->ktr_time;
-			timevalsub(&kth->ktr_time, &prevtime);
+			if (timercmp(&kth->ktr_time, &prevtime, <)) {
+				timersub(&prevtime, &kth->ktr_time, &temp);
+				sign = "-";
+			} else {
+				timersub(&kth->ktr_time, &prevtime, &temp);
+				sign = "";
+			}
+			prevtime = kth->ktr_time;
+			printf("%s%jd.%06ld ", sign, (intmax_t)temp.tv_sec,
+			    temp.tv_usec);
 		}
-		if (timestamp == 2) {
-			temp = kth->ktr_time;
-			timevalsub(&kth->ktr_time, &prevtime);
-			prevtime = temp;
-		}
-		printf("%jd.%06ld ", (intmax_t)kth->ktr_time.tv_sec,
-		    kth->ktr_time.tv_usec);
 	}
 	printf("%s  ", type);
 }
 
 #include <sys/syscall.h>
-#define KTRACE
-#include <sys/kern/syscalls.c>
-#undef KTRACE
-int nsyscalls = sizeof (syscallnames) / sizeof (syscallnames[0]);
+
+static void
+ioctlname(unsigned long val)
+{
+	const char *str;
+
+	str = sysdecode_ioctlname(val);
+	if (str != NULL)
+		printf("%s", str);
+	else if (decimal)
+		printf("%lu", val);
+	else
+		printf("%#lx", val);
+}
+
+static enum sysdecode_abi
+syscallabi(u_int sv_flags)
+{
+
+	if (sv_flags == 0)
+		return (SYSDECODE_ABI_FREEBSD);
+	switch (sv_flags & SV_ABI_MASK) {
+	case SV_ABI_FREEBSD:
+		return (SYSDECODE_ABI_FREEBSD);
+	case SV_ABI_LINUX:
+#ifdef __LP64__
+		if (sv_flags & SV_ILP32)
+			return (SYSDECODE_ABI_LINUX32);
+#endif
+		return (SYSDECODE_ABI_LINUX);
+	case SV_ABI_CLOUDABI:
+		return (SYSDECODE_ABI_CLOUDABI64);
+	default:
+		return (SYSDECODE_ABI_UNKNOWN);
+	}
+}
+
+static void
+syscallname(u_int code, u_int sv_flags)
+{
+	const char *name;
+
+	name = sysdecode_syscallname(syscallabi(sv_flags), code);
+	if (name == NULL)
+		printf("[%d]", code);
+	else {
+		printf("%s", name);
+		if (syscallno)
+			printf("[%d]", code);
+	}
+}
+
+static void
+print_signal(int signo)
+{
+	const char *signame;
+
+	signame = sysdecode_signal(signo);
+	if (signame != NULL)
+		printf("%s", signame);
+	else
+		printf("SIG %d", signo);
+}
 
 void
-ktrsyscall(struct ktr_syscall *ktr, u_int flags)
+ktrsyscall(struct ktr_syscall *ktr, u_int sv_flags)
 {
 	int narg = ktr->ktr_narg;
-	register_t *ip;
+	register_t *ip, *first;
 	intmax_t arg;
+	int quad_align, quad_slots;
 
-	if ((flags != 0 && ((flags & SV_ABI_MASK) != SV_ABI_FREEBSD)) ||
-	    (ktr->ktr_code >= nsyscalls || ktr->ktr_code < 0))
-		printf("[%d]", ktr->ktr_code);
-	else
-		printf("%s", syscallnames[ktr->ktr_code]);
-	ip = &ktr->ktr_args[0];
+	syscallname(ktr->ktr_code, sv_flags);
+	ip = first = &ktr->ktr_args[0];
 	if (narg) {
 		char c = '(';
 		if (fancy &&
-		    (flags == 0 || (flags & SV_ABI_MASK) == SV_ABI_FREEBSD)) {
+		    (sv_flags == 0 ||
+		    (sv_flags & SV_ABI_MASK) == SV_ABI_FREEBSD)) {
+			quad_align = 0;
+			if (sv_flags & SV_ILP32) {
+#ifdef __powerpc__
+				quad_align = 1;
+#endif
+				quad_slots = 2;
+			} else
+				quad_slots = 1;
+			switch (ktr->ktr_code) {
+			case SYS_bindat:
+			case SYS_chflagsat:
+			case SYS_connectat:
+			case SYS_faccessat:
+			case SYS_fchmodat:
+			case SYS_fchownat:
+			case SYS_fstatat:
+			case SYS_futimesat:
+			case SYS_linkat:
+			case SYS_mkdirat:
+			case SYS_mkfifoat:
+			case SYS_mknodat:
+			case SYS_openat:
+			case SYS_readlinkat:
+			case SYS_renameat:
+			case SYS_unlinkat:
+			case SYS_utimensat:
+				putchar('(');
+				print_integer_arg_valid(sysdecode_atfd, *ip);
+				c = ',';
+				ip++;
+				narg--;
+				break;
+			}
 			switch (ktr->ktr_code) {
 			case SYS_ioctl: {
 				print_number(ip, narg, c);
 				putchar(c);
-				ioctlname(*ip, decimal);
+				ioctlname(*ip);
 				c = ',';
 				ip++;
 				narg--;
@@ -541,23 +858,29 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 			}
 			case SYS_ptrace:
 				putchar('(');
-				ptraceopname(*ip);
+				print_integer_arg(sysdecode_ptrace_request, *ip);
 				c = ',';
 				ip++;
 				narg--;
 				break;
 			case SYS_access:
 			case SYS_eaccess:
+			case SYS_faccessat:
 				print_number(ip, narg, c);
 				putchar(',');
-				accessmodename(*ip);
+				print_mask_arg(sysdecode_access_mode, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_open:
+			case SYS_openat:
 				print_number(ip, narg, c);
 				putchar(',');
-				flagsandmodename(ip[0], ip[1], decimal);
+				print_mask_arg(sysdecode_open_flags, ip[0]);
+				if ((ip[0] & O_CREAT) == O_CREAT) {
+					putchar(',');
+					decode_filemode(ip[1]);
+				}
 				ip += 2;
 				narg -= 2;
 				break;
@@ -565,23 +888,37 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				wait4optname(*ip);
+				print_mask_arg0(sysdecode_wait4_options, *ip);
+				ip++;
+				narg--;
+				break;
+			case SYS_wait6:
+				putchar('(');
+				print_integer_arg(sysdecode_idtype, *ip);
+				c = ',';
+				ip++;
+				narg--;
+				print_number64(first, ip, narg, c);
+				print_number(ip, narg, c);
+				putchar(',');
+				print_mask_arg(sysdecode_wait6_options, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_chmod:
 			case SYS_fchmod:
 			case SYS_lchmod:
+			case SYS_fchmodat:
 				print_number(ip, narg, c);
 				putchar(',');
-				modename(*ip);
+				decode_filemode(*ip);
 				ip++;
 				narg--;
 				break;
-			case SYS_mknod:
+			case SYS_mknodat:
 				print_number(ip, narg, c);
 				putchar(',');
-				modename(*ip);
+				decode_filemode(*ip);
 				ip++;
 				narg--;
 				break;
@@ -589,7 +926,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				getfsstatflagsname(*ip);
+				print_integer_arg(sysdecode_getfsstat_mode, *ip);
 				ip++;
 				narg--;
 				break;
@@ -597,14 +934,14 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				mountflagsname(*ip);
+				print_mask_arg(sysdecode_mount_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_unmount:
 				print_number(ip, narg, c);
 				putchar(',');
-				mountflagsname(*ip);
+				print_mask_arg(sysdecode_mount_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -613,7 +950,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				sendrecvflagsname(*ip);
+				print_mask_arg0(sysdecode_msg_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -623,35 +960,36 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				sendrecvflagsname(*ip);
+				print_mask_arg0(sysdecode_msg_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_chflags:
+			case SYS_chflagsat:
 			case SYS_fchflags:
 			case SYS_lchflags:
 				print_number(ip, narg, c);
 				putchar(',');
-				modename(*ip);
+				decode_fileflags(*ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_kill:
 				print_number(ip, narg, c);
 				putchar(',');
-				signame(*ip);
+				print_signal(*ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_reboot:
 				putchar('(');
-				rebootoptname(*ip);
+				print_mask_arg(sysdecode_reboot_howto, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_umask:
 				putchar('(');
-				modename(*ip);
+				decode_filemode(*ip);
 				ip++;
 				narg--;
 				break;
@@ -659,7 +997,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				msyncflagsname(*ip);
+				print_mask_arg(sysdecode_msync_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -668,11 +1006,11 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				mmapprotname(*ip);
+				print_mask_arg(sysdecode_mmap_prot, *ip);
 				putchar(',');
 				ip++;
 				narg--;
-				mmapflagsname(*ip);
+				print_mask_arg(sysdecode_mmap_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -681,11 +1019,11 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				mmapprotname(*ip);
+				print_mask_arg(sysdecode_mmap_prot, *ip);
 				putchar(',');
 				ip++;
 				narg--;
-				mmapflagsname(*ip);
+				print_mask_arg(sysdecode_mmap_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -693,7 +1031,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				mmapprotname(*ip);
+				print_mask_arg(sysdecode_mmap_prot, *ip);
 				ip++;
 				narg--;
 				break;
@@ -701,22 +1039,42 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				madvisebehavname(*ip);
+				print_integer_arg(sysdecode_madvice, *ip);
 				ip++;
 				narg--;
 				break;
-			case SYS_setpriority:
-				print_number(ip, narg, c);
+			case SYS_pathconf:
+			case SYS_lpathconf:
+			case SYS_fpathconf:
 				print_number(ip, narg, c);
 				putchar(',');
-				prioname(*ip);
+				print_integer_arg(sysdecode_pathconf_name, *ip);
+				ip++;
+				narg--;
+				break;
+			case SYS_getpriority:
+			case SYS_setpriority:
+				putchar('(');
+				print_integer_arg(sysdecode_prio_which, *ip);
+				c = ',';
 				ip++;
 				narg--;
 				break;
 			case SYS_fcntl:
 				print_number(ip, narg, c);
 				putchar(',');
-				fcntlcmdname(ip[0], ip[1], decimal);
+				print_integer_arg(sysdecode_fcntl_cmd, ip[0]);
+				if (sysdecode_fcntl_arg_p(ip[0])) {
+					putchar(',');
+					if (ip[0] == F_SETFL)
+						print_mask_arg(
+						    sysdecode_fcntl_fileflags,
+							ip[1]);
+					else
+						sysdecode_fcntl_arg(stdout,
+						    ip[0], ip[1],
+						    decimal ? 10 : 16);
+				}
 				ip += 2;
 				narg -= 2;
 				break;
@@ -724,17 +1082,19 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				int sockdomain;
 				putchar('(');
 				sockdomain = *ip;
-				sockdomainname(sockdomain);
+				print_integer_arg(sysdecode_socketdomain,
+				    sockdomain);
 				ip++;
 				narg--;
 				putchar(',');
-				socktypename(*ip);
+				print_mask_arg(sysdecode_socket_type, *ip);
 				ip++;
 				narg--;
 				if (sockdomain == PF_INET ||
 				    sockdomain == PF_INET6) {
 					putchar(',');
-					sockipprotoname(*ip);
+					print_integer_arg(sysdecode_ipproto,
+					    *ip);
 					ip++;
 					narg--;
 				}
@@ -742,69 +1102,74 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				break;
 			}
 			case SYS_setsockopt:
-			case SYS_getsockopt:
+			case SYS_getsockopt: {
+				const char *str;
+
 				print_number(ip, narg, c);
 				putchar(',');
-				sockoptlevelname(*ip, decimal);
-				if (*ip == SOL_SOCKET) {
+				print_integer_arg_valid(sysdecode_sockopt_level,
+				    *ip);
+				str = sysdecode_sockopt_name(ip[0], ip[1]);
+				if (str != NULL) {
+					printf(",%s", str);
 					ip++;
 					narg--;
-					putchar(',');
-					sockoptname(*ip);
 				}
 				ip++;
 				narg--;
 				break;
+			}
 #ifdef SYS_freebsd6_lseek
 			case SYS_freebsd6_lseek:
 				print_number(ip, narg, c);
 				/* Hidden 'pad' argument, not in lseek(2) */
 				print_number(ip, narg, c);
-				print_number(ip, narg, c);
+				print_number64(first, ip, narg, c);
 				putchar(',');
-				whencename(*ip);
+				print_integer_arg(sysdecode_whence, *ip);
 				ip++;
 				narg--;
 				break;
 #endif
 			case SYS_lseek:
 				print_number(ip, narg, c);
-				/* Hidden 'pad' argument, not in lseek(2) */
-				print_number(ip, narg, c);
+				print_number64(first, ip, narg, c);
 				putchar(',');
-				whencename(*ip);
+				print_integer_arg(sysdecode_whence, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_flock:
 				print_number(ip, narg, c);
 				putchar(',');
-				flockname(*ip);
+				print_mask_arg(sysdecode_flock_operation, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_mkfifo:
+			case SYS_mkfifoat:
 			case SYS_mkdir:
+			case SYS_mkdirat:
 				print_number(ip, narg, c);
 				putchar(',');
-				modename(*ip);
+				decode_filemode(*ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_shutdown:
 				print_number(ip, narg, c);
 				putchar(',');
-				shutdownhowname(*ip);
+				print_integer_arg(sysdecode_shutdown_how, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_socketpair:
 				putchar('(');
-				sockdomainname(*ip);
+				print_integer_arg(sysdecode_socketdomain, *ip);
 				ip++;
 				narg--;
 				putchar(',');
-				socktypename(*ip);
+				print_mask_arg(sysdecode_socket_type, *ip);
 				ip++;
 				narg--;
 				c = ',';
@@ -812,7 +1177,14 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 			case SYS_getrlimit:
 			case SYS_setrlimit:
 				putchar('(');
-				rlimitname(*ip);
+				print_integer_arg(sysdecode_rlimit, *ip);
+				ip++;
+				narg--;
+				c = ',';
+				break;
+			case SYS_getrusage:
+				putchar('(');
+				print_integer_arg(sysdecode_getrusage_who, *ip);
 				ip++;
 				narg--;
 				c = ',';
@@ -820,21 +1192,29 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 			case SYS_quotactl:
 				print_number(ip, narg, c);
 				putchar(',');
-				quotactlname(*ip);
+				if (!sysdecode_quotactl_cmd(stdout, *ip)) {
+					if (decimal)
+						printf("<invalid=%d>", (int)*ip);
+					else
+						printf("<invalid=%#x>",
+						    (int)*ip);
+				}
 				ip++;
 				narg--;
 				c = ',';
 				break;
 			case SYS_nfssvc:
 				putchar('(');
-				nfssvcname(*ip);
+				print_integer_arg(sysdecode_nfssvc_flags, *ip);
 				ip++;
 				narg--;
 				c = ',';
 				break;
 			case SYS_rtprio:
+			case SYS_rtprio_thread:
 				putchar('(');
-				rtprioname(*ip);
+				print_integer_arg(sysdecode_rtprio_function,
+				    *ip);
 				ip++;
 				narg--;
 				c = ',';
@@ -843,7 +1223,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				semctlname(*ip);
+				print_integer_arg(sysdecode_semctl_cmd, *ip);
 				ip++;
 				narg--;
 				break;
@@ -851,14 +1231,14 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				semgetname(*ip);
+				print_mask_arg(sysdecode_semget_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_msgctl:
 				print_number(ip, narg, c);
 				putchar(',');
-				shmctlname(*ip);
+				print_integer_arg(sysdecode_msgctl_cmd, *ip);
 				ip++;
 				narg--;
 				break;
@@ -866,56 +1246,69 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				shmatname(*ip);
+				print_mask_arg(sysdecode_shmat_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_shmctl:
 				print_number(ip, narg, c);
 				putchar(',');
-				shmctlname(*ip);
+				print_integer_arg(sysdecode_shmctl_cmd, *ip);
 				ip++;
 				narg--;
+				break;
+			case SYS_shm_open:
+				print_number(ip, narg, c);
+				putchar(',');
+				print_mask_arg(sysdecode_open_flags, ip[0]);
+				putchar(',');
+				decode_filemode(ip[1]);
+				ip += 2;
+				narg -= 2;
 				break;
 			case SYS_minherit:
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				minheritname(*ip);
+				print_integer_arg(sysdecode_minherit_inherit,
+				    *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_rfork:
 				putchar('(');
-				rforkname(*ip);
+				print_mask_arg(sysdecode_rfork_flags, *ip);
 				ip++;
 				narg--;
 				c = ',';
 				break;
 			case SYS_lio_listio:
 				putchar('(');
-				lio_listioname(*ip);
+				print_integer_arg(sysdecode_lio_listio_mode,
+				    *ip);
 				ip++;
 				narg--;
 				c = ',';
 				break;
 			case SYS_mlockall:
 				putchar('(');
-				mlockallname(*ip);
+				print_mask_arg(sysdecode_mlockall_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_sched_setscheduler:
 				print_number(ip, narg, c);
 				putchar(',');
-				schedpolicyname(*ip);
+				print_integer_arg(sysdecode_scheduler_policy,
+				    *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_sched_get_priority_max:
 			case SYS_sched_get_priority_min:
 				putchar('(');
-				schedpolicyname(*ip);
+				print_integer_arg(sysdecode_scheduler_policy,
+				    *ip);
 				ip++;
 				narg--;
 				break;
@@ -927,20 +1320,21 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				sendfileflagsname(*ip);
+				print_mask_arg(sysdecode_sendfile_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_kldsym:
 				print_number(ip, narg, c);
 				putchar(',');
-				kldsymcmdname(*ip);
+				print_integer_arg(sysdecode_kldsym_cmd, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_sigprocmask:
 				putchar('(');
-				sigprocmaskhowname(*ip);
+				print_integer_arg(sysdecode_sigprocmask_how,
+				    *ip);
 				ip++;
 				narg--;
 				c = ',';
@@ -959,13 +1353,13 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 			case SYS___acl_aclcheck_link:
 				print_number(ip, narg, c);
 				putchar(',');
-				acltypename(*ip);
+				print_integer_arg(sysdecode_acltype, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_sigaction:
 				putchar('(');
-				signame(*ip);
+				print_signal(*ip);
 				ip++;
 				narg--;
 				c = ',';
@@ -973,7 +1367,8 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 			case SYS_extattrctl:
 				print_number(ip, narg, c);
 				putchar(',');
-				extattrctlname(*ip);
+				print_integer_arg(sysdecode_extattrnamespace,
+				    *ip);
 				ip++;
 				narg--;
 				break;
@@ -981,7 +1376,7 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				mountflagsname(*ip);
+				print_mask_arg(sysdecode_mount_flags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -989,52 +1384,34 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				putchar(',');
-				thrcreateflagsname(*ip);
+				print_mask_arg(sysdecode_thr_create_flags, *ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_thr_kill:
 				print_number(ip, narg, c);
 				putchar(',');
-				signame(*ip);
+				print_signal(*ip);
 				ip++;
 				narg--;
 				break;
 			case SYS_kldunloadf:
 				print_number(ip, narg, c);
 				putchar(',');
-				kldunloadfflagsname(*ip);
+				print_integer_arg(sysdecode_kldunload_flags,
+				    *ip);
 				ip++;
 				narg--;
 				break;
-			case SYS_cap_new:
-			case SYS_cap_rights_limit:
+			case SYS_linkat:
+			case SYS_renameat:
+			case SYS_symlinkat:
 				print_number(ip, narg, c);
 				putchar(',');
-				arg = *ip;
+				print_integer_arg_valid(sysdecode_atfd, *ip);
 				ip++;
 				narg--;
-				/*
-				 * Hack: the second argument is a
-				 * cap_rights_t, which 64 bits wide, so on
-				 * 32-bit systems, it is split between two
-				 * registers.
-				 *
-				 * Since sizeof() is not evaluated by the
-				 * preprocessor, we can't use an #ifdef,
-				 * but the compiler will probably optimize
-				 * the code out anyway.
-				 */
-				if (sizeof(cap_rights_t) > sizeof(register_t)) {
-#if _BYTE_ORDER == _LITTLE_ENDIAN
-					arg = ((intmax_t)*ip << 32) + arg;
-#else
-					arg = (arg << 32) + *ip;
-#endif
-					ip++;
-					narg--;
-				}
-				capname(arg);
+				print_number(ip, narg, c);
 				break;
 			case SYS_cap_fcntls_limit:
 				print_number(ip, narg, c);
@@ -1042,14 +1419,89 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 				arg = *ip;
 				ip++;
 				narg--;
-				capfcntlname(arg);
+				print_mask_arg32(sysdecode_cap_fcntlrights, arg);
 				break;
 			case SYS_posix_fadvise:
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				print_number(ip, narg, c);
 				(void)putchar(',');
-				fadvisebehavname((int)*ip);
+				print_integer_arg(sysdecode_fadvice, *ip);
+				ip++;
+				narg--;
+				break;
+			case SYS_procctl:
+				putchar('(');
+				print_integer_arg(sysdecode_idtype, *ip);
+				c = ',';
+				ip++;
+				narg--;
+				print_number64(first, ip, narg, c);
+				putchar(',');
+				print_integer_arg(sysdecode_procctl_cmd, *ip);
+				ip++;
+				narg--;
+				break;
+			case SYS__umtx_op:
+				print_number(ip, narg, c);
+				putchar(',');
+				print_integer_arg(sysdecode_umtx_op, *ip);
+				switch (*ip) {
+				case UMTX_OP_CV_WAIT:
+					ip++;
+					narg--;
+					putchar(',');
+					print_mask_argul(
+					    sysdecode_umtx_cvwait_flags, *ip);
+					break;
+				case UMTX_OP_RW_RDLOCK:
+					ip++;
+					narg--;
+					putchar(',');
+					print_mask_argul(
+					    sysdecode_umtx_rwlock_flags, *ip);
+					break;
+				}
+				ip++;
+				narg--;
+				break;
+			case SYS_ftruncate:
+			case SYS_truncate:
+				print_number(ip, narg, c);
+				print_number64(first, ip, narg, c);
+				break;
+			case SYS_fchownat:
+				print_number(ip, narg, c);
+				print_number(ip, narg, c);
+				print_number(ip, narg, c);
+				break;
+			case SYS_fstatat:
+			case SYS_utimensat:
+				print_number(ip, narg, c);
+				print_number(ip, narg, c);
+				break;
+			case SYS_unlinkat:
+				print_number(ip, narg, c);
+				break;
+			case SYS_sysarch:
+				putchar('(');
+				print_integer_arg(sysdecode_sysarch_number, *ip);
+				ip++;
+				narg--;
+				c = ',';
+				break;
+			}
+			switch (ktr->ktr_code) {
+			case SYS_chflagsat:
+			case SYS_fchownat:
+			case SYS_faccessat:
+			case SYS_fchmodat:
+			case SYS_fstatat:
+			case SYS_linkat:
+			case SYS_unlinkat:
+			case SYS_utimensat:
+				putchar(',');
+				print_mask_arg0(sysdecode_atflags, *ip);
 				ip++;
 				narg--;
 				break;
@@ -1064,17 +1516,13 @@ ktrsyscall(struct ktr_syscall *ktr, u_int flags)
 }
 
 void
-ktrsysret(struct ktr_sysret *ktr, u_int flags)
+ktrsysret(struct ktr_sysret *ktr, u_int sv_flags)
 {
 	register_t ret = ktr->ktr_retval;
 	int error = ktr->ktr_error;
-	int code = ktr->ktr_code;
 
-	if ((flags != 0 && ((flags & SV_ABI_MASK) != SV_ABI_FREEBSD)) ||
-	    (code >= nsyscalls || code < 0))
-		printf("[%d] ", code);
-	else
-		printf("%s ", syscallnames[code]);
+	syscallname(ktr->ktr_code, sv_flags);
+	printf(" ");
 
 	if (error == 0) {
 		if (fancy) {
@@ -1092,7 +1540,8 @@ ktrsysret(struct ktr_sysret *ktr, u_int flags)
 	else if (error == EJUSTRETURN)
 		printf("JUSTRETURN");
 	else {
-		printf("-1 errno %d", ktr->ktr_error);
+		printf("-1 errno %d", sysdecode_freebsd_to_abi_errno(
+		    syscallabi(sv_flags), error));
 		if (fancy)
 			printf(" %s", strerror(ktr->ktr_error));
 	}
@@ -1205,6 +1654,11 @@ ktrgenio(struct ktr_genio *ktr, int len)
 	static int screenwidth = 0;
 	int i, binary;
 
+	printf("fd %d %s %d byte%s\n", ktr->ktr_fd,
+		ktr->ktr_rw == UIO_READ ? "read" : "wrote", datalen,
+		datalen == 1 ? "" : "s");
+	if (suppressdata)
+		return;
 	if (screenwidth == 0) {
 		struct winsize ws;
 
@@ -1214,11 +1668,6 @@ ktrgenio(struct ktr_genio *ktr, int len)
 		else
 			screenwidth = 80;
 	}
-	printf("fd %d %s %d byte%s\n", ktr->ktr_fd,
-		ktr->ktr_rw == UIO_READ ? "read" : "wrote", datalen,
-		datalen == 1 ? "" : "s");
-	if (suppressdata)
-		return;
 	if (maxdata && datalen > maxdata)
 		datalen = maxdata;
 
@@ -1235,32 +1684,25 @@ ktrgenio(struct ktr_genio *ktr, int len)
 		visdump(dp, datalen, screenwidth);
 }
 
-const char *signames[] = {
-	"NULL", "HUP", "INT", "QUIT", "ILL", "TRAP", "IOT",	/*  1 - 6  */
-	"EMT", "FPE", "KILL", "BUS", "SEGV", "SYS",		/*  7 - 12 */
-	"PIPE", "ALRM",  "TERM", "URG", "STOP", "TSTP",		/* 13 - 18 */
-	"CONT", "CHLD", "TTIN", "TTOU", "IO", "XCPU",		/* 19 - 24 */
-	"XFSZ", "VTALRM", "PROF", "WINCH", "29", "USR1",	/* 25 - 30 */
-	"USR2", NULL,						/* 31 - 32 */
-};
-
 void
 ktrpsig(struct ktr_psig *psig)
 {
-	if (psig->signo > 0 && psig->signo < NSIG)
-		printf("SIG%s ", signames[psig->signo]);
-	else
-		printf("SIG %d ", psig->signo);
+	const char *str;
+
+	print_signal(psig->signo);
 	if (psig->action == SIG_DFL) {
-		printf("SIG_DFL code=");
-		sigcodename(psig->signo, psig->code);
-		putchar('\n');
+		printf(" SIG_DFL");
 	} else {
-		printf("caught handler=0x%lx mask=0x%x code=",
+		printf(" caught handler=0x%lx mask=0x%x",
 		    (u_long)psig->action, psig->mask.__bits[0]);
-		sigcodename(psig->signo, psig->code);
-		putchar('\n');
 	}
+	printf(" code=");
+	str = sysdecode_sigcode(psig->signo, psig->code);
+	if (str != NULL)
+		printf("%s", str);
+	else
+		printf("<invalid=%#x>", psig->code);
+	putchar('\n');
 }
 
 void
@@ -1277,149 +1719,51 @@ ktrcsw(struct ktr_csw *cs)
 	    cs->user ? "user" : "kernel", cs->wmesg);
 }
 
-#define	UTRACE_DLOPEN_START		1
-#define	UTRACE_DLOPEN_STOP		2
-#define	UTRACE_DLCLOSE_START		3
-#define	UTRACE_DLCLOSE_STOP		4
-#define	UTRACE_LOAD_OBJECT		5
-#define	UTRACE_UNLOAD_OBJECT		6
-#define	UTRACE_ADD_RUNDEP		7
-#define	UTRACE_PRELOAD_FINISHED		8
-#define	UTRACE_INIT_CALL		9
-#define	UTRACE_FINI_CALL		10
-
-struct utrace_rtld {
-	char sig[4];				/* 'RTLD' */
-	int event;
-	void *handle;
-	void *mapbase;
-	size_t mapsize;
-	int refcnt;
-	char name[MAXPATHLEN];
-};
-
 void
-ktruser_rtld(int len, unsigned char *p)
+ktruser(int len, void *p)
 {
-	struct utrace_rtld *ut = (struct utrace_rtld *)p;
-	void *parent;
-	int mode;
+	unsigned char *cp;
 
-	switch (ut->event) {
-	case UTRACE_DLOPEN_START:
-		mode = ut->refcnt;
-		printf("dlopen(%s, ", ut->name);
-		switch (mode & RTLD_MODEMASK) {
-		case RTLD_NOW:
-			printf("RTLD_NOW");
-			break;
-		case RTLD_LAZY:
-			printf("RTLD_LAZY");
-			break;
-		default:
-			printf("%#x", mode & RTLD_MODEMASK);
-		}
-		if (mode & RTLD_GLOBAL)
-			printf(" | RTLD_GLOBAL");
-		if (mode & RTLD_TRACE)
-			printf(" | RTLD_TRACE");
-		if (mode & ~(RTLD_MODEMASK | RTLD_GLOBAL | RTLD_TRACE))
-			printf(" | %#x", mode &
-			    ~(RTLD_MODEMASK | RTLD_GLOBAL | RTLD_TRACE));
-		printf(")\n");
-		break;
-	case UTRACE_DLOPEN_STOP:
-		printf("%p = dlopen(%s) ref %d\n", ut->handle, ut->name,
-		    ut->refcnt);
-		break;
-	case UTRACE_DLCLOSE_START:
-		printf("dlclose(%p) (%s, %d)\n", ut->handle, ut->name,
-		    ut->refcnt);
-		break;
-	case UTRACE_DLCLOSE_STOP:
-		printf("dlclose(%p) finished\n", ut->handle);
-		break;
-	case UTRACE_LOAD_OBJECT:
-		printf("RTLD: loaded   %p @ %p - %p (%s)\n", ut->handle,
-		    ut->mapbase, (char *)ut->mapbase + ut->mapsize - 1,
-		    ut->name);
-		break;
-	case UTRACE_UNLOAD_OBJECT:
-		printf("RTLD: unloaded %p @ %p - %p (%s)\n", ut->handle,
-		    ut->mapbase, (char *)ut->mapbase + ut->mapsize - 1,
-		    ut->name);
-		break;
-	case UTRACE_ADD_RUNDEP:
-		parent = ut->mapbase;
-		printf("RTLD: %p now depends on %p (%s, %d)\n", parent,
-		    ut->handle, ut->name, ut->refcnt);
-		break;
-	case UTRACE_PRELOAD_FINISHED:
-		printf("RTLD: LD_PRELOAD finished\n");
-		break;
-	case UTRACE_INIT_CALL:
-		printf("RTLD: init %p for %p (%s)\n", ut->mapbase, ut->handle,
-		    ut->name);
-		break;
-	case UTRACE_FINI_CALL:
-		printf("RTLD: fini %p for %p (%s)\n", ut->mapbase, ut->handle,
-		    ut->name);
-		break;
-	default:
-		p += 4;
-		len -= 4;
-		printf("RTLD: %d ", len);
-		while (len--)
-			if (decimal)
-				printf(" %d", *p++);
-			else
-				printf(" %02x", *p++);
+	if (sysdecode_utrace(stdout, p, len)) {
 		printf("\n");
-	}
-}
-
-struct utrace_malloc {
-	void *p;
-	size_t s;
-	void *r;
-};
-
-void
-ktruser_malloc(unsigned char *p)
-{
-	struct utrace_malloc *ut = (struct utrace_malloc *)p;
-
-	if (ut->p == (void *)(intptr_t)(-1))
-		printf("malloc_init()\n");
-	else if (ut->s == 0)
-		printf("free(%p)\n", ut->p);
-	else if (ut->p == NULL)
-		printf("%p = malloc(%zu)\n", ut->r, ut->s);
-	else
-		printf("%p = realloc(%p, %zu)\n", ut->r, ut->p, ut->s);
-}
-
-void
-ktruser(int len, unsigned char *p)
-{
-
-	if (len >= 8 && bcmp(p, "RTLD", 4) == 0) {
-		ktruser_rtld(len, p);
-		return;
-	}
-
-	if (len == sizeof(struct utrace_malloc)) {
-		ktruser_malloc(p);
 		return;
 	}
 
 	printf("%d ", len);
+	cp = p;
 	while (len--)
 		if (decimal)
-			printf(" %d", *p++);
+			printf(" %d", *cp++);
 		else
-			printf(" %02x", *p++);
+			printf(" %02x", *cp++);
 	printf("\n");
+}
+
+void
+ktrcaprights(cap_rights_t *rightsp)
+{
+
+	printf("cap_rights_t ");
+	sysdecode_cap_rights(stdout, rightsp);
+	printf("\n");
+}
+
+static void
+ktrtimeval(struct timeval *tv)
+{
+
+	printf("{%ld, %ld}", (long)tv->tv_sec, tv->tv_usec);
+}
+
+void
+ktritimerval(struct itimerval *it)
+{
+
+	printf("itimerval { .interval = ");
+	ktrtimeval(&it->it_interval);
+	printf(", .value = ");
+	ktrtimeval(&it->it_value);
+	printf(" }\n");
 }
 
 void
@@ -1427,9 +1771,10 @@ ktrsockaddr(struct sockaddr *sa)
 {
 /*
  TODO: Support additional address families
-	#include <netnatm/natm.h>
-	struct sockaddr_natm	*natm;
+	#include <netsmb/netbios.h>
+	struct sockaddr_nb	*nb;
 */
+	const char *str;
 	char addr[64];
 
 	/*
@@ -1438,7 +1783,11 @@ ktrsockaddr(struct sockaddr *sa)
 	 * sa->sa_len bytes long.
 	 */
 	printf("struct sockaddr { ");
-	sockfamilyname(sa->sa_family);
+	str = sysdecode_sockaddr_family(sa->sa_family);
+	if (str != NULL)
+		printf("%s", str);
+	else
+		printf("<invalid=%d>", sa->sa_family);
 	printf(", ");
 
 #define check_sockaddr_len(n)					\
@@ -1458,44 +1807,17 @@ ktrsockaddr(struct sockaddr *sa)
 		printf("%s:%u", addr, ntohs(sa_in.sin_port));
 		break;
 	}
-#ifdef NETATALK
-	case AF_APPLETALK: {
-		struct sockaddr_at	sa_at;
-		struct netrange		*nr;
-
-		memset(&sa_at, 0, sizeof(sa_at));
-		memcpy(&sa_at, sa, sa->sa_len);
-		check_sockaddr_len(at);
-		nr = &sa_at.sat_range.r_netrange;
-		printf("%d.%d, %d-%d, %d", ntohs(sa_at.sat_addr.s_net),
-			sa_at.sat_addr.s_node, ntohs(nr->nr_firstnet),
-			ntohs(nr->nr_lastnet), nr->nr_phase);
-		break;
-	}
-#endif
 	case AF_INET6: {
 		struct sockaddr_in6 sa_in6;
 
 		memset(&sa_in6, 0, sizeof(sa_in6));
 		memcpy(&sa_in6, sa, sa->sa_len);
 		check_sockaddr_len(in6);
-		inet_ntop(AF_INET6, &sa_in6.sin6_addr, addr, sizeof addr);
+		getnameinfo((struct sockaddr *)&sa_in6, sizeof(sa_in6),
+		    addr, sizeof(addr), NULL, 0, NI_NUMERICHOST);
 		printf("[%s]:%u", addr, htons(sa_in6.sin6_port));
 		break;
 	}
-#ifdef IPX
-	case AF_IPX: {
-		struct sockaddr_ipx sa_ipx;
-
-		memset(&sa_ipx, 0, sizeof(sa_ipx));
-		memcpy(&sa_ipx, sa, sa->sa_len);
-		check_sockaddr_len(ipx);
-		/* XXX wish we had ipx_ntop */
-		printf("%s", ipx_ntoa(sa_ipx.sipx_addr));
-		free(sa_ipx);
-		break;
-	}
-#endif
 	case AF_UNIX: {
 		struct sockaddr_un sa_un;
 
@@ -1523,15 +1845,40 @@ ktrstat(struct stat *statp)
 	 * buffer exactly sizeof(struct stat) bytes long.
 	 */
 	printf("struct stat {");
-	strmode(statp->st_mode, mode);
-	printf("dev=%ju, ino=%ju, mode=%s, nlink=%ju, ",
-		(uintmax_t)statp->st_dev, (uintmax_t)statp->st_ino, mode,
-		(uintmax_t)statp->st_nlink);
-	if (resolv == 0 || (pwd = getpwuid(statp->st_uid)) == NULL)
+	printf("dev=%ju, ino=%ju, ",
+		(uintmax_t)statp->st_dev, (uintmax_t)statp->st_ino);
+	if (resolv == 0)
+		printf("mode=0%jo, ", (uintmax_t)statp->st_mode);
+	else {
+		strmode(statp->st_mode, mode);
+		printf("mode=%s, ", mode);
+	}
+	printf("nlink=%ju, ", (uintmax_t)statp->st_nlink);
+	if (resolv == 0) {
+		pwd = NULL;
+	} else {
+#ifdef WITH_CASPER
+		if (cappwd != NULL)
+			pwd = cap_getpwuid(cappwd, statp->st_uid);
+		else
+#endif
+			pwd = getpwuid(statp->st_uid);
+	}
+	if (pwd == NULL)
 		printf("uid=%ju, ", (uintmax_t)statp->st_uid);
 	else
 		printf("uid=\"%s\", ", pwd->pw_name);
-	if (resolv == 0 || (grp = getgrgid(statp->st_gid)) == NULL)
+	if (resolv == 0) {
+		grp = NULL;
+	} else {
+#ifdef WITH_CASPER
+		if (capgrp != NULL)
+			grp = cap_getgrgid(capgrp, statp->st_gid);
+		else
+#endif
+			grp = getgrgid(statp->st_gid);
+	}
+	if (grp == NULL)
 		printf("gid=%ju, ", (uintmax_t)statp->st_gid);
 	else
 		printf("gid=\"%s\", ", grp->gr_name);
@@ -1548,7 +1895,7 @@ ktrstat(struct stat *statp)
 		printf(".%09ld, ", statp->st_atim.tv_nsec);
 	else
 		printf(", ");
-	printf("stime=");
+	printf("mtime=");
 	if (resolv == 0)
 		printf("%jd", (intmax_t)statp->st_mtim.tv_sec);
 	else {
@@ -1596,6 +1943,8 @@ ktrstruct(char *buf, size_t buflen)
 	char *name, *data;
 	size_t namelen, datalen;
 	int i;
+	cap_rights_t rights;
+	struct itimerval it;
 	struct stat sb;
 	struct sockaddr_storage ss;
 
@@ -1615,7 +1964,17 @@ ktrstruct(char *buf, size_t buflen)
 	for (i = 0; i < (int)namelen; ++i)
 		if (!isalpha(name[i]))
 			goto invalid;
-	if (strcmp(name, "stat") == 0) {
+	if (strcmp(name, "caprights") == 0) {
+		if (datalen != sizeof(cap_rights_t))
+			goto invalid;
+		memcpy(&rights, data, datalen);
+		ktrcaprights(&rights);
+	} else if (strcmp(name, "itimerval") == 0) {
+		if (datalen != sizeof(struct itimerval))
+			goto invalid;
+		memcpy(&it, data, datalen);
+		ktritimerval(&it);
+	} else if (strcmp(name, "stat") == 0) {
 		if (datalen != sizeof(struct stat))
 			goto invalid;
 		memcpy(&sb, data, datalen);
@@ -1642,16 +2001,16 @@ ktrcapfail(struct ktr_cap_fail *ktr)
 	case CAPFAIL_NOTCAPABLE:
 		/* operation on fd with insufficient capabilities */
 		printf("operation requires ");
-		capname((intmax_t)ktr->cap_needed);
-		printf(", process holds ");
-		capname((intmax_t)ktr->cap_held);
+		sysdecode_cap_rights(stdout, &ktr->cap_needed);
+		printf(", descriptor holds ");
+		sysdecode_cap_rights(stdout, &ktr->cap_held);
 		break;
 	case CAPFAIL_INCREASE:
 		/* requested more capabilities than fd already has */
 		printf("attempt to increase capabilities from ");
-		capname((intmax_t)ktr->cap_held);
+		sysdecode_cap_rights(stdout, &ktr->cap_held);
 		printf(" to ");
-		capname((intmax_t)ktr->cap_needed);
+		sysdecode_cap_rights(stdout, &ktr->cap_needed);
 		break;
 	case CAPFAIL_SYSCALL:
 		/* called restricted syscall */
@@ -1663,9 +2022,9 @@ ktrcapfail(struct ktr_cap_fail *ktr)
 		break;
 	default:
 		printf("unknown capability failure: ");
-		capname((intmax_t)ktr->cap_needed);
+		sysdecode_cap_rights(stdout, &ktr->cap_needed);
 		printf(" ");
-		capname((intmax_t)ktr->cap_held);
+		sysdecode_cap_rights(stdout, &ktr->cap_held);
 		break;
 	}
 	printf("\n");
@@ -1675,84 +2034,159 @@ void
 ktrfault(struct ktr_fault *ktr)
 {
 
-	printf("0x%jx ", ktr->vaddr);
-	vmprotname(ktr->type);
+	printf("0x%jx ", (uintmax_t)ktr->vaddr);
+	print_mask_arg(sysdecode_vmprot, ktr->type);
 	printf("\n");
 }
 
 void
 ktrfaultend(struct ktr_faultend *ktr)
 {
+	const char *str;
 
-	vmresultname(ktr->result);
+	str = sysdecode_vmresult(ktr->result);
+	if (str != NULL)
+		printf("%s", str);
+	else
+		printf("<invalid=%d>", ktr->result);
 	printf("\n");
 }
 
-#if defined(__amd64__) || defined(__i386__)
 void
-linux_ktrsyscall(struct ktr_syscall *ktr)
+ktrkevent(struct kevent *kev)
 {
-	int narg = ktr->ktr_narg;
-	register_t *ip;
 
-	if (ktr->ktr_code >= nlinux_syscalls || ktr->ktr_code < 0)
-		printf("[%d]", ktr->ktr_code);
-	else
-		printf("%s", linux_syscallnames[ktr->ktr_code]);
-	ip = &ktr->ktr_args[0];
-	if (narg) {
-		char c = '(';
-		while (narg > 0)
-			print_number(ip, narg, c);
-		putchar(')');
+	printf("{ ident=");
+	switch (kev->filter) {
+	case EVFILT_READ:
+	case EVFILT_WRITE:
+	case EVFILT_VNODE:
+	case EVFILT_PROC:
+	case EVFILT_TIMER:
+	case EVFILT_PROCDESC:
+	case EVFILT_EMPTY:
+		printf("%ju", (uintmax_t)kev->ident);
+		break;
+	case EVFILT_SIGNAL:
+		print_signal(kev->ident);
+		break;
+	default:
+		printf("%p", (void *)kev->ident);
 	}
-	putchar('\n');
+	printf(", filter=");
+	print_integer_arg(sysdecode_kevent_filter, kev->filter);
+	printf(", flags=");
+	print_mask_arg0(sysdecode_kevent_flags, kev->flags);
+	printf(", fflags=");
+	sysdecode_kevent_fflags(stdout, kev->filter, kev->fflags,
+	    decimal ? 10 : 16);
+	printf(", data=%#jx, udata=%p }", (uintmax_t)kev->data, kev->udata);
 }
 
 void
-linux_ktrsysret(struct ktr_sysret *ktr)
+ktrstructarray(struct ktr_struct_array *ksa, size_t buflen)
 {
-	register_t ret = ktr->ktr_retval;
-	int error = ktr->ktr_error;
-	int code = ktr->ktr_code;
+	struct kevent kev;
+	char *name, *data;
+	size_t namelen, datalen;
+	int i;
+	bool first;
 
-	if (code >= nlinux_syscalls || code < 0)
-		printf("[%d] ", code);
-	else
-		printf("%s ", linux_syscallnames[code]);
-
-	if (error == 0) {
-		if (fancy) {
-			printf("%ld", (long)ret);
-			if (ret < 0 || ret > 9)
-				printf("/%#lx", (unsigned long)ret);
-		} else {
-			if (decimal)
-				printf("%ld", (long)ret);
-			else
-				printf("%#lx", (unsigned long)ret);
-		}
-	} else if (error == ERESTART)
-		printf("RESTART");
-	else if (error == EJUSTRETURN)
-		printf("JUSTRETURN");
-	else {
-		if (ktr->ktr_error <= ELAST + 1)
-			error = abs(bsd_to_linux_errno[ktr->ktr_error]);
+	buflen -= sizeof(*ksa);
+	for (name = (char *)(ksa + 1), namelen = 0;
+	     namelen < buflen && name[namelen] != '\0';
+	     ++namelen)
+		/* nothing */;
+	if (namelen == buflen)
+		goto invalid;
+	if (name[namelen] != '\0')
+		goto invalid;
+	/* sanity check */
+	for (i = 0; i < (int)namelen; ++i)
+		if (!isalnum(name[i]) && name[i] != '_')
+			goto invalid;
+	data = name + namelen + 1;
+	datalen = buflen - namelen - 1;
+	printf("struct %s[] = { ", name);
+	first = true;
+	for (; datalen >= ksa->struct_size;
+	    data += ksa->struct_size, datalen -= ksa->struct_size) {
+		if (!first)
+			printf("\n             ");
 		else
-			error = 999;
-		printf("-1 errno %d", error);
-		if (fancy)
-			printf(" %s", strerror(ktr->ktr_error));
-	}
-	putchar('\n');
-}
+			first = false;
+		if (strcmp(name, "kevent") == 0) {
+			if (ksa->struct_size != sizeof(kev))
+				goto bad_size;
+			memcpy(&kev, data, sizeof(kev));
+			ktrkevent(&kev);
+		} else if (strcmp(name, "kevent_freebsd11") == 0) {
+			struct kevent_freebsd11 kev11;
+
+			if (ksa->struct_size != sizeof(kev11))
+				goto bad_size;
+			memcpy(&kev11, data, sizeof(kev11));
+			memset(&kev, 0, sizeof(kev));
+			kev.ident = kev11.ident;
+			kev.filter = kev11.filter;
+			kev.flags = kev11.flags;
+			kev.fflags = kev11.fflags;
+			kev.data = kev11.data;
+			kev.udata = kev11.udata;
+			ktrkevent(&kev);
+#ifdef _WANT_KEVENT32
+		} else if (strcmp(name, "kevent32") == 0) {
+			struct kevent32 kev32;
+
+			if (ksa->struct_size != sizeof(kev32))
+				goto bad_size;
+			memcpy(&kev32, data, sizeof(kev32));
+			memset(&kev, 0, sizeof(kev));
+			kev.ident = kev32.ident;
+			kev.filter = kev32.filter;
+			kev.flags = kev32.flags;
+			kev.fflags = kev32.fflags;
+#if BYTE_ORDER == BIG_ENDIAN
+			kev.data = kev32.data2 | ((int64_t)kev32.data1 << 32);
+#else
+			kev.data = kev32.data1 | ((int64_t)kev32.data2 << 32);
 #endif
+			kev.udata = (void *)(uintptr_t)kev32.udata;
+			ktrkevent(&kev);
+		} else if (strcmp(name, "kevent32_freebsd11") == 0) {
+			struct kevent32_freebsd11 kev32;
+
+			if (ksa->struct_size != sizeof(kev32))
+				goto bad_size;
+			memcpy(&kev32, data, sizeof(kev32));
+			memset(&kev, 0, sizeof(kev));
+			kev.ident = kev32.ident;
+			kev.filter = kev32.filter;
+			kev.flags = kev32.flags;
+			kev.fflags = kev32.fflags;
+			kev.data = kev32.data;
+			kev.udata = (void *)(uintptr_t)kev32.udata;
+			ktrkevent(&kev);
+#endif
+		} else {
+			printf("<unknown structure> }\n");
+			return;
+		}
+	}
+	printf(" }\n");
+	return;
+invalid:
+	printf("invalid record\n");
+	return;
+bad_size:
+	printf("<bad size> }\n");
+	return;
+}
 
 void
 usage(void)
 {
-	fprintf(stderr, "usage: kdump [-dEnlHRrsTA] [-f trfile] "
+	fprintf(stderr, "usage: kdump [-dEnlHRrSsTA] [-f trfile] "
 	    "[-m maxdata] [-p pid] [-t trstr]\n");
 	exit(1);
 }

@@ -1,6 +1,8 @@
 /*	$NetBSD: lance.c,v 1.34 2005/12/24 20:27:30 perry Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -16,13 +18,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the NetBSD
- *	Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -79,6 +74,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/endian.h>
 #include <sys/lock.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/mutex.h>
 #include <sys/socket.h>
@@ -86,6 +82,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
@@ -202,7 +199,7 @@ lance_attach(struct lance_softc *sc)
 	ether_ifattach(ifp, sc->sc_enaddr);
 
 	/* Claim 802.1q capability. */
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 	ifp->if_capabilities |= IFCAP_VLAN_MTU;
 	ifp->if_capenable |= IFCAP_VLAN_MTU;
 }
@@ -404,8 +401,7 @@ lance_get(struct lance_softc *sc, int boff, int totlen)
 
 	while (totlen > 0) {
 		if (totlen >= MINCLSIZE) {
-			MCLGET(m, M_NOWAIT);
-			if ((m->m_flags & M_EXT) == 0)
+			if (!(MCLGET(m, M_NOWAIT)))
 				goto bad;
 			len = MCLBYTES;
 		}
@@ -424,7 +420,7 @@ lance_get(struct lance_softc *sc, int boff, int totlen)
 		totlen -= len;
 		if (totlen > 0) {
 			MGET(newm, M_NOWAIT, MT_DATA);
-			if (newm == 0)
+			if (newm == NULL)
 				goto bad;
 			len = MLEN;
 			m = m->m_next = newm;
@@ -452,7 +448,7 @@ lance_watchdog(void *xsc)
 	}
 
 	if_printf(ifp, "device timeout\n");
-	++ifp->if_oerrors;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	lance_init_locked(sc);
 }
 
@@ -606,7 +602,7 @@ lance_setladrf(struct lance_softc *sc, uint16_t *af)
 
 	af[0] = af[1] = af[2] = af[3] = 0x0000;
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 

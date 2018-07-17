@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -41,6 +43,7 @@
 #include <sys/pcpu.h>
 #include <sys/lock.h>
 #include <sys/mutex.h>
+#include <sys/conf.h>
 
 #include <machine/stdarg.h>
 
@@ -96,9 +99,8 @@ static SYSCTL_NODE(_hw_ath, OID_AUTO, hal, CTLFLAG_RD, 0,
 
 #ifdef AH_DEBUG
 int ath_hal_debug = 0;
-SYSCTL_INT(_hw_ath_hal, OID_AUTO, debug, CTLFLAG_RW, &ath_hal_debug,
+SYSCTL_INT(_hw_ath_hal, OID_AUTO, debug, CTLFLAG_RWTUN, &ath_hal_debug,
     0, "Atheros HAL debugging printfs");
-TUNABLE_INT("hw.ath.hal.debug", &ath_hal_debug);
 #endif /* AH_DEBUG */
 
 static MALLOC_DEFINE(M_ATH_HAL, "ath_hal", "ath hal data");
@@ -137,6 +139,24 @@ ath_hal_ether_sprintf(const u_int8_t *mac)
 }
 
 #ifdef AH_DEBUG
+
+/*
+ * XXX This is highly relevant only for the AR5416 and later
+ * PCI/PCIe NICs.  It'll need adjustment for other hardware
+ * variations.
+ */
+static int
+ath_hal_reg_whilst_asleep(struct ath_hal *ah, uint32_t reg)
+{
+
+	if (reg >= 0x4000 && reg < 0x5000)
+		return (1);
+	if (reg >= 0x6000 && reg < 0x7000)
+		return (1);
+	if (reg >= 0x7000 && reg < 0x8000)
+		return (1);
+	return (0);
+}
 
 void
 DO_HALDEBUG(struct ath_hal *ah, u_int mask, const char* fmt, ...)
@@ -253,6 +273,15 @@ ath_hal_reg_write(struct ath_hal *ah, u_int32_t reg, u_int32_t val)
 	bus_space_tag_t tag = BUSTAG(ah);
 	bus_space_handle_t h = ah->ah_sh;
 
+#ifdef	AH_DEBUG
+	/* Debug - complain if we haven't fully waken things up */
+	if (! ath_hal_reg_whilst_asleep(ah, reg) &&
+	    ah->ah_powerMode != HAL_PM_AWAKE) {
+		ath_hal_printf(ah, "%s: reg=0x%08x, val=0x%08x, pm=%d\n",
+		    __func__, reg, val, ah->ah_powerMode);
+	}
+#endif
+
 	if (ath_hal_alq) {
 		struct ale *ale = ath_hal_alq_get(ah);
 		if (ale) {
@@ -267,6 +296,7 @@ ath_hal_reg_write(struct ath_hal *ah, u_int32_t reg, u_int32_t val)
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_lock_spin(&ah_regser_mtx);
 	bus_space_write_4(tag, h, reg, val);
+	OS_BUS_BARRIER_REG(ah, reg, OS_BUS_BARRIER_WRITE);
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_unlock_spin(&ah_regser_mtx);
 }
@@ -278,8 +308,18 @@ ath_hal_reg_read(struct ath_hal *ah, u_int32_t reg)
 	bus_space_handle_t h = ah->ah_sh;
 	u_int32_t val;
 
+#ifdef	AH_DEBUG
+	/* Debug - complain if we haven't fully waken things up */
+	if (! ath_hal_reg_whilst_asleep(ah, reg) &&
+	    ah->ah_powerMode != HAL_PM_AWAKE) {
+		ath_hal_printf(ah, "%s: reg=0x%08x, pm=%d\n",
+		    __func__, reg, ah->ah_powerMode);
+	}
+#endif
+
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_lock_spin(&ah_regser_mtx);
+	OS_BUS_BARRIER_REG(ah, reg, OS_BUS_BARRIER_READ);
 	val = bus_space_read_4(tag, h, reg);
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_unlock_spin(&ah_regser_mtx);
@@ -312,7 +352,8 @@ OS_MARK(struct ath_hal *ah, u_int id, u_int32_t v)
 		}
 	}
 }
-#elif defined(AH_DEBUG) || defined(AH_REGOPS_FUNC)
+#else /* AH_DEBUG_ALQ */
+
 /*
  * Memory-mapped device register read/write.  These are here
  * as routines when debugging support is enabled and/or when
@@ -330,9 +371,19 @@ ath_hal_reg_write(struct ath_hal *ah, u_int32_t reg, u_int32_t val)
 	bus_space_tag_t tag = BUSTAG(ah);
 	bus_space_handle_t h = ah->ah_sh;
 
+#ifdef	AH_DEBUG
+	/* Debug - complain if we haven't fully waken things up */
+	if (! ath_hal_reg_whilst_asleep(ah, reg) &&
+	    ah->ah_powerMode != HAL_PM_AWAKE) {
+		ath_hal_printf(ah, "%s: reg=0x%08x, val=0x%08x, pm=%d\n",
+		    __func__, reg, val, ah->ah_powerMode);
+	}
+#endif
+
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_lock_spin(&ah_regser_mtx);
 	bus_space_write_4(tag, h, reg, val);
+	OS_BUS_BARRIER_REG(ah, reg, OS_BUS_BARRIER_WRITE);
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_unlock_spin(&ah_regser_mtx);
 }
@@ -344,14 +395,24 @@ ath_hal_reg_read(struct ath_hal *ah, u_int32_t reg)
 	bus_space_handle_t h = ah->ah_sh;
 	u_int32_t val;
 
+#ifdef	AH_DEBUG
+	/* Debug - complain if we haven't fully waken things up */
+	if (! ath_hal_reg_whilst_asleep(ah, reg) &&
+	    ah->ah_powerMode != HAL_PM_AWAKE) {
+		ath_hal_printf(ah, "%s: reg=0x%08x, pm=%d\n",
+		    __func__, reg, ah->ah_powerMode);
+	}
+#endif
+
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_lock_spin(&ah_regser_mtx);
+	OS_BUS_BARRIER_REG(ah, reg, OS_BUS_BARRIER_READ);
 	val = bus_space_read_4(tag, h, reg);
 	if (ah->ah_config.ah_serialise_reg_war)
 		mtx_unlock_spin(&ah_regser_mtx);
 	return val;
 }
-#endif /* AH_DEBUG || AH_REGOPS_FUNC */
+#endif /* AH_DEBUG_ALQ */
 
 #ifdef AH_ASSERT
 void
@@ -362,3 +423,34 @@ ath_hal_assert_failed(const char* filename, int lineno, const char *msg)
 	panic("ath_hal_assert");
 }
 #endif /* AH_ASSERT */
+
+static int
+ath_hal_modevent(module_t mod __unused, int type, void *data __unused)
+{
+	int error = 0;
+
+	switch (type) {
+	case MOD_LOAD:
+		printf("[ath_hal] loaded\n");
+		break;
+
+	case MOD_UNLOAD:
+		printf("[ath_hal] unloaded\n");
+		break;
+
+	case MOD_SHUTDOWN:
+		break;
+
+	default:
+		error = EOPNOTSUPP;
+		break;
+
+	}
+	return (error);
+}
+
+DEV_MODULE(ath_hal, ath_hal_modevent, NULL);
+MODULE_VERSION(ath_hal, 1);
+#if	defined(AH_DEBUG_ALQ)
+MODULE_DEPEND(ath_hal, alq, 1, 1, 1);
+#endif

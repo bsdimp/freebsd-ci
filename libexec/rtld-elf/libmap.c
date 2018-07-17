@@ -16,15 +16,7 @@
 #include "debug.h"
 #include "rtld.h"
 #include "libmap.h"
-
-#ifndef _PATH_LIBMAP_CONF
-#define	_PATH_LIBMAP_CONF	"/etc/libmap.conf"
-#endif
-
-#ifdef COMPAT_32BIT
-#undef _PATH_LIBMAP_CONF
-#define	_PATH_LIBMAP_CONF	"/etc/libmap32.conf"
-#endif
+#include "paths.h"
 
 TAILQ_HEAD(lm_list, lm);
 struct lm {
@@ -44,6 +36,8 @@ struct lmp {
 static TAILQ_HEAD(lmc_list, lmc) lmc_head = TAILQ_HEAD_INITIALIZER(lmc_head);
 struct lmc {
 	char *path;
+	dev_t dev;
+	ino_t ino;
 	TAILQ_ENTRY(lmc) next;
 };
 
@@ -76,11 +70,11 @@ lm_init(char *libmap_override)
 	dbg("lm_init(\"%s\")", libmap_override);
 	TAILQ_INIT(&lmp_head);
 
-	lmc_parse_file(_PATH_LIBMAP_CONF);
+	lmc_parse_file(ld_path_libmap_conf);
 
 	if (libmap_override) {
 		/*
-		 * Do some character replacement to make $LIBMAP look
+		 * Do some character replacement to make $LDLIBMAP look
 		 * like a text file, then parse it.
 		 */
 		libmap_override = xstrdup(libmap_override);
@@ -94,8 +88,8 @@ lm_init(char *libmap_override)
 				break;
 			}
 		}
-		lmc_parse(p, strlen(p));
-		free(p);
+		lmc_parse(libmap_override, p - libmap_override);
+		free(libmap_override);
 	}
 
 	return (lm_count == 0);
@@ -106,49 +100,52 @@ lmc_parse_file(char *path)
 {
 	struct lmc *p;
 	struct stat st;
+	ssize_t retval;
 	int fd;
-	char *rpath;
 	char *lm_map;
 
-	rpath = realpath(path, NULL);
-	if (rpath == NULL)
-		return;
-
 	TAILQ_FOREACH(p, &lmc_head, next) {
-		if (strcmp(p->path, rpath) == 0) {
-			free(rpath);
+		if (strcmp(p->path, path) == 0)
 			return;
-		}
 	}
 
-	fd = open(rpath, O_RDONLY | O_CLOEXEC);
+	fd = open(path, O_RDONLY | O_CLOEXEC);
 	if (fd == -1) {
-		dbg("lm_parse_file: open(\"%s\") failed, %s", rpath,
+		dbg("lm_parse_file: open(\"%s\") failed, %s", path,
 		    rtld_strerror(errno));
-		free(rpath);
 		return;
 	}
 	if (fstat(fd, &st) == -1) {
 		close(fd);
-		dbg("lm_parse_file: fstat(\"%s\") failed, %s", rpath,
+		dbg("lm_parse_file: fstat(\"%s\") failed, %s", path,
 		    rtld_strerror(errno));
-		free(rpath);
 		return;
 	}
-	lm_map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-	if (lm_map == (const char *)MAP_FAILED) {
+
+	TAILQ_FOREACH(p, &lmc_head, next) {
+		if (p->dev == st.st_dev && p->ino == st.st_ino) {
+			close(fd);
+			return;
+		}
+	}
+
+	lm_map = xmalloc(st.st_size);
+	retval = read(fd, lm_map, st.st_size);
+	if (retval != st.st_size) {
 		close(fd);
-		dbg("lm_parse_file: mmap(\"%s\") failed, %s", rpath,
+		free(lm_map);
+		dbg("lm_parse_file: read(\"%s\") failed, %s", path,
 		    rtld_strerror(errno));
-		free(rpath);
 		return;
 	}
 	close(fd);
 	p = xmalloc(sizeof(struct lmc));
-	p->path = rpath;
+	p->path = xstrdup(path);
+	p->dev = st.st_dev;
+	p->ino = st.st_ino;
 	TAILQ_INSERT_HEAD(&lmc_head, p, next);
 	lmc_parse(lm_map, st.st_size);
-	munmap(lm_map, st.st_size);
+	free(lm_map);
 }
 
 static void
@@ -159,26 +156,19 @@ lmc_parse_dir(char *idir)
 	struct lmc *p;
 	char conffile[MAXPATHLEN];
 	char *ext;
-	char *rpath;
-
-	rpath = realpath(idir, NULL);
-	if (rpath == NULL)
-		return;
 
 	TAILQ_FOREACH(p, &lmc_head, next) {
-		if (strcmp(p->path, rpath) == 0) {
-			free(rpath);
+		if (strcmp(p->path, idir) == 0)
 			return;
-		}
 	}
 	d = opendir(idir);
-	if (d == NULL) {
-		free(rpath);
+	if (d == NULL)
 		return;
-	}
 
 	p = xmalloc(sizeof(struct lmc));
-	p->path = rpath;
+	p->path = xstrdup(idir);
+	p->dev = NODEV;
+	p->ino = 0;
 	TAILQ_INSERT_HEAD(&lmc_head, p, next);
 
 	while ((dp = readdir(d)) != NULL) {
@@ -216,14 +206,14 @@ lmc_parse(char *lm_p, size_t lm_len)
 	p = NULL;
 	while (cnt < lm_len) {
 		i = 0;
-		while (lm_p[cnt] != '\n' && cnt < lm_len &&
+		while (cnt < lm_len && lm_p[cnt] != '\n' &&
 		    i < sizeof(line) - 1) {
 			line[i] = lm_p[cnt];
 			cnt++;
 			i++;
 		}
 		line[i] = '\0';
-		while (lm_p[cnt] != '\n' && cnt < lm_len)
+		while (cnt < lm_len && lm_p[cnt] != '\n')
 			cnt++;
 		/* skip over nl */
 		cnt++;
@@ -396,7 +386,6 @@ lm_find (const char *p, const char *f)
 
 /* Given a libmap translation list and a library name, return the
    replacement library, or NULL */
-#ifdef COMPAT_32BIT
 char *
 lm_findn (const char *p, const char *f, const int n)
 {
@@ -413,7 +402,6 @@ lm_findn (const char *p, const char *f, const int n)
 		free(s);
 	return (t);
 }
-#endif
 
 static char *
 lml_find (struct lm_list *lmh, const char *f)

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -38,16 +40,27 @@
 #ifndef _FS_EXT2FS_INODE_H_
 #define	_FS_EXT2FS_INODE_H_
 
+#include <sys/param.h>
 #include <sys/lock.h>
+#include <sys/mutex.h>
 #include <sys/queue.h>
 
-#define	NDADDR	12			/* Direct addresses in inode. */
-#define	NIADDR	3			/* Indirect addresses in inode. */
+#include <fs/ext2fs/ext2_extents.h>
 
 /*
  * This must agree with the definition in <ufs/ufs/dir.h>.
  */
 #define	doff_t		int32_t
+
+#define	EXT2_NDADDR	12		/* Direct addresses in inode. */
+#define	EXT2_NIADDR	3		/* Indirect addresses in inode. */
+
+/*
+ * The size of physical and logical block numbers in EXT2FS.
+ */
+typedef uint32_t e2fs_daddr_t;
+typedef int64_t e2fs_lbn_t;
+typedef int64_t e4fs_daddr_t;
 
 /*
  * The inode is used to describe each active (or recently active) file in the
@@ -80,8 +93,11 @@ struct inode {
 
 	/* Fields from struct dinode in UFS. */
 	uint16_t	i_mode;		/* IFMT, permissions; see below. */
-	int16_t		i_nlink;	/* File link count. */
+	int32_t		i_nlink;	/* File link count. */
+	uint32_t	i_uid;		/* File owner. */
+	uint32_t	i_gid;		/* File group. */
 	uint64_t	i_size;		/* File byte count. */
+	uint64_t	i_blocks;	/* Blocks actually held. */
 	int32_t		i_atime;	/* Last access time. */
 	int32_t		i_mtime;	/* Last modified time. */
 	int32_t		i_ctime;	/* Last inode change time. */
@@ -90,13 +106,18 @@ struct inode {
 	int32_t		i_atimensec;	/* Last access time. */
 	int32_t		i_ctimensec;	/* Last inode change time. */
 	int32_t		i_birthnsec;	/* Inode creation time. */
-	uint32_t	i_db[NDADDR];	/* Direct disk blocks. */
-	uint32_t	i_ib[NIADDR];	/* Indirect disk blocks. */
-	uint32_t	i_flags;	/* Status flags (chflags). */
-	uint32_t	i_blocks;	/* Blocks actually held. */
 	uint32_t	i_gen;		/* Generation number. */
-	uint32_t	i_uid;		/* File owner. */
-	uint32_t	i_gid;		/* File group. */
+	uint64_t	i_facl;		/* EA block number. */
+	uint32_t	i_flags;	/* Status flags (chflags). */
+	union {
+		struct {
+			uint32_t i_db[EXT2_NDADDR]; /* Direct disk blocks. */
+			uint32_t i_ib[EXT2_NIADDR]; /* Indirect disk blocks. */
+		};
+		uint32_t i_data[EXT2_NDADDR + EXT2_NIADDR];
+	};
+
+	struct ext4_extent_cache i_ext_cache; /* cache for ext4 extent */
 };
 
 /*
@@ -137,8 +158,15 @@ struct inode {
 #define	IN_HASHED	0x0020		/* Inode is on hash list */
 #define	IN_LAZYMOD	0x0040		/* Modified, but don't write yet. */
 #define	IN_SPACECOUNTED	0x0080		/* Blocks to be freed in free count. */
-#define IN_LAZYACCESS   0x0100		/* Process IN_ACCESS after the
+#define	IN_LAZYACCESS   0x0100		/* Process IN_ACCESS after the
 					    suspension finished */
+
+/*
+ * These are translation flags for some attributes that Ext4
+ * passes as inode flags but that we cannot pass directly.
+ */
+#define	IN_E3INDEX	0x010000
+#define	IN_E4EXTENTS	0x020000
 
 #define i_devvp i_ump->um_devvp
 
@@ -148,7 +176,7 @@ struct inode {
  * ext2_getlbns and used by truncate and bmap code.
  */
 struct indir {
-	int32_t in_lbn;			/* Logical block number. */
+	e2fs_lbn_t in_lbn;		/* Logical block number. */
 	int	in_off;			/* Offset in buffer. */
 };
 
@@ -158,11 +186,11 @@ struct indir {
 
 /* This overlays the fid structure (see mount.h). */
 struct ufid {
-	uint16_t ufid_len;	/* Length of structure. */
-	uint16_t ufid_pad;	/* Force 32-bit alignment. */
-	ino_t	 ufid_ino;	/* File number (ino). */
-	uint32_t ufid_gen;	/* Generation number. */
+	uint16_t ufid_len;		/* Length of structure. */
+	uint16_t ufid_pad;		/* Force 32-bit alignment. */
+	ino_t	ufid_ino;		/* File number (ino). */
+	uint32_t ufid_gen;		/* Generation number. */
 };
-#endif /* _KERNEL */
+#endif	/* _KERNEL */
 
-#endif /* !_FS_EXT2FS_INODE_H_ */
+#endif	/* !_FS_EXT2FS_INODE_H_ */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 Michael Smith
  * All rights reserved.
  *
@@ -160,6 +162,9 @@ preload_search_info(caddr_t mod, int inf)
     uint32_t	type = 0;
     int		next;
 
+    if (mod == NULL)
+    	return (NULL);
+
     curp = mod;
     for (;;) {
 	hdr = (uint32_t *)curp;
@@ -253,7 +258,7 @@ preload_fetch_size(caddr_t mod)
 	return (*mdp);
 }
 
-/* Called from locore on i386.  Convert physical pointers to kvm. Sigh. */
+/* Called from locore.  Convert physical pointers to kvm. Sigh. */
 void
 preload_bootstrap_relocate(vm_offset_t offset)
 {

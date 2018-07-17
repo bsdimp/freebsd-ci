@@ -47,6 +47,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
@@ -73,7 +74,7 @@
 
 MODULE_VERSION(ng_ether, 1);
 
-#define IFP2NG(ifp)  (IFP2AC((ifp))->ac_netgraph)
+#define IFP2NG(ifp)  ((ifp)->if_l2com)
 
 /* Per-node private data */
 struct private {
@@ -533,7 +534,6 @@ ng_ether_rcvmsg(node_p node, item_p item, hook_p lasthook)
 			}
 			error = if_setlladdr(priv->ifp,
 			    (u_char *)msg->data, ETHER_ADDR_LEN);
-			EVENTHANDLER_INVOKE(iflladdr_event, priv->ifp);
 			break;
 		    }
 		case NGM_ETHER_GET_PROMISC:
@@ -754,7 +754,7 @@ ng_ether_shutdown(node_p node)
 	if (node->nd_flags & NGF_REALLY_DIE) {
 		/*
 		 * WE came here because the ethernet card is being unloaded,
-		 * so stop being persistant.
+		 * so stop being persistent.
 		 * Actually undo all the things we did on creation.
 		 * Assume the ifp has already been freed.
 		 */
@@ -868,7 +868,7 @@ vnet_ng_ether_init(const void *unused)
 
 	/* Create nodes for any already-existing Ethernet interfaces. */
 	IFNET_RLOCK();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		if (ifp->if_type == IFT_ETHER
 		    || ifp->if_type == IFT_L2VLAN)
 			ng_ether_attach(ifp);

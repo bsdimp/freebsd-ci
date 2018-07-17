@@ -11,32 +11,64 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/Transforms/IPO.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/IR/Constants.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
+#include "llvm/Transforms/IPO.h"
 #include <algorithm>
 using namespace llvm;
 
+/// Make sure GV is visible from both modules. Delete is true if it is
+/// being deleted from this module.
+/// This also makes sure GV cannot be dropped so that references from
+/// the split module remain valid.
+static void makeVisible(GlobalValue &GV, bool Delete) {
+  bool Local = GV.hasLocalLinkage();
+  if (Local || Delete) {
+    GV.setLinkage(GlobalValue::ExternalLinkage);
+    if (Local)
+      GV.setVisibility(GlobalValue::HiddenVisibility);
+    return;
+  }
+
+  if (!GV.hasLinkOnceLinkage()) {
+    assert(!GV.isDiscardableIfUnused());
+    return;
+  }
+
+  // Map linkonce* to weak* so that llvm doesn't drop this GV.
+  switch(GV.getLinkage()) {
+  default:
+    llvm_unreachable("Unexpected linkage");
+  case GlobalValue::LinkOnceAnyLinkage:
+    GV.setLinkage(GlobalValue::WeakAnyLinkage);
+    return;
+  case GlobalValue::LinkOnceODRLinkage:
+    GV.setLinkage(GlobalValue::WeakODRLinkage);
+    return;
+  }
+}
+
 namespace {
-  /// @brief A pass to extract specific functions and their dependencies.
+  /// @brief A pass to extract specific global values and their dependencies.
   class GVExtractorPass : public ModulePass {
     SetVector<GlobalValue *> Named;
     bool deleteStuff;
   public:
     static char ID; // Pass identification, replacement for typeid
 
-    /// FunctionExtractorPass - If deleteFn is true, this pass deletes as the
-    /// specified function. Otherwise, it deletes as much of the module as
-    /// possible, except for the function specified.
-    ///
-    explicit GVExtractorPass(std::vector<GlobalValue*>& GVs, bool deleteS = true)
+    /// If deleteS is true, this pass deletes the specified global values.
+    /// Otherwise, it deletes as much of the module as possible, except for the
+    /// global values specified.
+    explicit GVExtractorPass(std::vector<GlobalValue*> &GVs,
+                             bool deleteS = true)
       : ModulePass(ID), Named(GVs.begin(), GVs.end()), deleteStuff(deleteS) {}
 
-    bool runOnModule(Module &M) {
+    bool runOnModule(Module &M) override {
+      if (skipModule(M))
+        return false;
+
       // Visit the global inline asm.
       if (!deleteStuff)
         M.setModuleInlineAsm("");
@@ -52,7 +84,7 @@ namespace {
       for (Module::global_iterator I = M.global_begin(), E = M.global_end();
            I != E; ++I) {
         bool Delete =
-          deleteStuff == (bool)Named.count(I) && !I->isDeclaration();
+            deleteStuff == (bool)Named.count(&*I) && !I->isDeclaration();
         if (!Delete) {
           if (I->hasAvailableExternallyLinkage())
             continue;
@@ -60,35 +92,31 @@ namespace {
             continue;
         }
 
-        bool Local = I->isDiscardableIfUnused();
-        if (Local)
-          I->setVisibility(GlobalValue::HiddenVisibility);
+        makeVisible(*I, Delete);
 
-        if (Local || Delete)
-          I->setLinkage(GlobalValue::ExternalLinkage);
-
-        if (Delete)
-          I->setInitializer(0);
+        if (Delete) {
+          // Make this a declaration and drop it's comdat.
+          I->setInitializer(nullptr);
+          I->setComdat(nullptr);
+        }
       }
 
       // Visit the Functions.
-      for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I) {
+      for (Function &F : M) {
         bool Delete =
-          deleteStuff == (bool)Named.count(I) && !I->isDeclaration();
+            deleteStuff == (bool)Named.count(&F) && !F.isDeclaration();
         if (!Delete) {
-          if (I->hasAvailableExternallyLinkage())
+          if (F.hasAvailableExternallyLinkage())
             continue;
         }
 
-        bool Local = I->isDiscardableIfUnused();
-        if (Local)
-          I->setVisibility(GlobalValue::HiddenVisibility);
+        makeVisible(F, Delete);
 
-        if (Local || Delete)
-          I->setLinkage(GlobalValue::ExternalLinkage);
-
-        if (Delete)
-          I->deleteBody();
+        if (Delete) {
+          // Make this a declaration and drop it's comdat.
+          F.deleteBody();
+          F.setComdat(nullptr);
+        }
       }
 
       // Visit the Aliases.
@@ -97,13 +125,11 @@ namespace {
         Module::alias_iterator CurI = I;
         ++I;
 
-        if (CurI->isDiscardableIfUnused()) {
-          CurI->setVisibility(GlobalValue::HiddenVisibility);
-          CurI->setLinkage(GlobalValue::ExternalLinkage);
-        }
+        bool Delete = deleteStuff == (bool)Named.count(&*CurI);
+        makeVisible(*CurI, Delete);
 
-        if (deleteStuff == (bool)Named.count(CurI)) {
-          Type *Ty =  CurI->getType()->getElementType();
+        if (Delete) {
+          Type *Ty =  CurI->getValueType();
 
           CurI->removeFromParent();
           llvm::Value *Declaration;
@@ -114,11 +140,11 @@ namespace {
           } else {
             Declaration =
               new GlobalVariable(M, Ty, false, GlobalValue::ExternalLinkage,
-                                 0, CurI->getName());
+                                 nullptr, CurI->getName());
 
           }
           CurI->replaceAllUsesWith(Declaration);
-          delete CurI;
+          delete &*CurI;
         }
       }
 
@@ -129,7 +155,7 @@ namespace {
   char GVExtractorPass::ID = 0;
 }
 
-ModulePass *llvm::createGVExtractionPass(std::vector<GlobalValue*>& GVs, 
+ModulePass *llvm::createGVExtractionPass(std::vector<GlobalValue *> &GVs,
                                          bool deleteFn) {
   return new GVExtractorPass(GVs, deleteFn);
 }

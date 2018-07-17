@@ -7,10 +7,34 @@
 //
 //===----------------------------------------------------------------------===//
 
-def HasDSP : Predicate<"Subtarget.hasDSP()">,
+class DspMMRel;
+
+def Dsp2MicroMips : InstrMapping {
+  let FilterClass = "DspMMRel";
+  // Instructions with the same BaseOpcode and isNVStore values form a row.
+  let RowFields = ["BaseOpcode"];
+  // Instructions with the same predicate sense form a column.
+  let ColFields = ["Arch"];
+  // The key column is the unpredicated instructions.
+  let KeyCol = ["dsp"];
+  // Value columns are PredSense=true and PredSense=false
+  let ValueCols = [["dsp"], ["mmdsp"]];
+}
+
+def HasDSP : Predicate<"Subtarget->hasDSP()">,
              AssemblerPredicate<"FeatureDSP">;
-def HasDSPR2 : Predicate<"Subtarget.hasDSPR2()">,
+def HasDSPR2 : Predicate<"Subtarget->hasDSPR2()">,
                AssemblerPredicate<"FeatureDSPR2">;
+def HasDSPR3 : Predicate<"Subtarget->hasDSPR3()">,
+               AssemblerPredicate<"FeatureDSPR3">;
+
+class ISA_DSPR2 {
+  list<Predicate> InsnPredicates = [HasDSPR2];
+}
+
+class ISA_DSPR3 {
+  list<Predicate> InsnPredicates = [HasDSPR3];
+}
 
 // Fields.
 class Field6<bits<6> val> {
@@ -20,14 +44,22 @@ class Field6<bits<6> val> {
 def SPECIAL3_OPCODE : Field6<0b011111>;
 def REGIMM_OPCODE : Field6<0b000001>;
 
-class DSPInst : MipsInst<(outs), (ins), "", [], NoItinerary, FrmOther> {
-  let Predicates = [HasDSP];
+class DSPInst<string opstr = "">
+    : MipsInst<(outs), (ins), "", [], NoItinerary, FrmOther>, PredicateControl {
+  let InsnPredicates = [HasDSP];
+  string BaseOpcode = opstr;
+  string Arch = "dsp";
 }
 
 class PseudoDSP<dag outs, dag ins, list<dag> pattern,
-                InstrItinClass itin = IIPseudo>:
-  MipsPseudo<outs, ins, pattern, itin> {
-  let Predicates = [HasDSP];
+                InstrItinClass itin = IIPseudo>
+    : MipsPseudo<outs, ins, pattern, itin> {
+  let InsnPredicates = [HasDSP];
+}
+
+class DSPInstAlias<string Asm, dag Result, bit Emit = 0b1>
+    : InstAlias<Asm, Result, Emit>, PredicateControl {
+  let InsnPredicates = [HasDSP];
 }
 
 // ADDU.QB sub-class format.
@@ -216,6 +248,33 @@ class MULT_FMT<bits<6> opcode, bits<6> funct> : DSPInst {
   let Inst{15-13} = 0;
   let Inst{12-11} = ac;
   let Inst{10-6}  = 0;
+  let Inst{5-0} = funct;
+}
+
+// MFHI sub-class format.
+class MFHI_FMT<bits<6> funct> : DSPInst {
+  bits<5> rd;
+  bits<2> ac;
+
+  let Inst{31-26} = 0;
+  let Inst{25-23} = 0;
+  let Inst{22-21} = ac;
+  let Inst{20-16} = 0;
+  let Inst{15-11} = rd;
+  let Inst{10-6} = 0;
+  let Inst{5-0} = funct;
+}
+
+// MTHI sub-class format.
+class MTHI_FMT<bits<6> funct> : DSPInst {
+  bits<5> rs;
+  bits<2> ac;
+
+  let Inst{31-26} = 0;
+  let Inst{25-21} = rs;
+  let Inst{20-13} = 0;
+  let Inst{12-11} = ac;
+  let Inst{10-6} = 0;
   let Inst{5-0} = funct;
 }
 

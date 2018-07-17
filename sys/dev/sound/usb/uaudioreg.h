@@ -2,6 +2,8 @@
 /* $FreeBSD$ */
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 1999 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -117,6 +119,13 @@ struct usb_audio_streaming_endpoint_descriptor {
 #define	UA_SED_MAXPACKETSONLY	0x80
 	uByte	bLockDelayUnits;
 	uWord	wLockDelay;
+} __packed;
+
+struct usb_midi_streaming_endpoint_descriptor {
+	uByte	bLength;
+	uByte	bDescriptorType;
+	uByte	bDescriptorSubtype;
+	uByte	bNumEmbMIDIJack;
 } __packed;
 
 struct usb_audio_streaming_type1_descriptor {
@@ -378,6 +387,7 @@ struct usb_audio_extension_unit_1 {
 
 #define	MASTER_CHAN	0
 
+#define	MS_GENERAL	1
 #define	AS_GENERAL	1
 #define	FORMAT_TYPE	2
 #define	FORMAT_SPECIFIC 3

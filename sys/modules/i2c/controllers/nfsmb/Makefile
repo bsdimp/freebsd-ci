@@ -1,6 +1,6 @@
 # $FreeBSD$
 
-.PATH: ${.CURDIR}/../../../../pci
+.PATH: ${SRCTOP}/sys/dev/nfsmb
 
 KMOD=	nfsmb
 SRCS=	nfsmb.c

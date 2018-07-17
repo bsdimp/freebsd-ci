@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2001 Wind River Systems
  * Copyright (c) 1997, 1998, 1999, 2000, 2001
  *	Bill Paul <william.paul@windriver.com>.  All rights reserved.
@@ -79,6 +81,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
@@ -122,7 +125,7 @@ static int lge_detach(device_t);
 static int lge_alloc_jumbo_mem(struct lge_softc *);
 static void lge_free_jumbo_mem(struct lge_softc *);
 static void *lge_jalloc(struct lge_softc *);
-static void lge_jfree(void *, void *);
+static void lge_jfree(struct mbuf *);
 
 static int lge_newbuf(struct lge_softc *, struct lge_rx_desc *, struct mbuf *);
 static int lge_encap(struct lge_softc *, struct mbuf *, u_int32_t *);
@@ -215,7 +218,7 @@ lge_eeprom_getword(sc, addr, dest)
 	int			addr;
 	u_int16_t		*dest;
 {
-	register int		i;
+	int			i;
 	u_int32_t		val;
 
 	CSR_WRITE_4(sc, LGE_EECTL, LGE_EECTL_CMD_READ|
@@ -390,7 +393,7 @@ lge_setmulti(sc)
 
 	/* now program new ones */
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		h = ether_crc32_be(LLADDR((struct sockaddr_dl *)
@@ -412,7 +415,7 @@ static void
 lge_reset(sc)
 	struct lge_softc	*sc;
 {
-	register int		i;
+	int			i;
 
 	LGE_SETBIT(sc, LGE_MODE1, LGE_MODE1_SETRST_CTL0|LGE_MODE1_SOFTRST);
 
@@ -688,7 +691,7 @@ lge_newbuf(sc, c, m)
 	struct mbuf		*m;
 {
 	struct mbuf		*m_new = NULL;
-	caddr_t			*buf = NULL;
+	char			*buf = NULL;
 
 	if (m == NULL) {
 		MGETHDR(m_new, M_NOWAIT, MT_DATA);
@@ -709,10 +712,9 @@ lge_newbuf(sc, c, m)
 			return(ENOBUFS);
 		}
 		/* Attach the buffer to the mbuf */
-		m_new->m_data = (void *)buf;
 		m_new->m_len = m_new->m_pkthdr.len = LGE_JUMBO_FRAMELEN;
-		MEXTADD(m_new, buf, LGE_JUMBO_FRAMELEN, lge_jfree,
-		    buf, (struct lge_softc *)sc, 0, EXT_NET_DRV);
+		m_extadd(m_new, buf, LGE_JUMBO_FRAMELEN, lge_jfree, sc, NULL,
+		    0, EXT_NET_DRV);
 	} else {
 		m_new = m;
 		m_new->m_len = m_new->m_pkthdr.len = LGE_JUMBO_FRAMELEN;
@@ -755,7 +757,7 @@ lge_alloc_jumbo_mem(sc)
 	struct lge_softc	*sc;
 {
 	caddr_t			ptr;
-	register int		i;
+	int			i;
 	struct lge_jpool_entry   *entry;
 
 	/* Grab a big chunk o' storage. */
@@ -847,22 +849,20 @@ lge_jalloc(sc)
  * Release a jumbo buffer.
  */
 static void
-lge_jfree(buf, args)
-	void			*buf;
-	void			*args;
+lge_jfree(struct mbuf *m)
 {
 	struct lge_softc	*sc;
 	int		        i;
 	struct lge_jpool_entry   *entry;
 
 	/* Extract the softc struct pointer. */
-	sc = args;
+	sc = m->m_ext.ext_arg1;
 
 	if (sc == NULL)
 		panic("lge_jfree: can't find softc pointer!");
 
 	/* calculate the slot this buffer belongs to */
-	i = ((vm_offset_t)buf
+	i = ((vm_offset_t)m->m_ext.ext_buf
 	     - (vm_offset_t)sc->lge_cdata.lge_jumbo_buf) / LGE_JLEN;
 
 	if ((i < 0) || (i >= LGE_JSLOTS))
@@ -874,8 +874,6 @@ lge_jfree(buf, args)
 	entry->slot = i;
 	SLIST_REMOVE_HEAD(&sc->lge_jinuse_listhead, jpool_entries);
 	SLIST_INSERT_HEAD(&sc->lge_jfree_listhead, entry, jpool_entries);
-
-	return;
 }
 
 /*
@@ -919,7 +917,7 @@ lge_rxeof(sc, cnt)
 	 	 * comes up in the ring.
 		 */
 		if (rxctl & LGE_RXCTL_ERRMASK) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			lge_newbuf(sc, &LGE_RXTAIL(sc), m);
 			continue;
 		}
@@ -931,7 +929,7 @@ lge_rxeof(sc, cnt)
 			if (m0 == NULL) {
 				device_printf(sc->lge_dev, "no receive buffers "
 				    "available -- packet dropped!\n");
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				continue;
 			}
 			m = m0;
@@ -940,7 +938,7 @@ lge_rxeof(sc, cnt)
 			m->m_pkthdr.len = m->m_len = total_len;
 		}
 
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 		/* Do IP checksum checking. */
 		if (rxsts & LGE_RXSTS_ISIP)
@@ -1006,7 +1004,7 @@ lge_txeof(sc)
 	while (idx != sc->lge_cdata.lge_tx_prod && txdone) {
 		cur_tx = &sc->lge_ldata->lge_tx_list[idx];
 
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		if (cur_tx->lge_mbuf != NULL) {
 			m_freem(cur_tx->lge_mbuf);
 			cur_tx->lge_mbuf = NULL;
@@ -1039,9 +1037,9 @@ lge_tick(xsc)
 	LGE_LOCK_ASSERT(sc);
 
 	CSR_WRITE_4(sc, LGE_STATSIDX, LGE_STATS_SINGLE_COLL_PKTS);
-	ifp->if_collisions += CSR_READ_4(sc, LGE_STATSVAL);
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, CSR_READ_4(sc, LGE_STATSVAL));
 	CSR_WRITE_4(sc, LGE_STATSIDX, LGE_STATS_MULTI_COLL_PKTS);
-	ifp->if_collisions += CSR_READ_4(sc, LGE_STATSVAL);
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, CSR_READ_4(sc, LGE_STATSVAL));
 
 	if (!sc->lge_link) {
 		mii = device_get_softc(sc->lge_miibus);
@@ -1077,7 +1075,7 @@ lge_intr(arg)
 	ifp = sc->lge_ifp;
 	LGE_LOCK(sc);
 
-	/* Supress unwanted interrupts */
+	/* Suppress unwanted interrupts */
 	if (!(ifp->if_flags & IFF_UP)) {
 		lge_stop(sc);
 		LGE_UNLOCK(sc);
@@ -1507,7 +1505,7 @@ lge_watchdog(sc)
 	LGE_LOCK_ASSERT(sc);
 	ifp = sc->lge_ifp;
 
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	if_printf(ifp, "watchdog timeout\n");
 
 	lge_stop(sc);
@@ -1527,7 +1525,7 @@ static void
 lge_stop(sc)
 	struct lge_softc	*sc;
 {
-	register int		i;
+	int			i;
 	struct ifnet		*ifp;
 
 	LGE_LOCK_ASSERT(sc);

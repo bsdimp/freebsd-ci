@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
  *
@@ -280,7 +282,7 @@ smbfs_getattr(ap)
 	smbfs_attr_cachelookup(vp, va);
 	if (np->n_flag & NOPEN)
 		np->n_size = oldsize;
-		smbfs_free_scred(scred);
+	smbfs_free_scred(scred);
 	return 0;
 }
 
@@ -305,16 +307,30 @@ smbfs_setattr(ap)
 	int old_n_dosattr;
 
 	SMBVDEBUG("\n");
-	if (vap->va_flags != VNOVAL)
-		return EOPNOTSUPP;
 	isreadonly = (vp->v_mount->mnt_flag & MNT_RDONLY);
 	/*
 	 * Disallow write attempts if the filesystem is mounted read-only.
 	 */
   	if ((vap->va_uid != (uid_t)VNOVAL || vap->va_gid != (gid_t)VNOVAL || 
 	     vap->va_atime.tv_sec != VNOVAL || vap->va_mtime.tv_sec != VNOVAL ||
-	     vap->va_mode != (mode_t)VNOVAL) && isreadonly)
+	     vap->va_mode != (mode_t)VNOVAL || vap->va_flags != VNOVAL) &&
+	     isreadonly)
 		return EROFS;
+
+	/*
+	 * We only support setting four flags.  Don't allow setting others.
+	 *
+	 * We map UF_READONLY to SMB_FA_RDONLY, unlike the MacOS X version
+	 * of this code, which maps both UF_IMMUTABLE AND SF_IMMUTABLE to
+	 * SMB_FA_RDONLY.  The immutable flags have different semantics
+	 * than readonly, which is the reason for the difference.
+	 */
+	if (vap->va_flags != VNOVAL) {
+		if (vap->va_flags & ~(UF_HIDDEN|UF_SYSTEM|UF_ARCHIVE|
+				      UF_READONLY))
+			return EINVAL;
+	}
+
 	scred = smbfs_malloc_scred();
 	smb_makescred(scred, td, ap->a_cred);
 	if (vap->va_size != VNOVAL) {
@@ -327,7 +343,7 @@ smbfs_setattr(ap)
  		    default:
 			error = EINVAL;
 			goto out;
-  		};
+  		}
 		if (isreadonly) {
 			error = EROFS;
 			goto out;
@@ -344,7 +360,8 @@ smbfs_setattr(ap)
 				doclose = 1;
 		}
 		if (error == 0)
-			error = smbfs_smb_setfsize(np, vap->va_size, scred);
+			error = smbfs_smb_setfsize(np,
+			    (int64_t)vap->va_size, scred);
 		if (doclose)
 			smbfs_smb_close(ssp, np->n_fid, NULL, scred);
 		if (error) {
@@ -353,12 +370,47 @@ smbfs_setattr(ap)
 			goto out;
 		}
   	}
-	if (vap->va_mode != (mode_t)VNOVAL) {
+	if ((vap->va_flags != VNOVAL) || (vap->va_mode != (mode_t)VNOVAL)) {
 		old_n_dosattr = np->n_dosattr;
-		if (vap->va_mode & S_IWUSR)
-			np->n_dosattr &= ~SMB_FA_RDONLY;
-		else
-			np->n_dosattr |= SMB_FA_RDONLY;
+
+		if (vap->va_mode != (mode_t)VNOVAL) {
+			if (vap->va_mode & S_IWUSR)
+				np->n_dosattr &= ~SMB_FA_RDONLY;
+			else
+				np->n_dosattr |= SMB_FA_RDONLY;
+		}
+
+		if (vap->va_flags != VNOVAL) {
+			if (vap->va_flags & UF_HIDDEN)
+				np->n_dosattr |= SMB_FA_HIDDEN;
+			else
+				np->n_dosattr &= ~SMB_FA_HIDDEN;
+
+			if (vap->va_flags & UF_SYSTEM)
+				np->n_dosattr |= SMB_FA_SYSTEM;
+			else
+				np->n_dosattr &= ~SMB_FA_SYSTEM;
+
+			if (vap->va_flags & UF_ARCHIVE)
+				np->n_dosattr |= SMB_FA_ARCHIVE;
+			else
+				np->n_dosattr &= ~SMB_FA_ARCHIVE;
+
+			/*
+			 * We only support setting the immutable / readonly
+			 * bit for regular files.  According to comments in
+			 * the MacOS X version of this code, supporting the
+			 * readonly bit on directories doesn't do the same
+			 * thing in Windows as in Unix.
+			 */
+			if (vp->v_type == VREG) {
+				if (vap->va_flags & UF_READONLY)
+					np->n_dosattr |= SMB_FA_RDONLY;
+				else
+					np->n_dosattr &= ~SMB_FA_RDONLY;
+			}
+		}
+
 		if (np->n_dosattr != old_n_dosattr) {
 			error = smbfs_smb_setpattr(np, np->n_dosattr, NULL, scred);
 			if (error)
@@ -843,12 +895,16 @@ smbfs_pathconf (ap)
 {
 	struct smbmount *smp = VFSTOSMBFS(VTOVFS(ap->a_vp));
 	struct smb_vc *vcp = SSTOVC(smp->sm_share);
-	register_t *retval = ap->a_retval;
+	long *retval = ap->a_retval;
 	int error = 0;
 	
 	switch (ap->a_name) {
-	    case _PC_LINK_MAX:
-		*retval = 0;
+	    case _PC_FILESIZEBITS:
+		if (vcp->vc_sopt.sv_caps & (SMB_CAP_LARGE_READX |
+		    SMB_CAP_LARGE_WRITEX))
+		    *retval = 64;
+		else
+		    *retval = 32;
 		break;
 	    case _PC_NAME_MAX:
 		*retval = (vcp->vc_hflags2 & SMB_FLAGS2_KNOWS_LONG_NAMES) ? 255 : 12;
@@ -856,8 +912,11 @@ smbfs_pathconf (ap)
 	    case _PC_PATH_MAX:
 		*retval = 800;	/* XXX: a correct one ? */
 		break;
+	    case _PC_NO_TRUNC:
+		*retval = 1;
+		break;
 	    default:
-		error = EINVAL;
+		error = vop_stdpathconf(ap);
 	}
 	return error;
 }
@@ -1282,11 +1341,14 @@ smbfs_lookup(ap)
 			error = vfs_busy(mp, 0);
 			vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
 			vfs_rel(mp);
-			if (error)
-				return (ENOENT);
+			if (error) {
+				error = ENOENT;
+				goto out;
+			}
 			if ((dvp->v_iflag & VI_DOOMED) != 0) {
 				vfs_unbusy(mp);
-				return (ENOENT);	
+				error = ENOENT;
+				goto out;
 			}
 		}	
 		VOP_UNLOCK(dvp, 0);

@@ -2,6 +2,8 @@
 /* $NetBSD: ldef.h,v 1.2 2006/09/09 14:35:17 tnozaki Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c)2003, 2006 Citrus Project,
  * All rights reserved.
  *
@@ -36,6 +38,6 @@ typedef struct {
 } linear_zone_t;
 
 extern int	 debug;
-extern int	 line_number;
+extern int	 linenumber;
 extern int	 yyerror(const char *);
 extern int	 yylex(void);

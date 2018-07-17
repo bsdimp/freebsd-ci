@@ -210,8 +210,8 @@ XZ Utils
         # <Edit the .po file in the po directory.>
         make -C po update-po
         make install
-        bash debug/translations.bash | less
-        bash debug/translations.bash | less -S  # For --list outputs
+        bash debug/translation.bash | less
+        bash debug/translation.bash | less -S  # For --list outputs
 
     Repeat the above as needed (no need to re-run configure though).
 
@@ -291,7 +291,7 @@ XZ Utils
     XZ Embedded is a limited implementation written for use in the Linux
     kernel, but it is also suitable for other embedded use.
 
-        http://tukaani.org/xz/embedded.html
+        https://tukaani.org/xz/embedded.html
 
 
 6. Contact information

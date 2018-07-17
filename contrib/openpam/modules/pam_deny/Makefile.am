@@ -1,10 +1,19 @@
-# $Id: Makefile.am 320 2006-02-16 20:33:19Z des $
+# $OpenPAM: Makefile.am 938 2017-04-30 21:34:42Z des $
 
-pkglibdir = @OPENPAM_MODULES_DIR@
-INCLUDES = -I$(top_srcdir)/include
+if CUSTOM_MODULES_DIR
+moduledir = $(OPENPAM_MODULES_DIR)
+else
+moduledir = $(libdir)
+endif
+AM_CPPFLAGS = -I$(top_srcdir)/include
 
-pkglib_LTLIBRARIES = pam_deny.la
+module_LTLIBRARIES = pam_deny.la
 
 pam_deny_la_SOURCES = pam_deny.c
-pam_deny_la_LDFLAGS = -no-undefined -module -version-info @LIB_MAJ@
-pam_deny_la_LIBADD = $(top_builddir)/lib/libpam.la
+pam_deny_la_LDFLAGS = -no-undefined -module -version-info $(LIB_MAJ) \
+	-export-symbols-regex '^pam_sm_'
+if WITH_SYSTEM_LIBPAM
+pam_deny_la_LIBADD = $(SYSTEM_LIBPAM)
+else
+pam_deny_la_LIBADD = $(top_builddir)/lib/libpam/libpam.la
+endif

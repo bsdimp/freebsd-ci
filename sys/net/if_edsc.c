@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following edsclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -46,10 +48,12 @@
 
 #include <net/bpf.h>		/* bpf(9) */
 #include <net/ethernet.h>	/* Ethernet related constants and types */
-#include <net/if.h>		/* basic part of ifnet(9) */
+#include <net/if.h>
+#include <net/if_var.h>		/* basic part of ifnet(9) */
 #include <net/if_clone.h>	/* network interface cloning */
 #include <net/if_types.h>	/* IFT_ETHER and friends */
 #include <net/if_var.h>		/* kernel-only part of ifnet(9) */
+#include <net/vnet.h>
 
 static const char edscname[] = "edsc";
 
@@ -68,7 +72,8 @@ struct edsc_softc {
 /*
  * Attach to the interface cloning framework.
  */
-static struct if_clone *edsc_cloner;
+static VNET_DEFINE(struct if_clone *, edsc_cloner);
+#define	V_edsc_cloner	VNET(edsc_cloner)
 static int	edsc_clone_create(struct if_clone *, int, caddr_t);
 static void	edsc_clone_destroy(struct ifnet *);
 
@@ -290,8 +295,8 @@ edsc_start(struct ifnet *ifp)
 		/*
 		 * Update the interface counters.
 		 */
-		ifp->if_obytes += m->m_pkthdr.len;
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, m->m_pkthdr.len);
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 
 		/*
 		 * Finally, just drop the packet.
@@ -306,6 +311,36 @@ edsc_start(struct ifnet *ifp)
 	 */
 }
 
+static void
+vnet_edsc_init(const void *unused __unused)
+{
+
+	/*
+	 * Connect to the network interface cloning framework.
+	 * The last argument is the number of units to be created
+	 * from the outset.  It's also the minimum number of units
+	 * allowed.  We don't want any units created as soon as the
+	 * driver is loaded.
+	 */
+	V_edsc_cloner = if_clone_simple(edscname, edsc_clone_create,
+	    edsc_clone_destroy, 0);
+}
+VNET_SYSINIT(vnet_edsc_init, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
+    vnet_edsc_init, NULL);
+
+static void
+vnet_edsc_uninit(const void *unused __unused)
+{
+
+	/*
+	 * Disconnect from the cloning framework.
+	 * Existing interfaces will be disposed of properly.
+	 */
+	if_clone_detach(V_edsc_cloner);
+}
+VNET_SYSUNINIT(vnet_edsc_uninit, SI_SUB_INIT_IF, SI_ORDER_ANY,
+    vnet_edsc_uninit, NULL);
+
 /*
  * This function provides handlers for module events, namely load and unload.
  */
@@ -315,25 +350,8 @@ edsc_modevent(module_t mod, int type, void *data)
 
 	switch (type) {
 	case MOD_LOAD:
-		/*
-		 * Connect to the network interface cloning framework.
-		 * The last argument is the number of units to be created
-		 * from the outset.  It's also the minimum number of units
-		 * allowed.  We don't want any units created as soon as the
-		 * driver is loaded.
-		 */
-		edsc_cloner = if_clone_simple(edscname, edsc_clone_create,
-		    edsc_clone_destroy, 0);
-		break;
-
 	case MOD_UNLOAD:
-		/*
-		 * Disconnect from the cloning framework.
-		 * Existing interfaces will be disposed of properly.
-		 */
-		if_clone_detach(edsc_cloner);
 		break;
-
 	default:
 		/*
 		 * There are other event types, but we don't handle them.

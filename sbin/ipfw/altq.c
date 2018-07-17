@@ -1,4 +1,4 @@
-/*
+/*-
  * Copyright (c) 2002-2003 Luigi Rizzo
  * Copyright (c) 1996 Alex Nash, Paul Traina, Poul-Henning Kamp
  * Copyright (c) 1994 Ugen J.S.Antsilevich
@@ -137,15 +137,15 @@ altq_qid_to_name(u_int32_t qid)
 }
 
 void
-print_altq_cmd(ipfw_insn_altq *altqptr)
+print_altq_cmd(struct buf_pr *bp, ipfw_insn_altq *altqptr)
 {
 	if (altqptr) {
 		const char *qname;
 
 		qname = altq_qid_to_name(altqptr->qid);
 		if (qname == NULL)
-			printf(" altq ?<%u>", altqptr->qid);
+			bprintf(bp, " altq ?<%u>", altqptr->qid);
 		else
-			printf(" altq %s", qname);
+			bprintf(bp, " altq %s", qname);
 	}
 }

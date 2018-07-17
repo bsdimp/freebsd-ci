@@ -38,6 +38,7 @@
 
 #include <machine/frame.h>
 #include <machine/md_var.h>
+#include <machine/psl.h>
 #include <machine/reg.h>
 #include <machine/stack.h>
 
@@ -49,10 +50,105 @@
 
 /* Offset to the LR Save word (ppc32) */
 #define RETURN_OFFSET	4
-#define RETURN_OFFSET64	8
+/* Offset to LR Save word (ppc64).  CR Save area sits between back chain and LR */
+#define RETURN_OFFSET64	16
+
+#ifdef __powerpc64__
+#define OFFSET 4 /* Account for the TOC reload slot */
+#define	FRAME_OFFSET	48
+#else
+#define OFFSET 0
+#define	FRAME_OFFSET	8
+#endif
 
 #define INKERNEL(x)	((x) <= VM_MAX_KERNEL_ADDRESS && \
 		(x) >= VM_MIN_KERNEL_ADDRESS)
+
+static __inline int
+dtrace_sp_inkernel(uintptr_t sp)
+{
+	struct trapframe *frame;
+	vm_offset_t callpc;
+
+#ifdef __powerpc64__
+	callpc = *(vm_offset_t *)(sp + RETURN_OFFSET64);
+#else
+	callpc = *(vm_offset_t *)(sp + RETURN_OFFSET);
+#endif
+	if ((callpc & 3) || (callpc < 0x100))
+		return (0);
+
+	/*
+	 * trapexit() and asttrapexit() are sentinels
+	 * for kernel stack tracing.
+	 */
+	if (callpc + OFFSET == (vm_offset_t) &trapexit ||
+	    callpc + OFFSET == (vm_offset_t) &asttrapexit) {
+		if (sp == 0)
+			return (0);
+		frame = (struct trapframe *)(sp + FRAME_OFFSET);
+
+		return ((frame->srr1 & PSL_PR) == 0);
+	}
+
+	return (1);
+}
+
+static __inline uintptr_t
+dtrace_next_sp(uintptr_t sp)
+{
+	vm_offset_t callpc;
+	uintptr_t *r1;
+	struct trapframe *frame;
+
+#ifdef __powerpc64__
+	callpc = *(vm_offset_t *)(sp + RETURN_OFFSET64);
+#else
+	callpc = *(vm_offset_t *)(sp + RETURN_OFFSET);
+#endif
+
+	/*
+	 * trapexit() and asttrapexit() are sentinels
+	 * for kernel stack tracing.
+	 */
+	if ((callpc + OFFSET == (vm_offset_t) &trapexit ||
+	    callpc + OFFSET == (vm_offset_t) &asttrapexit)) {
+		/* Access the trap frame */
+		frame = (struct trapframe *)(sp + FRAME_OFFSET);
+		r1 = (uintptr_t *)frame->fixreg[1];
+		if (r1 == NULL)
+			return (0);
+		return (*r1);
+	}
+
+	return (*(uintptr_t*)sp);
+}
+
+static __inline uintptr_t
+dtrace_get_pc(uintptr_t sp)
+{
+	struct trapframe *frame;
+	vm_offset_t callpc;
+
+#ifdef __powerpc64__
+	callpc = *(vm_offset_t *)(sp + RETURN_OFFSET64);
+#else
+	callpc = *(vm_offset_t *)(sp + RETURN_OFFSET);
+#endif
+
+	/*
+	 * trapexit() and asttrapexit() are sentinels
+	 * for kernel stack tracing.
+	 */
+	if ((callpc + OFFSET == (vm_offset_t) &trapexit ||
+	    callpc + OFFSET == (vm_offset_t) &asttrapexit)) {
+		/* Access the trap frame */
+		frame = (struct trapframe *)(sp + FRAME_OFFSET);
+		return (frame->srr0);
+	}
+
+	return (callpc);
+}
 
 greg_t
 dtrace_getfp(void)
@@ -65,10 +161,11 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
     uint32_t *intrpc)
 {
 	int depth = 0;
-	register_t sp;
+	uintptr_t osp, sp;
 	vm_offset_t callpc;
 	pc_t caller = (pc_t) solaris_cpu[curcpu].cpu_dtrace_caller;
 
+	osp = PAGE_SIZE;
 	if (intrpc != 0)
 		pcstack[depth++] = (pc_t) intrpc;
 
@@ -77,13 +174,12 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 	sp = dtrace_getfp();
 
 	while (depth < pcstack_limit) {
-		if (!INKERNEL((long) sp))
+		if (sp <= osp)
 			break;
 
-		callpc = *(uintptr_t *)(sp + RETURN_OFFSET);
-
-		if (!INKERNEL(callpc))
+		if (!dtrace_sp_inkernel(sp))
 			break;
+		callpc = dtrace_get_pc(sp);
 
 		if (aframes > 0) {
 			aframes--;
@@ -95,7 +191,8 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 			pcstack[depth++] = callpc;
 		}
 
-		sp = *(uintptr_t*)sp;
+		osp = sp;
+		sp = dtrace_next_sp(sp);
 	}
 
 	for (; depth < pcstack_limit; depth++) {
@@ -345,72 +442,116 @@ zero:
 uint64_t
 dtrace_getarg(int arg, int aframes)
 {
-	return (0);
-}
+	uintptr_t val;
+	uintptr_t *fp = (uintptr_t *)dtrace_getfp();
+	uintptr_t *stack;
+	int i;
 
-#ifdef notyet
-{
-	int depth = 0;
-	register_t sp;
-	vm_offset_t callpc;
-	pc_t caller = (pc_t) solaris_cpu[curcpu].cpu_dtrace_caller;
+	/*
+	 * A total of 8 arguments are passed via registers; any argument with
+	 * index of 7 or lower is therefore in a register.
+	 */
+	int inreg = 7;
 
-	if (intrpc != 0)
-		pcstack[depth++] = (pc_t) intrpc;
+	for (i = 1; i <= aframes; i++) {
+		fp = (uintptr_t *)*fp;
 
-	aframes++;
-
-	sp = dtrace_getfp();
-
-	while (depth < pcstack_limit) {
-		if (!INKERNEL((long) frame))
-			break;
-
-		callpc = *(void **)(sp + RETURN_OFFSET);
-
-		if (!INKERNEL(callpc))
-			break;
-
-		if (aframes > 0) {
-			aframes--;
-			if ((aframes == 0) && (caller != 0)) {
-				pcstack[depth++] = caller;
-			}
-		}
-		else {
-			pcstack[depth++] = callpc;
-		}
-
-		sp = *(void **)sp;
-	}
-
-	for (; depth < pcstack_limit; depth++) {
-		pcstack[depth] = 0;
-	}
-}
+		/*
+		 * On ppc32 AIM, and booke, trapexit() is the immediately following
+		 * label.  On ppc64 AIM trapexit() follows a nop.
+		 */
+#ifdef __powerpc64__
+		if ((long)(fp[2]) + 4 == (long)trapexit) {
+#else
+		if ((long)(fp[1]) == (long)trapexit) {
 #endif
+			/*
+			 * In the case of powerpc, we will use the pointer to the regs
+			 * structure that was pushed when we took the trap.  To get this
+			 * structure, we must increment beyond the frame structure.  If the
+			 * argument that we're seeking is passed on the stack, we'll pull
+			 * the true stack pointer out of the saved registers and decrement
+			 * our argument by the number of arguments passed in registers; if
+			 * the argument we're seeking is passed in regsiters, we can just
+			 * load it directly.
+			 */
+#ifdef __powerpc64__
+			struct reg *rp = (struct reg *)((uintptr_t)fp[0] + 48);
+#else
+			struct reg *rp = (struct reg *)((uintptr_t)fp[0] + 8);
+#endif
+
+			if (arg <= inreg) {
+				stack = &rp->fixreg[3];
+			} else {
+				stack = (uintptr_t *)(rp->fixreg[1]);
+				arg -= inreg;
+			}
+			goto load;
+		}
+
+	}
+
+	/*
+	 * We know that we did not come through a trap to get into
+	 * dtrace_probe() -- the provider simply called dtrace_probe()
+	 * directly.  As this is the case, we need to shift the argument
+	 * that we're looking for:  the probe ID is the first argument to
+	 * dtrace_probe(), so the argument n will actually be found where
+	 * one would expect to find argument (n + 1).
+	 */
+	arg++;
+
+	if (arg <= inreg) {
+		/*
+		 * This shouldn't happen.  If the argument is passed in a
+		 * register then it should have been, well, passed in a
+		 * register...
+		 */
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return (0);
+	}
+
+	arg -= (inreg + 1);
+	stack = fp + 2;
+
+load:
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_NOFAULT);
+	val = stack[arg];
+	DTRACE_CPUFLAG_CLEAR(CPU_DTRACE_NOFAULT);
+
+	return (val);
+}
 
 int
 dtrace_getstackdepth(int aframes)
 {
 	int depth = 0;
-	register_t sp;
+	uintptr_t osp, sp;
+	vm_offset_t callpc;
 
+	osp = PAGE_SIZE;
 	aframes++;
 	sp = dtrace_getfp();
 	depth++;
 	for(;;) {
-		if (!INKERNEL((long) sp))
+		if (sp <= osp)
 			break;
-		if (!INKERNEL((long) *(void **)sp))
+
+		if (!dtrace_sp_inkernel(sp))
 			break;
-		depth++;
-		sp = *(uintptr_t *)sp;
+
+		if (aframes == 0)
+			depth++;
+		else
+			aframes--;
+		osp = sp;
+		sp = dtrace_next_sp(sp);
 	}
 	if (depth < aframes)
-		return 0;
-	else
-		return depth - aframes;
+		return (0);
+
+	return (depth);
 }
 
 ulong_t
@@ -420,19 +561,19 @@ dtrace_getreg(struct trapframe *rp, uint_t reg)
 		return (rp->fixreg[reg]);
 
 	switch (reg) {
-	case 33:
+	case 32:
 		return (rp->lr);
-	case 34:
+	case 33:
 		return (rp->cr);
-	case 35:
+	case 34:
 		return (rp->xer);
-	case 36:
+	case 35:
 		return (rp->ctr);
-	case 37:
+	case 36:
 		return (rp->srr0);
-	case 38:
+	case 37:
 		return (rp->srr1);
-	case 39:
+	case 38:
 		return (rp->exc);
 	default:
 		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);

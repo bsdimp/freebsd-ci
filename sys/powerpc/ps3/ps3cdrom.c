@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2010 Nathan Whitehorn
  * Copyright (C) 2011 glevand <geoffrey.levand@mail.ru>
  * All rights reserved.
@@ -46,7 +48,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/pio.h>
 #include <machine/bus.h>
 #include <machine/platform.h>
-#include <machine/pmap.h>
 #include <machine/resource.h>
 #include <sys/bus.h>
 #include <sys/rman.h>
@@ -421,9 +422,9 @@ ps3cdrom_action(struct cam_sim *sim, union ccb *ccb)
 		cpi->bus_id = cam_sim_bus(sim);
 		cpi->unit_number = cam_sim_unit(sim);
 		cpi->base_transfer_speed = 150000;
-		strncpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
-		strncpy(cpi->hba_vid, "Sony", HBA_IDLEN);
-		strncpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
+		strlcpy(cpi->sim_vid, "FreeBSD", SIM_IDLEN);
+		strlcpy(cpi->hba_vid, "Sony", HBA_IDLEN);
+		strlcpy(cpi->dev_name, cam_sim_name(sim), DEV_IDLEN);
 		cpi->transport = XPORT_SPI;
 		cpi->transport_version = 2;
 		cpi->protocol = PROTO_SCSI;
@@ -557,7 +558,9 @@ ps3cdrom_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 	uint64_t start_sector, block_count;
 	int err;
 
-	KASSERT(nsegs == 1, ("invalid number of DMA segments"));
+	KASSERT(nsegs == 1 || nsegs == 0,
+	    ("ps3cdrom_transfer: invalid number of DMA segments %d", nsegs));
+	KASSERT(error == 0, ("ps3cdrom_transfer: DMA error %d", error));
 
 	PS3CDROM_ASSERT_LOCKED(sc);
 
@@ -581,6 +584,7 @@ ps3cdrom_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 
 	switch (cdb[0]) {
 	case READ_10:
+		KASSERT(nsegs == 1, ("ps3cdrom_transfer: no data to read"));
 		start_sector = (cdb[2] << 24) | (cdb[3] << 16) |
 		    (cdb[4] << 8) | cdb[5];
 		block_count = (cdb[7] << 8) | cdb[8];
@@ -592,6 +596,7 @@ ps3cdrom_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 		    BUS_DMASYNC_POSTREAD);
 		break;
 	case WRITE_10:
+		KASSERT(nsegs == 1, ("ps3cdrom_transfer: no data to write"));
 		start_sector = (cdb[2] << 24) | (cdb[3] << 16) |
 		    (cdb[4] << 8) | cdb[5];
 		block_count = (cdb[7] << 8) | cdb[8];
@@ -622,9 +627,10 @@ ps3cdrom_transfer(void *arg, bus_dma_segment_t *segs, int nsegs, int error)
 			atapi_cmd.proto = NON_DATA_PROTO;
 		}
 
-		atapi_cmd.nblocks = atapi_cmd.arglen = segs[0].ds_len;
+		atapi_cmd.nblocks = atapi_cmd.arglen =
+		    (nsegs == 0) ? 0 : segs[0].ds_len;
 		atapi_cmd.blksize = 1;
-		atapi_cmd.buf = segs[0].ds_addr;
+		atapi_cmd.buf = (nsegs == 0) ? 0 : segs[0].ds_addr;
 
 		if (ccb->ccb_h.flags & CAM_DIR_OUT)
 			bus_dmamap_sync(sc->sc_dmatag, xp->x_dmamap,

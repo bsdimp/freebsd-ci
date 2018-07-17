@@ -1,5 +1,7 @@
-/*
- * Copyright (c) 2010-2011 Qlogic Corporation
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2011-2013 Qlogic Corporation
  * All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
@@ -153,6 +155,11 @@ qla_add_sysctls(qla_host_t *ha)
                 OID_AUTO, "stats", CTLTYPE_INT | CTLFLAG_RD,
                 (void *)ha, 0,
                 qla_sysctl_get_stats, "I", "Statistics");
+
+	SYSCTL_ADD_STRING(device_get_sysctl_ctx(dev),
+		SYSCTL_CHILDREN(device_get_sysctl_tree(dev)),
+		OID_AUTO, "fw_version", CTLFLAG_RD,
+		ha->fw_ver_str, 0, "firmware version");
 
 	dbg_level = 0;
         SYSCTL_ADD_UINT(device_get_sysctl_ctx(dev),
@@ -347,6 +354,10 @@ qla_pci_attach(device_t dev)
 		ha->fw_ver_major, ha->fw_ver_minor, ha->fw_ver_sub,
 		ha->fw_ver_build);
 
+	snprintf(ha->fw_ver_str, sizeof(ha->fw_ver_str), "%d.%d.%d.%d",
+			ha->fw_ver_major, ha->fw_ver_minor, ha->fw_ver_sub,
+			ha->fw_ver_build);
+
 	//qla_get_hw_caps(ha);
 	qla_read_mac_addr(ha);
 
@@ -369,7 +380,7 @@ qla_pci_attach(device_t dev)
 	ha->flags.qla_watchdog_active = 1;
 	ha->flags.qla_watchdog_pause = 1;
 	
-	callout_init(&ha->tx_callout, TRUE);
+	callout_init(&ha->tx_callout, 1);
 
 	/* create ioctl device interface */
 	if (qla_make_cdev(ha)) {
@@ -593,6 +604,7 @@ qla_alloc_dmabuf_exit:
 void
 qla_free_dmabuf(qla_host_t *ha, qla_dma_t *dma_buf)
 {
+        bus_dmamap_unload(dma_buf->dma_tag, dma_buf->dma_map);
         bus_dmamem_free(dma_buf->dma_tag, dma_buf->dma_b, dma_buf->dma_map);
         bus_dma_tag_destroy(dma_buf->dma_tag);
 }
@@ -660,7 +672,7 @@ qla_init_ifnet(device_t dev, qla_host_t *ha)
 
 	if_initname(ifp, device_get_name(dev), device_get_unit(dev));
 
-	ifp->if_baudrate = (1 * 1000 * 1000 *1000);
+	ifp->if_baudrate = IF_Gbps(10);
 	ifp->if_init = qla_init;
 	ifp->if_softc = ha;
 	ifp->if_flags = IFF_BROADCAST | IFF_SIMPLEX | IFF_MULTICAST;
@@ -680,6 +692,7 @@ qla_init_ifnet(device_t dev, qla_host_t *ha)
 				IFCAP_JUMBO_MTU;
 
 	ifp->if_capabilities |= IFCAP_VLAN_HWTAGGING | IFCAP_VLAN_MTU;
+	ifp->if_capabilities |= IFCAP_LINKSTATE;
 
 #if defined(__FreeBSD_version) && (__FreeBSD_version < 900002)
 	ifp->if_timer = 0;
@@ -688,7 +701,7 @@ qla_init_ifnet(device_t dev, qla_host_t *ha)
 
 	ifp->if_capenable = ifp->if_capabilities;
 
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 
 	ifmedia_init(&ha->media, IFM_IMASK, qla_media_change, qla_media_status);
 
@@ -760,7 +773,7 @@ qla_set_multi(qla_host_t *ha, uint32_t add_multi)
 
 	if_maddr_rlock(ifp);
 
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
@@ -1053,10 +1066,7 @@ qla_send(qla_host_t *ha, struct mbuf **m_headp)
 	ret = bus_dmamap_load_mbuf_sg(ha->tx_tag, map, m_head, segs, &nsegs,
 			BUS_DMA_NOWAIT);
 
-	if ((ret == EFBIG) ||
-		((nsegs > Q8_TX_MAX_SEGMENTS) &&
-		 (((m_head->m_pkthdr.csum_flags & CSUM_TSO) == 0) ||
-			(m_head->m_pkthdr.len <= ha->max_frame_size)))) {
+	if (ret == EFBIG) {
 
 		struct mbuf *m;
 
@@ -1393,7 +1403,7 @@ int
 qla_get_mbuf(qla_host_t *ha, qla_rx_buf_t *rxb, struct mbuf *nmp,
 	uint32_t jumbo)
 {
-	register struct mbuf *mp = nmp;
+	struct mbuf *mp = nmp;
 	struct ifnet   *ifp;
 	int             ret = 0;
 	uint32_t	offset;

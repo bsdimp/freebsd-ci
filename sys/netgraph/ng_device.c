@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002 Mark Santcroos <marks@ripe.net>
  * Copyright (c) 2004-2005 Gleb Smirnoff <glebius@FreeBSD.org>
  *
@@ -270,7 +272,6 @@ ng_device_rcvdata(hook_p hook, item_p item)
 
 	IF_LOCK(&priv->readq);
 	if (_IF_QFULL(&priv->readq)) {
-		_IF_DROP(&priv->readq);
 		IF_UNLOCK(&priv->readq);
 		NG_FREE_M(m);
 		return (ENOBUFS);

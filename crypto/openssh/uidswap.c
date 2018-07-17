@@ -1,4 +1,4 @@
-/* $OpenBSD: uidswap.c,v 1.35 2006/08/03 03:34:42 deraadt Exp $ */
+/* $OpenBSD: uidswap.c,v 1.39 2015/06/24 01:49:19 dtucker Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -14,12 +14,13 @@
 
 #include "includes.h"
 
-#include <sys/param.h>
 #include <errno.h>
 #include <pwd.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 #include <stdarg.h>
+#include <stdlib.h>
 
 #include <grp.h>
 
@@ -85,13 +86,12 @@ temporarily_use_uid(struct passwd *pw)
 	if (saved_egroupslen < 0)
 		fatal("getgroups: %.100s", strerror(errno));
 	if (saved_egroupslen > 0) {
-		saved_egroups = xrealloc(saved_egroups,
+		saved_egroups = xreallocarray(saved_egroups,
 		    saved_egroupslen, sizeof(gid_t));
 		if (getgroups(saved_egroupslen, saved_egroups) < 0)
 			fatal("getgroups: %.100s", strerror(errno));
 	} else { /* saved_egroupslen == 0 */
-		if (saved_egroups != NULL)
-			xfree(saved_egroups);
+		free(saved_egroups);
 	}
 
 	/* set and save the user's groups */
@@ -104,13 +104,12 @@ temporarily_use_uid(struct passwd *pw)
 		if (user_groupslen < 0)
 			fatal("getgroups: %.100s", strerror(errno));
 		if (user_groupslen > 0) {
-			user_groups = xrealloc(user_groups,
+			user_groups = xreallocarray(user_groups,
 			    user_groupslen, sizeof(gid_t));
 			if (getgroups(user_groupslen, user_groups) < 0)
 				fatal("getgroups: %.100s", strerror(errno));
 		} else { /* user_groupslen == 0 */
-			if (user_groups)
-				xfree(user_groups);
+			free(user_groups);
 		}
 	}
 	/* Set the effective uid to the given (unprivileged) uid. */
@@ -135,14 +134,22 @@ temporarily_use_uid(struct passwd *pw)
 void
 permanently_drop_suid(uid_t uid)
 {
+#ifndef NO_UID_RESTORATION_TEST
 	uid_t old_uid = getuid();
+#endif
 
 	debug("permanently_drop_suid: %u", (u_int)uid);
 	if (setresuid(uid, uid, uid) < 0)
 		fatal("setresuid %u: %.100s", (u_int)uid, strerror(errno));
 
-#ifndef HAVE_CYGWIN
-	/* Try restoration of UID if changed (test clearing of saved uid) */
+#ifndef NO_UID_RESTORATION_TEST
+	/*
+	 * Try restoration of UID if changed (test clearing of saved uid).
+	 *
+	 * Note that we don't do this on Cygwin, or on Solaris-based platforms
+	 * where fine-grained privileges are available (the user might be
+	 * deliberately allowed the right to setuid back to root).
+	 */
 	if (old_uid != uid &&
 	    (setuid(old_uid) != -1 || seteuid(old_uid) != -1))
 		fatal("%s: was able to restore old [e]uid", __func__);
@@ -198,8 +205,10 @@ restore_uid(void)
 void
 permanently_set_uid(struct passwd *pw)
 {
+#ifndef NO_UID_RESTORATION_TEST
 	uid_t old_uid = getuid();
 	gid_t old_gid = getgid();
+#endif
 
 	if (pw == NULL)
 		fatal("permanently_set_uid: no user given");
@@ -224,7 +233,7 @@ permanently_set_uid(struct passwd *pw)
 	if (setresuid(pw->pw_uid, pw->pw_uid, pw->pw_uid) < 0)
 		fatal("setresuid %u: %.100s", (u_int)pw->pw_uid, strerror(errno));
 
-#ifndef HAVE_CYGWIN
+#ifndef NO_UID_RESTORATION_TEST
 	/* Try restoration of GID if changed (test clearing of saved gid) */
 	if (old_gid != pw->pw_gid && pw->pw_uid != 0 &&
 	    (setgid(old_gid) != -1 || setegid(old_gid) != -1))
@@ -238,7 +247,7 @@ permanently_set_uid(struct passwd *pw)
 		    (u_int)pw->pw_gid);
 	}
 
-#ifndef HAVE_CYGWIN
+#ifndef NO_UID_RESTORATION_TEST
 	/* Try restoration of UID if changed (test clearing of saved uid) */
 	if (old_uid != pw->pw_uid &&
 	    (setuid(old_uid) != -1 || seteuid(old_uid) != -1))

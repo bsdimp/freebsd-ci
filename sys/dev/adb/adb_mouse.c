@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2008 Nathan Whitehorn
  * All rights reserved.
  *
@@ -154,7 +156,7 @@ adb_mouse_attach(device_t dev)
 	sc = device_get_softc(dev);
 	sc->sc_dev = dev;
 
-	mtx_init(&sc->sc_mtx,"ams",MTX_DEF,0);
+	mtx_init(&sc->sc_mtx, "ams", NULL, MTX_DEF);
 	cv_init(&sc->sc_cv,"ams");
 
 	sc->flags = 0;
@@ -403,7 +405,7 @@ adb_mouse_receive_packet(device_t dev, u_char status, u_char command,
 	 * high button events when they are touched.
 	 */
 
-	if (buttons & ~((1 << sc->hw.buttons) - 1)
+	if (rounddown2(buttons, 1 << sc->hw.buttons)
 	    && !(sc->flags & AMS_TOUCHPAD)) {
 		buttons |= 1 << (sc->hw.buttons - 1);
 	}
@@ -471,7 +473,8 @@ ams_poll(struct cdev *dev, int events, struct thread *p)
 		mtx_lock(&sc->sc_mtx);
 		
 		if (sc->xdelta == 0 && sc->ydelta == 0 && 
-		   sc->buttons == sc->last_buttons) {
+		   sc->buttons == sc->last_buttons &&
+		   sc->packet_read_len == 0) {
 			selrecord(p, &sc->rsel);
 			events = 0;
 		} else {
@@ -519,7 +522,7 @@ ams_read(struct cdev *dev, struct uio *uio, int flag)
 			}
 		}
 
-		sc->packet[0] = 1 << 7;
+		sc->packet[0] = 1U << 7;
 		sc->packet[0] |= (!(sc->buttons & 1)) << 2;
 		sc->packet[0] |= (!(sc->buttons & 4)) << 1;
 		sc->packet[0] |= (!(sc->buttons & 2));

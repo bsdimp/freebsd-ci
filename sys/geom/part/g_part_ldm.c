@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Andrey V. Elsukov <ae@FreeBSD.org>
  * All rights reserved.
  *
@@ -55,18 +57,16 @@ static SYSCTL_NODE(_kern_geom_part, OID_AUTO, ldm, CTLFLAG_RW, 0,
     "GEOM_PART_LDM Logical Disk Manager");
 
 static u_int ldm_debug = 0;
-TUNABLE_INT("kern.geom.part.ldm.debug", &ldm_debug);
 SYSCTL_UINT(_kern_geom_part_ldm, OID_AUTO, debug,
-    CTLFLAG_RW | CTLFLAG_TUN, &ldm_debug, 0, "Debug level");
+    CTLFLAG_RWTUN, &ldm_debug, 0, "Debug level");
 
 /*
  * This allows access to mirrored LDM volumes. Since we do not
  * doing mirroring here, it is not enabled by default.
  */
 static u_int show_mirrors = 0;
-TUNABLE_INT("kern.geom.part.ldm.show_mirrors", &show_mirrors);
 SYSCTL_UINT(_kern_geom_part_ldm, OID_AUTO, show_mirrors,
-    CTLFLAG_RW | CTLFLAG_TUN, &show_mirrors, 0, "Show mirrored volumes");
+    CTLFLAG_RWTUN, &show_mirrors, 0, "Show mirrored volumes");
 
 #define	LDM_DEBUG(lvl, fmt, ...)	do {				\
 	if (ldm_debug >= (lvl)) {					\
@@ -336,13 +336,9 @@ static const char *g_part_ldm_name(struct g_part_table *, struct g_part_entry *,
     char *, size_t);
 static int g_part_ldm_probe(struct g_part_table *, struct g_consumer *);
 static int g_part_ldm_read(struct g_part_table *, struct g_consumer *);
-static int g_part_ldm_setunset(struct g_part_table *, struct g_part_entry *,
-    const char *, unsigned int);
 static const char *g_part_ldm_type(struct g_part_table *, struct g_part_entry *,
     char *, size_t);
 static int g_part_ldm_write(struct g_part_table *, struct g_consumer *);
-static int g_part_ldm_resize(struct g_part_table *, struct g_part_entry *,
-    struct g_part_parms *);
 
 static kobj_method_t g_part_ldm_methods[] = {
 	KOBJMETHOD(g_part_add,		g_part_ldm_add),
@@ -352,11 +348,9 @@ static kobj_method_t g_part_ldm_methods[] = {
 	KOBJMETHOD(g_part_dumpconf,	g_part_ldm_dumpconf),
 	KOBJMETHOD(g_part_dumpto,	g_part_ldm_dumpto),
 	KOBJMETHOD(g_part_modify,	g_part_ldm_modify),
-	KOBJMETHOD(g_part_resize,	g_part_ldm_resize),
 	KOBJMETHOD(g_part_name,		g_part_ldm_name),
 	KOBJMETHOD(g_part_probe,	g_part_ldm_probe),
 	KOBJMETHOD(g_part_read,		g_part_ldm_read),
-	KOBJMETHOD(g_part_setunset,	g_part_ldm_setunset),
 	KOBJMETHOD(g_part_type,		g_part_ldm_type),
 	KOBJMETHOD(g_part_write,	g_part_ldm_write),
 	{ 0, 0 }
@@ -369,19 +363,21 @@ static struct g_part_scheme g_part_ldm_scheme = {
 	.gps_entrysz = sizeof(struct g_part_ldm_entry)
 };
 G_PART_SCHEME_DECLARE(g_part_ldm);
+MODULE_VERSION(geom_part_ldm, 0);
 
 static struct g_part_ldm_alias {
 	u_char		typ;
 	int		alias;
 } ldm_alias_match[] = {
-	{ DOSPTYP_NTFS,		G_PART_ALIAS_MS_NTFS },
-	{ DOSPTYP_FAT32,	G_PART_ALIAS_MS_FAT32 },
 	{ DOSPTYP_386BSD,	G_PART_ALIAS_FREEBSD },
+	{ DOSPTYP_FAT32,	G_PART_ALIAS_MS_FAT32 },
+	{ DOSPTYP_FAT32LBA,	G_PART_ALIAS_MS_FAT32LBA },
 	{ DOSPTYP_LDM,		G_PART_ALIAS_MS_LDM_DATA },
-	{ DOSPTYP_LINSWP,	G_PART_ALIAS_LINUX_SWAP },
-	{ DOSPTYP_LINUX,	G_PART_ALIAS_LINUX_DATA },
 	{ DOSPTYP_LINLVM,	G_PART_ALIAS_LINUX_LVM },
 	{ DOSPTYP_LINRAID,	G_PART_ALIAS_LINUX_RAID },
+	{ DOSPTYP_LINSWP,	G_PART_ALIAS_LINUX_SWAP },
+	{ DOSPTYP_LINUX,	G_PART_ALIAS_LINUX_DATA },
+	{ DOSPTYP_NTFS,		G_PART_ALIAS_MS_NTFS },
 };
 
 static u_char*
@@ -461,8 +457,7 @@ ldm_privhdr_check(struct ldm_db *db, struct g_consumer *cp, int is_gpt)
 		    cp2->provider->mediasize / cp2->provider->sectorsize - 1;
 	} else
 		last = pp->mediasize / pp->sectorsize - 1;
-	for (found = 0, i = is_gpt;
-	    i < sizeof(ldm_ph_off) / sizeof(ldm_ph_off[0]); i++) {
+	for (found = 0, i = is_gpt; i < nitems(ldm_ph_off); i++) {
 		offset = ldm_ph_off[i];
 		/*
 		 * In the GPT case consumer is attached to the LDM metadata
@@ -1022,8 +1017,7 @@ ldm_vmdb_parse(struct ldm_db *db, struct g_consumer *cp)
 	int error;
 
 	pp = cp->provider;
-	size = (db->dh.last_seq * db->dh.size +
-	    pp->sectorsize - 1) / pp->sectorsize;
+	size = howmany(db->dh.last_seq * db->dh.size, pp->sectorsize);
 	size -= 1; /* one sector takes vmdb header */
 	for (n = 0; n < size; n += MAXPHYS / pp->sectorsize) {
 		offset = db->ph.db_offset + db->th.conf_offset + n + 1;
@@ -1209,14 +1203,6 @@ g_part_ldm_modify(struct g_part_table *basetable,
 	return (ENOSYS);
 }
 
-static int
-g_part_ldm_resize(struct g_part_table *basetable,
-    struct g_part_entry *baseentry, struct g_part_parms *gpp)
-{
-
-	return (ENOSYS);
-}
-
 static const char *
 g_part_ldm_name(struct g_part_table *table, struct g_part_entry *baseentry,
     char *buf, size_t bufsz)
@@ -1238,7 +1224,7 @@ ldm_gpt_probe(struct g_part_table *basetable, struct g_consumer *cp)
 	int error;
 
 	/*
-	 * XXX: We use some knowlege about GEOM_PART_GPT internal
+	 * XXX: We use some knowledge about GEOM_PART_GPT internal
 	 * structures, but it is easier than parse GPT by himself.
 	 */
 	g_topology_lock();
@@ -1476,14 +1462,6 @@ gpt_cleanup:
 	return (error);
 }
 
-static int
-g_part_ldm_setunset(struct g_part_table *table, struct g_part_entry *baseentry,
-    const char *attrib, unsigned int set)
-{
-
-	return (ENOSYS);
-}
-
 static const char *
 g_part_ldm_type(struct g_part_table *basetable, struct g_part_entry *baseentry,
     char *buf, size_t bufsz)
@@ -1492,8 +1470,7 @@ g_part_ldm_type(struct g_part_table *basetable, struct g_part_entry *baseentry,
 	int i;
 
 	entry = (struct g_part_ldm_entry *)baseentry;
-	for (i = 0;
-	    i < sizeof(ldm_alias_match) / sizeof(ldm_alias_match[0]); i++) {
+	for (i = 0; i < nitems(ldm_alias_match); i++) {
 		if (ldm_alias_match[i].typ == entry->type)
 			return (g_part_alias_name(ldm_alias_match[i].alias));
 	}

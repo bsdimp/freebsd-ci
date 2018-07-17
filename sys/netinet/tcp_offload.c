@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Chelsio Communications, Inc.
  * All rights reserved.
  *
@@ -37,14 +39,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/socketvar.h>
 #include <sys/sockopt.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 #include <netinet/tcp.h>
-#include <netinet/tcp_var.h>
 #include <netinet/tcp_offload.h>
 #define	TCPOUTFLAGS
 #include <netinet/tcp_fsm.h>
+#include <netinet/tcp_var.h>
 #include <netinet/toecore.h>
 
 int registered_toedevs;
@@ -162,6 +165,17 @@ tcp_offload_ctloutput(struct tcpcb *tp, int sopt_dir, int sopt_name)
 	INP_WLOCK_ASSERT(tp->t_inpcb);
 
 	tod->tod_ctloutput(tod, tp, sopt_dir, sopt_name);
+}
+
+void
+tcp_offload_tcp_info(struct tcpcb *tp, struct tcp_info *ti)
+{
+	struct toedev *tod = tp->tod;
+
+	KASSERT(tod != NULL, ("%s: tp->tod is NULL, tp %p", __func__, tp));
+	INP_WLOCK_ASSERT(tp->t_inpcb);
+
+	tod->tod_tcp_info(tod, tp, ti);
 }
 
 void

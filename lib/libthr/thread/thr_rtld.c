@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006, David Xu <davidxu@freebsd.org>
  * All rights reserved.
  *
@@ -22,20 +24,22 @@
  * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * $FreeBSD$
- *
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
  /*
   * A lockless rwlock for rtld.
   */
 #include <sys/cdefs.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <link.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "libc_private.h"
 #include "rtld_lock.h"
 #include "thr_private.h"
 
@@ -183,7 +187,9 @@ _thr_rtld_init(void)
 {
 	struct RtldLockInfo	li;
 	struct pthread		*curthread;
+	ucontext_t *uc;
 	long dummy = -1;
+	int uc_len;
 
 	curthread = _get_curthread();
 
@@ -207,9 +213,32 @@ _thr_rtld_init(void)
 	li.thread_set_flag = _thr_rtld_set_flag;
 	li.thread_clr_flag = _thr_rtld_clr_flag;
 	li.at_fork = NULL;
-	
+
+	/*
+	 * Preresolve the symbols needed for the fork interposer.  We
+	 * call _rtld_atfork_pre() and _rtld_atfork_post() with NULL
+	 * argument to indicate that no actual locking inside the
+	 * functions should happen.  Neither rtld compat locks nor
+	 * libthr rtld locks cannot work there:
+	 * - compat locks do not handle the case of two locks taken
+	 *   in write mode (the signal mask for the thread is corrupted);
+	 * - libthr locks would work, but locked rtld_bind_lock prevents
+	 *   symbol resolution for _rtld_atfork_post.
+	 */
+	_rtld_atfork_pre(NULL);
+	_rtld_atfork_post(NULL);
+	_malloc_prefork();
+	_malloc_postfork();
+	getpid();
+	syscall(SYS_getpid);
+
 	/* mask signals, also force to resolve __sys_sigprocmask PLT */
 	_thr_signal_block(curthread);
 	_rtld_thread_init(&li);
 	_thr_signal_unblock(curthread);
+
+	uc_len = __getcontextx_size();
+	uc = alloca(uc_len);
+	getcontext(uc);
+	__fillcontextx2((char *)uc);
 }

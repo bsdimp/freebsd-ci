@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Antoine Brodin
  * All rights reserved.
  *
@@ -34,7 +36,7 @@
 struct sbuf;
 
 /* MI Routines. */
-struct stack	*stack_create(void);
+struct stack	*stack_create(int);
 void		 stack_destroy(struct stack *);
 int		 stack_put(struct stack *, vm_offset_t);
 void		 stack_copy(const struct stack *, struct stack *);
@@ -56,9 +58,10 @@ void		 stack_ktr(u_int, const char *, int, const struct stack *,
 #define	CTRSTACK(m, st, depth, cheap)
 #endif
 
-/* MD Routine. */
+/* MD Routines. */
 struct thread;
 void		 stack_save(struct stack *);
 void		 stack_save_td(struct stack *, struct thread *);
+int		 stack_save_td_running(struct stack *, struct thread *);
 
 #endif

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -39,7 +41,6 @@ __FBSDID("$FreeBSD$");
 #include "namespace.h"
 #include <unistd.h>
 #include <stdio.h>
-#include <sys/cdefs.h>
 #include "un-namespace.h"
 #include "libc_private.h"
 #include "local.h"
@@ -47,31 +48,33 @@ __FBSDID("$FreeBSD$");
 __warn_references(gets, "warning: this program uses gets(), which is unsafe.");
 
 char *
-gets(buf)
-	char *buf;
+gets(char *buf)
 {
 	int c;
-	char *s;
+	char *s, *ret;
 	static int warned;
-	static char w[] =
+	static const char w[] =
 	    "warning: this program uses gets(), which is unsafe.\n";
 
-	FLOCKFILE(stdin);
+	FLOCKFILE_CANCELSAFE(stdin);
 	ORIENT(stdin, -1);
 	if (!warned) {
 		(void) _write(STDERR_FILENO, w, sizeof(w) - 1);
 		warned = 1;
 	}
-	for (s = buf; (c = __sgetc(stdin)) != '\n';)
-		if (c == EOF)
+	for (s = buf; (c = __sgetc(stdin)) != '\n'; ) {
+		if (c == EOF) {
 			if (s == buf) {
-				FUNLOCKFILE(stdin);
-				return (NULL);
+				ret = NULL;
+				goto end;
 			} else
 				break;
-		else
+		} else
 			*s++ = c;
+	}
 	*s = 0;
-	FUNLOCKFILE(stdin);
-	return (buf);
+	ret = buf;
+end:
+	FUNLOCKFILE_CANCELSAFE();
+	return (ret);
 }

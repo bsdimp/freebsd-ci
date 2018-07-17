@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Yahoo! Inc.
  * All rights reserved.
  *
@@ -27,7 +29,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-/* PCI/PCI-X/PCIe bus interface for the LSI MPT2 controllers */
+/* PCI/PCI-X/PCIe bus interface for the Avago Tech (LSI) MPT2 controllers */
 
 /* TODO Move headers to mpsvar */
 #include <sys/types.h>
@@ -68,6 +70,7 @@ static int	mps_pci_resume(device_t);
 static void	mps_pci_free(struct mps_softc *);
 static int	mps_alloc_msix(struct mps_softc *sc, int msgs);
 static int	mps_alloc_msi(struct mps_softc *sc, int msgs);
+static int	mps_pci_alloc_interrupts(struct mps_softc *sc);
 
 static device_method_t mps_methods[] = {
 	DEVMETHOD(device_probe,		mps_pci_probe),
@@ -98,33 +101,33 @@ struct mps_ident {
 	const char	*desc;
 } mps_identifiers[] = {
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2004,
-	    0xffff, 0xffff, 0, "LSI SAS2004" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2004" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2008,
-	    0xffff, 0xffff, 0, "LSI SAS2008" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2008" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2108_1,
-	    0xffff, 0xffff, 0, "LSI SAS2108" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2108" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2108_2,
-	    0xffff, 0xffff, 0, "LSI SAS2108" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2108" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2108_3,
-	    0xffff, 0xffff, 0, "LSI SAS2108" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2108" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2116_1,
-	    0xffff, 0xffff, 0, "LSI SAS2116" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2116" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2116_2,
-	    0xffff, 0xffff, 0, "LSI SAS2116" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2116" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2208_1,
-	    0xffff, 0xffff, 0, "LSI SAS2208" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2208" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2208_2,
-	    0xffff, 0xffff, 0, "LSI SAS2208" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2208" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2208_3,
-	    0xffff, 0xffff, 0, "LSI SAS2208" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2208" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2208_4,
-	    0xffff, 0xffff, 0, "LSI SAS2208" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2208" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2208_5,
-	    0xffff, 0xffff, 0, "LSI SAS2208" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2208" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2208_6,
-	    0xffff, 0xffff, 0, "LSI SAS2208" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2208" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2308_1,
-	    0xffff, 0xffff, 0, "LSI SAS2308" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2308" },
 	// Add Customer specific vender/subdevice id before generic
 	// (0xffff) vender/subdevice id.
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2308_2,
@@ -136,11 +139,11 @@ struct mps_ident {
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2308_2,
 	    0x8086, 0x3519, 0, "Intel(R) Integrated RAID Module RMS25KB040" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2308_2,
-	    0xffff, 0xffff, 0, "LSI SAS2308" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2308" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SAS2308_3,
-	    0xffff, 0xffff, 0, "LSI SAS2308" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SAS2308" },
 	{ MPI2_MFGPAGE_VENDORID_LSI, MPI2_MFGPAGE_DEVID_SSS6200,
-	    0xffff, 0xffff, MPS_FLAGS_WD_AVAILABLE, "LSI SSS6200" },
+	    0xffff, 0xffff, 0, "Avago Technologies (LSI) SSS6200" },
 	{ 0, 0, 0, 0, 0, NULL }
 };
 
@@ -183,7 +186,6 @@ mps_pci_attach(device_t dev)
 {
 	struct mps_softc *sc;
 	struct mps_ident *m;
-	uint16_t command;
 	int error;
 
 	sc = device_get_softc(dev);
@@ -192,25 +194,16 @@ mps_pci_attach(device_t dev)
 	m = mps_find_ident(dev);
 	sc->mps_flags = m->flags;
 
+	mps_get_tunables(sc);
+
 	/* Twiddle basic PCI config bits for a sanity check */
-	command = pci_read_config(dev, PCIR_COMMAND, 2);
-	command |= PCIM_CMD_BUSMASTEREN;
-	pci_write_config(dev, PCIR_COMMAND, command, 2);
-	command = pci_read_config(dev, PCIR_COMMAND, 2);
-	if ((command & PCIM_CMD_BUSMASTEREN) == 0) {
-		device_printf(dev, "Cannot enable PCI busmaster\n");
-		return (ENXIO);
-	}
-	if ((command & PCIM_CMD_MEMEN) == 0) {
-		device_printf(dev, "PCI memory window not available\n");
-		return (ENXIO);
-	}
+	pci_enable_busmaster(dev);
 
 	/* Allocate the System Interface Register Set */
 	sc->mps_regs_rid = PCIR_BAR(1);
 	if ((sc->mps_regs_resource = bus_alloc_resource_any(dev,
 	    SYS_RES_MEMORY, &sc->mps_regs_rid, RF_ACTIVE)) == NULL) {
-		device_printf(dev, "Cannot allocate PCI registers\n");
+		mps_printf(sc, "Cannot allocate PCI registers\n");
 		return (ENXIO);
 	}
 	sc->mps_btag = rman_get_bustag(sc->mps_regs_resource);
@@ -228,13 +221,69 @@ mps_pci_attach(device_t dev)
 				0,			/* flags */
 				NULL, NULL,		/* lockfunc, lockarg */
 				&sc->mps_parent_dmat)) {
-		device_printf(dev, "Cannot allocate parent DMA tag\n");
+		mps_printf(sc, "Cannot allocate parent DMA tag\n");
 		mps_pci_free(sc);
 		return (ENOMEM);
 	}
 
-	if ((error = mps_attach(sc)) != 0)
+	if (((error = mps_pci_alloc_interrupts(sc)) != 0) ||
+	    ((error = mps_attach(sc)) != 0))
 		mps_pci_free(sc);
+
+	return (error);
+}
+
+/*
+ * Allocate, but don't assign interrupts early.  Doing it before requesting
+ * the IOCFacts message informs the firmware that we want to do MSI-X
+ * multiqueue.  We might not use all of the available messages, but there's
+ * no reason to re-alloc if we don't.
+ */
+static int
+mps_pci_alloc_interrupts(struct mps_softc *sc)
+{
+	device_t dev;
+	int error, msgs;
+
+	dev = sc->mps_dev;
+	error = 0;
+	msgs = 0;
+
+	if (sc->disable_msix == 0) {
+		msgs = pci_msix_count(dev);
+		mps_dprint(sc, MPS_INIT, "Counted %d MSI-X messages\n", msgs);
+		msgs = min(msgs, sc->max_msix);
+		msgs = min(msgs, MPS_MSIX_MAX);
+		msgs = min(msgs, 1);	/* XXX */
+		if (msgs != 0) {
+			mps_dprint(sc, MPS_INIT, "Attempting to allocate %d "
+			    "MSI-X messages\n", msgs);
+			error = mps_alloc_msix(sc, msgs);
+		}
+	}
+	if (((error != 0) || (msgs == 0)) && (sc->disable_msi == 0)) {
+		msgs = pci_msi_count(dev);
+		mps_dprint(sc, MPS_INIT, "Counted %d MSI messages\n", msgs);
+		msgs = min(msgs, MPS_MSI_MAX);
+		if (msgs != 0) {
+			mps_dprint(sc, MPS_INIT, "Attempting to allocate %d "
+			    "MSI messages\n", MPS_MSI_MAX);
+			error = mps_alloc_msi(sc, MPS_MSI_MAX);
+		}
+	}
+	if ((error != 0) || (msgs == 0)) {
+		/*
+		 * If neither MSI or MSI-X are avaiable, assume legacy INTx.
+		 * This also implies that there will be only 1 queue.
+		 */
+		mps_dprint(sc, MPS_INIT, "Falling back to legacy INTx\n");
+		sc->mps_flags |= MPS_FLAGS_INTX;
+		msgs = 1;
+	} else
+		sc->mps_flags |= MPS_FLAGS_MSI;
+
+	sc->msi_msgs = msgs;
+	mps_dprint(sc, MPS_INIT, "Allocated %d interrupts\n", msgs);
 
 	return (error);
 }
@@ -243,52 +292,49 @@ int
 mps_pci_setup_interrupts(struct mps_softc *sc)
 {
 	device_t dev;
-	int i, error, msgs;
+	struct mps_queue *q;
+	void *ihandler;
+	int i, error, rid, initial_rid;
 
 	dev = sc->mps_dev;
 	error = ENXIO;
-	if ((sc->disable_msix == 0) &&
-	    ((msgs = pci_msix_count(dev)) >= MPS_MSI_COUNT))
-		error = mps_alloc_msix(sc, MPS_MSI_COUNT);
-	if ((error != 0) && (sc->disable_msi == 0) &&
-	    ((msgs = pci_msi_count(dev)) >= MPS_MSI_COUNT))
-		error = mps_alloc_msi(sc, MPS_MSI_COUNT);
 
-	if (error != 0) {
-		sc->mps_flags |= MPS_FLAGS_INTX;
-		sc->mps_irq_rid[0] = 0;
-		sc->mps_irq[0] = bus_alloc_resource_any(dev, SYS_RES_IRQ,
-		    &sc->mps_irq_rid[0],  RF_SHAREABLE | RF_ACTIVE);
-		if (sc->mps_irq[0] == NULL) {
-			device_printf(dev, "Cannot allocate INTx interrupt\n");
-			return (ENXIO);
-		}
-		error = bus_setup_intr(dev, sc->mps_irq[0],
-		    INTR_TYPE_BIO | INTR_MPSAFE, NULL, mps_intr, sc,
-		    &sc->mps_intrhand[0]);
-		if (error)
-			device_printf(dev, "Cannot setup INTx interrupt\n");
+	if (sc->mps_flags & MPS_FLAGS_INTX) {
+		initial_rid = 0;
+		ihandler = mps_intr;
+	} else if (sc->mps_flags & MPS_FLAGS_MSI) {
+		initial_rid = 1;
+		ihandler = mps_intr_msi;
 	} else {
-		sc->mps_flags |= MPS_FLAGS_MSI;
-		for (i = 0; i < MPS_MSI_COUNT; i++) {
-			sc->mps_irq_rid[i] = i + 1;
-			sc->mps_irq[i] = bus_alloc_resource_any(dev,
-			    SYS_RES_IRQ, &sc->mps_irq_rid[i], RF_ACTIVE);
-			if (sc->mps_irq[i] == NULL) {
-				device_printf(dev,
-				    "Cannot allocate MSI interrupt\n");
-				return (ENXIO);
-			}
-			error = bus_setup_intr(dev, sc->mps_irq[i],
-			    INTR_TYPE_BIO | INTR_MPSAFE, NULL, mps_intr_msi,
-			    sc, &sc->mps_intrhand[i]);
-			if (error) {
-				device_printf(dev,
-				    "Cannot setup MSI interrupt %d\n", i);
-				break;
-			}
+		mps_dprint(sc, MPS_ERROR|MPS_INIT,
+		    "Unable to set up interrupts\n");
+		return (EINVAL);
+	}
+
+	for (i = 0; i < sc->msi_msgs; i++) {
+		q = &sc->queues[i];
+		rid = i + initial_rid;
+		q->irq_rid = rid;
+		q->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ,
+		    &q->irq_rid, RF_ACTIVE);
+		if (q->irq == NULL) {
+			mps_dprint(sc, MPS_ERROR|MPS_INIT,
+			    "Cannot allocate interrupt RID %d\n", rid);
+			sc->msi_msgs = i;
+			break;
+		}
+		error = bus_setup_intr(dev, q->irq,
+		    INTR_TYPE_BIO | INTR_MPSAFE, NULL, ihandler,
+		    sc, &q->intrhand);
+		if (error) {
+			mps_dprint(sc, MPS_ERROR|MPS_INIT,
+			    "Cannot setup interrupt RID %d\n", rid);
+			sc->msi_msgs = i;
+			break;
 		}
 	}
+
+	mps_dprint(sc, MPS_INIT, "Set up %d interrupts\n", sc->msi_msgs);
 
 	return (error);
 }
@@ -308,33 +354,38 @@ mps_pci_detach(device_t dev)
 	return (0);
 }
 
+void
+mps_pci_free_interrupts(struct mps_softc *sc)
+{
+	struct mps_queue *q;
+	int i;
+
+	if (sc->queues == NULL)
+		return;
+
+	for (i = 0; i < sc->msi_msgs; i++) {
+		q = &sc->queues[i];
+		if (q->irq != NULL) {
+			bus_teardown_intr(sc->mps_dev, q->irq,
+			    q->intrhand);
+			bus_release_resource(sc->mps_dev, SYS_RES_IRQ,
+			    q->irq_rid, q->irq);
+		}
+	}
+}
+
 static void
 mps_pci_free(struct mps_softc *sc)
 {
-	int i;
 
 	if (sc->mps_parent_dmat != NULL) {
 		bus_dma_tag_destroy(sc->mps_parent_dmat);
 	}
 
-	if (sc->mps_flags & MPS_FLAGS_MSI) {
-		for (i = 0; i < MPS_MSI_COUNT; i++) {
-			if (sc->mps_irq[i] != NULL) {
-				bus_teardown_intr(sc->mps_dev, sc->mps_irq[i],
-				    sc->mps_intrhand[i]);
-				bus_release_resource(sc->mps_dev, SYS_RES_IRQ,
-				    sc->mps_irq_rid[i], sc->mps_irq[i]);
-			}
-		}
-		pci_release_msi(sc->mps_dev);
-	}
+	mps_pci_free_interrupts(sc);
 
-	if (sc->mps_flags & MPS_FLAGS_INTX) {
-		bus_teardown_intr(sc->mps_dev, sc->mps_irq[0],
-		    sc->mps_intrhand[0]);
-		bus_release_resource(sc->mps_dev, SYS_RES_IRQ,
-		    sc->mps_irq_rid[0], sc->mps_irq[0]);
-	}
+	if (sc->mps_flags & MPS_FLAGS_MSI)
+		pci_release_msi(sc->mps_dev);
 
 	if (sc->mps_regs_resource != NULL) {
 		bus_release_resource(sc->mps_dev, SYS_RES_MEMORY,

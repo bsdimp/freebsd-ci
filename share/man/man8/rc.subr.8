@@ -29,7 +29,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 14, 2012
+.Dd June 19, 2018
 .Dt RC.SUBR 8
 .Os
 .Sh NAME
@@ -105,17 +105,7 @@ Make a backup copy of
 .Ar file
 into
 .Ar current .
-If the
-.Xr rc.conf 5
-variable
-.Va backup_uses_rcs
-is
-.Dq Li YES ,
-use
-.Xr rcs 1
-to archive the previous version of
-.Ar current ,
-otherwise save the previous version of
+Save the previous version of
 .Ar current
 as
 .Ar backup .
@@ -129,9 +119,7 @@ may be one of the following:
 .Ar file
 is now being backed up by or possibly re-entered into this backup mechanism.
 .Ar current
-is created, and if necessary, the
-.Xr rcs 1
-files are created as well.
+is created.
 .It Cm update
 .Ar file
 has changed and needs to be backed up.
@@ -139,9 +127,6 @@ If
 .Ar current
 exists, it is copied to
 .Ar backup
-or checked into
-.Xr rcs 1
-(if the repository file is old),
 and then
 .Ar file
 is copied to
@@ -149,12 +134,6 @@ is copied to
 .It Cm remove
 .Ar file
 is no longer being tracked by this backup mechanism.
-If
-.Xr rcs 1
-is being used, an empty file is checked in and
-.Ar current
-is removed,
-otherwise
 .Ar current
 is moved to
 .Ar backup .
@@ -379,6 +358,9 @@ Perform a
 then a
 .Cm start .
 Defaults to displaying the process ID of the program (if running).
+.It Cm enabled
+Return 0 if the service is enabled and 1 if it is not.
+This command does not print anything.
 .It Cm rcvar
 Display which
 .Xr rc.conf 5
@@ -565,6 +547,29 @@ to before running
 Only supported after
 .Pa /usr
 is mounted.
+.It Va ${name}_env
+A list of environment variables to run
+.Va command
+with.
+This will be passed as arguments to the
+.Xr env 1
+utility.
+.It Va ${name}_env_file
+A file to source for environmental variables to run
+.Va command
+with.
+Note that all the variables which are being assigned in this file are going
+to be exported into the environment of
+.Va command .
+.It Va ${name}_fib
+FIB
+.Pa Routing Table
+number to run
+.Va command
+with.
+See
+.Xr setfib 1
+for more details.
 .It Va ${name}_flags
 Arguments to call
 .Va command
@@ -585,6 +590,29 @@ as.
 Only supported after
 .Pa /usr
 is mounted.
+.It Va ${name}_limits
+Resource limits to apply to
+.Va command .
+This will be passed as arguments to the
+.Xr limits 1
+utility.
+By default, the resource limits are based on the login class defined in
+.Va ${name}_login_class .
+.It Va ${name}_login_class
+Login class to use with
+.Va ${name}_limits .
+Defaults to
+.Dq Li daemon .
+.It Va ${name}_oomprotect
+.Xr protect 1
+.Va command
+from being killed when swap space is exhausted.
+If
+.Dq Li YES
+is used, no child processes are protected.
+If
+.Dq Li ALL ,
+protect all child processes.
 .It Va ${name}_program
 Full path to the command.
 Overrides
@@ -619,6 +647,14 @@ as.
 Comma separated list of supplementary groups to run the chrooted
 .Va command
 with.
+.It Va ${name}_prepend
+Commands to be prepended to
+.Va command .
+This is a generic version of
+.Va ${name}_env ,
+.Va ${name}_fib ,
+or
+.Va ${name}_nice .
 .It Ar argument Ns Va _cmd
 Shell commands which override the default method for
 .Ar argument .

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) Comtrol Corporation <support@comtrol.com>
  * All rights reserved.
  *
@@ -151,7 +153,6 @@ rp_pciattach(device_t dev)
 	CONTROLLER_t	*ctlp;
 	int	unit;
 	int	retval;
-	u_int32_t	stcmd;
 
 	ctlp = device_get_softc(dev);
 	bzero(ctlp, sizeof(*ctlp));
@@ -160,13 +161,6 @@ rp_pciattach(device_t dev)
 	ctlp->aiop2rid = rp_pci_aiop2rid;
 	ctlp->aiop2off = rp_pci_aiop2off;
 	ctlp->ctlmask = rp_pci_ctlmask;
-
-	/* Wake up the device. */
-	stcmd = pci_read_config(dev, PCIR_COMMAND, 4);
-	if ((stcmd & PCIM_CMD_PORTEN) == 0) {
-		stcmd |= (PCIM_CMD_PORTEN);
-		pci_write_config(dev, PCIR_COMMAND, 4, stcmd);
-	}
 
 	/* The IO ports of AIOPs for a PCI controller are continuous. */
 	ctlp->io_num = 1;
@@ -245,7 +239,7 @@ rp_pcishutdown(device_t dev)
 static void
 rp_pcireleaseresource(CONTROLLER_t *ctlp)
 {
-	rp_untimeout();
+	rp_releaseresource(ctlp);
 	if (ctlp->io != NULL) {
 		if (ctlp->io[0] != NULL)
 			bus_release_resource(ctlp->dev, SYS_RES_IOPORT, ctlp->io_rid[0], ctlp->io[0]);
@@ -256,7 +250,6 @@ rp_pcireleaseresource(CONTROLLER_t *ctlp)
 		free(ctlp->io_rid, M_DEVBUF);
 		ctlp->io = NULL;
 	}
-	rp_releaseresource(ctlp);
 }
 
 static int

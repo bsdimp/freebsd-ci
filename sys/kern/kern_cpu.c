@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2007 Nate Lawson (SDG)
  * All rights reserved.
  *
@@ -57,7 +59,7 @@ __FBSDID("$FreeBSD$");
  * Number of levels we can handle.  Levels are synthesized from settings
  * so for M settings and N drivers, there may be M*N levels.
  */
-#define CF_MAX_LEVELS	64
+#define CF_MAX_LEVELS	256
 
 struct cf_saved_freq {
 	struct cf_level			level;
@@ -133,13 +135,11 @@ DRIVER_MODULE(cpufreq, cpu, cpufreq_driver, cpufreq_dc, 0, 0);
 
 static int		cf_lowest_freq;
 static int		cf_verbose;
-TUNABLE_INT("debug.cpufreq.lowest", &cf_lowest_freq);
-TUNABLE_INT("debug.cpufreq.verbose", &cf_verbose);
 static SYSCTL_NODE(_debug, OID_AUTO, cpufreq, CTLFLAG_RD, NULL,
     "cpufreq debugging");
-SYSCTL_INT(_debug_cpufreq, OID_AUTO, lowest, CTLFLAG_RW, &cf_lowest_freq, 1,
+SYSCTL_INT(_debug_cpufreq, OID_AUTO, lowest, CTLFLAG_RWTUN, &cf_lowest_freq, 1,
     "Don't provide levels below this frequency.");
-SYSCTL_INT(_debug_cpufreq, OID_AUTO, verbose, CTLFLAG_RW, &cf_verbose, 1,
+SYSCTL_INT(_debug_cpufreq, OID_AUTO, verbose, CTLFLAG_RWTUN, &cf_verbose, 1,
     "Print verbose debugging messages");
 
 static int
@@ -245,6 +245,7 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 	struct cf_saved_freq *saved_freq, *curr_freq;
 	struct pcpu *pc;
 	int error, i;
+	u_char pri;
 
 	sc = device_get_softc(dev);
 	error = 0;
@@ -261,6 +262,9 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 	CF_MTX_LOCK(&sc->lock);
 
 #ifdef SMP
+#ifdef EARLY_AP_STARTUP
+	MPASS(mp_ncpus == 1 || smp_started);
+#else
 	/*
 	 * If still booting and secondary CPUs not started yet, don't allow
 	 * changing the frequency until they're online.  This is because we
@@ -268,11 +272,12 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 	 * switching the main CPU.  XXXTODO: Need to think more about how to
 	 * handle having different CPUs at different frequencies.  
 	 */
-	if (mp_ncpus > 1 && !smp_active) {
+	if (mp_ncpus > 1 && !smp_started) {
 		device_printf(dev, "rejecting change, SMP not started yet\n");
 		error = ENXIO;
 		goto out;
 	}
+#endif
 #endif /* SMP */
 
 	/*
@@ -329,6 +334,8 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 		/* Bind to the target CPU before switching. */
 		pc = cpu_get_pcpu(set->dev);
 		thread_lock(curthread);
+		pri = curthread->td_priority;
+		sched_prio(curthread, PRI_MIN);
 		sched_bind(curthread, pc->pc_cpuid);
 		thread_unlock(curthread);
 		CF_DEBUG("setting abs freq %d on %s (cpu %d)\n", set->freq,
@@ -336,6 +343,7 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 		error = CPUFREQ_DRV_SET(set->dev, set);
 		thread_lock(curthread);
 		sched_unbind(curthread);
+		sched_prio(curthread, pri);
 		thread_unlock(curthread);
 		if (error) {
 			goto out;
@@ -353,6 +361,8 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 		/* Bind to the target CPU before switching. */
 		pc = cpu_get_pcpu(set->dev);
 		thread_lock(curthread);
+		pri = curthread->td_priority;
+		sched_prio(curthread, PRI_MIN);
 		sched_bind(curthread, pc->pc_cpuid);
 		thread_unlock(curthread);
 		CF_DEBUG("setting rel freq %d on %s (cpu %d)\n", set->freq,
@@ -360,6 +370,7 @@ cf_set_method(device_t dev, const struct cf_level *level, int priority)
 		error = CPUFREQ_DRV_SET(set->dev, set);
 		thread_lock(curthread);
 		sched_unbind(curthread);
+		sched_prio(curthread, pri);
 		thread_unlock(curthread);
 		if (error) {
 			/* XXX Back out any successful setting? */
@@ -418,7 +429,7 @@ cf_get_method(device_t dev, struct cf_level *level)
 	struct cf_setting *curr_set, set;
 	struct pcpu *pc;
 	device_t *devs;
-	int count, error, i, n, numdevs;
+	int bdiff, count, diff, error, i, n, numdevs;
 	uint64_t rate;
 
 	sc = device_get_softc(dev);
@@ -494,14 +505,15 @@ cf_get_method(device_t dev, struct cf_level *level)
 	}
 	cpu_est_clockrate(pc->pc_cpuid, &rate);
 	rate /= 1000000;
+	bdiff = 1 << 30;
 	for (i = 0; i < count; i++) {
-		if (CPUFREQ_CMP(rate, levels[i].total_set.freq)) {
+		diff = abs(levels[i].total_set.freq - rate);
+		if (diff < bdiff) {
+			bdiff = diff;
 			sc->curr_level = levels[i];
-			CF_DEBUG("get estimated freq %d\n", curr_set->freq);
-			goto out;
 		}
 	}
-	error = ENXIO;
+	CF_DEBUG("get estimated freq %d\n", curr_set->freq);
 
 out:
 	if (error == 0)
@@ -1037,6 +1049,7 @@ cpufreq_unregister(device_t dev)
 	if (cf_dev == NULL) {
 		device_printf(dev,
 	"warning: cpufreq_unregister called with no cpufreq device active\n");
+		free(devs, M_TEMP);
 		return (0);
 	}
 	cfcount = 0;

@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"	@(#)pwd_mkdb.8	8.1 (Berkeley) 6/6/93
 .\" $FreeBSD$
 .\"
-.Dd February 28, 2005
+.Dd April 30, 2018
 .Dt PWD_MKDB 8
 .Os
 .Sh NAME
@@ -61,14 +61,10 @@ different from the historic Version 7 style format.
 .Pp
 The options are as follows:
 .Bl -tag -width flag
-.It Fl B
-Store data in big-endian format.
 .It Fl C
 Check if the password file is in the correct format.
 Do not
 change, add, or remove any files.
-.It Fl L
-Store data in little-endian format.
 .It Fl N
 Tell
 .Nm
@@ -116,6 +112,15 @@ encrypted password and the insecure version has an asterisk (``*'')
 The databases are used by the C library password routines (see
 .Xr getpwent 3 ) .
 .Pp
+The following options affected the generation of legacy entries,
+and are now deprecated.
+.Bl -tag -width flag
+.It Fl B
+Store data in big-endian format.
+.It Fl L
+Store data in little-endian format.
+.El
+.Pp
 The
 .Nm
 utility exits zero on success, non-zero on failure.
@@ -143,6 +148,12 @@ The current password file.
 .It Pa /etc/passwd
 A Version 7 format password file.
 .El
+.Sh EXAMPLES
+Regenerate the password database after manually editing or replacing
+the password file:
+.Bd -literal -offset -indent
+/usr/sbin/pwd_mkdb -p /etc/master.passwd
+.Ed
 .Sh COMPATIBILITY
 Previous versions of the system had a program similar to
 .Nm ,

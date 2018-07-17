@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2013 Pietro Cerutti <gahr@FreeBSD.org>
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -55,6 +57,14 @@ fmemopen(void * __restrict buf, size_t size, const char * __restrict mode)
 	struct fmemopen_cookie *ck;
 	FILE *f;
 	int flags, rc;
+
+	/*
+	 * POSIX says we shall return EINVAL if size is 0.
+	 */
+	if (size == 0) {
+		errno = EINVAL;
+		return (NULL);
+	}
 
 	/*
 	 * Retrieve the flags as used by open(2) from the mode argument, and
@@ -119,14 +129,7 @@ fmemopen(void * __restrict buf, size_t size, const char * __restrict mode)
 	 */
 	switch (mode[0]) {
 	case 'a':
-		if (ck->bin) {
-			/*
-			 * This isn't useful, since the buffer isn't allowed
-			 * to grow.
-			 */
-			ck->off = ck->len = size;
-		} else
-			ck->off = ck->len = strnlen(ck->buf, ck->size);
+		ck->off = ck->len = strnlen(ck->buf, ck->size);
 		break;
 	case 'r':
 		ck->len = size;
@@ -147,6 +150,9 @@ fmemopen(void * __restrict buf, size_t size, const char * __restrict mode)
 		free(ck);
 		return (NULL);
 	}
+
+	if (mode[0] == 'a')
+		f->_flags |= __SAPP;
 
 	/*
 	 * Turn off buffering, so a write past the end of the buffer

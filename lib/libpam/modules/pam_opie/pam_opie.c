@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright 2000 James Bloom
  * All rights reserved.
  * Based upon code Copyright 1998 Juniper Networks, Inc.
@@ -62,7 +64,7 @@ pam_sm_authenticate(pam_handle_t *pamh, int flags __unused,
 	struct passwd *pwd;
 	int retval, i;
 	const char *(promptstr[]) = { "%s\nPassword: ", "%s\nPassword [echo on]: "};
-	char challenge[OPIE_CHALLENGE_MAX];
+	char challenge[OPIE_CHALLENGE_MAX + 1];
 	char principal[OPIE_PRINCIPAL_MAX];
 	const char *user;
 	char *response;

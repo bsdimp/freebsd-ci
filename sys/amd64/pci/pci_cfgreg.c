@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997, Stefan Esser <se@freebsd.org>
  * Copyright (c) 2000, Michael Smith <msmith@freebsd.org>
  * Copyright (c) 2000, BSDi
@@ -64,8 +66,8 @@ static vm_offset_t pcie_base;
 static int pcie_minbus, pcie_maxbus;
 static uint32_t pcie_badslots;
 static struct mtx pcicfg_mtx;
+MTX_SYSINIT(pcicfg_mtx, &pcicfg_mtx, "pcicfg_mtx", MTX_SPIN);
 static int mcfg_enable = 1;
-TUNABLE_INT("hw.pci.mcfg", &mcfg_enable);
 SYSCTL_INT(_hw_pci, OID_AUTO, mcfg, CTLFLAG_RDTUN, &mcfg_enable, 0,
     "Enable support for PCI-e memory mapped config access");
 
@@ -75,14 +77,8 @@ SYSCTL_INT(_hw_pci, OID_AUTO, mcfg, CTLFLAG_RDTUN, &mcfg_enable, 0,
 int
 pci_cfgregopen(void)
 {
-	static int once = 0;
 	uint64_t pciebar;
 	uint16_t did, vid;
-
-	if (!once) {
-		mtx_init(&pcicfg_mtx, "pcicfg", NULL, MTX_SPIN);
-		once = 1;
-	}
 
 	if (cfgmech != CFGMECH_NONE)
 		return (1);
@@ -139,6 +135,9 @@ pci_cfgregread(int bus, int slot, int func, int reg, int bytes)
 {
 	uint32_t line;
 
+	if (cfgmech == CFGMECH_NONE)
+		return (0xffffffff);
+
 	/*
 	 * Some BIOS writers seem to want to ignore the spec and put
 	 * 0 in the intline rather than 255 to indicate none.  Some use
@@ -163,6 +162,9 @@ void
 pci_cfgregwrite(int bus, int slot, int func, int reg, u_int32_t data, int bytes)
 {
 
+	if (cfgmech == CFGMECH_NONE)
+		return;
+
 	if (cfgmech == CFGMECH_PCIE &&
 	    (bus >= pcie_minbus && bus <= pcie_maxbus) &&
 	    (bus != 0 || !(1 << slot & pcie_badslots)))
@@ -184,7 +186,7 @@ pci_cfgenable(unsigned bus, unsigned slot, unsigned func, int reg, int bytes)
 	if (bus <= PCI_BUSMAX && slot <= PCI_SLOTMAX && func <= PCI_FUNCMAX &&
 	    (unsigned)reg <= PCI_REGMAX && bytes != 3 &&
 	    (unsigned)bytes <= 4 && (reg & (bytes - 1)) == 0) {
-		outl(CONF1_ADDR_PORT, (1 << 31) | (bus << 16) | (slot << 11) 
+		outl(CONF1_ADDR_PORT, (1U << 31) | (bus << 16) | (slot << 11) 
 		    | (func << 8) | (reg & ~0x03));
 		dataport = CONF1_DATA_PORT + (reg & 0x03);
 	}

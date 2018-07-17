@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2002 Benno Rice.
  * All rights reserved.
  *
@@ -32,11 +34,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
+#include <sys/rman.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_pci.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+#include <dev/ofw/ofwpci.h>
 
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
@@ -47,9 +53,6 @@ __FBSDID("$FreeBSD$");
 #include <machine/pio.h>
 #include <machine/resource.h>
 
-#include <sys/rman.h>
-
-#include <powerpc/ofw/ofw_pci.h>
 #include <powerpc/powermac/uninorthvar.h>
 
 #include <vm/vm.h>
@@ -98,7 +101,7 @@ static devclass_t	uninorth_devclass;
 
 DEFINE_CLASS_1(pcib, uninorth_driver, uninorth_methods,
     sizeof(struct uninorth_softc), ofw_pci_driver);
-DRIVER_MODULE(uninorth, nexus, uninorth_driver, uninorth_devclass, 0, 0);
+DRIVER_MODULE(uninorth, ofwbus, uninorth_driver, uninorth_devclass, 0, 0);
 
 static int
 uninorth_probe(device_t dev)
@@ -133,11 +136,17 @@ uninorth_attach(device_t dev)
 {
 	struct		uninorth_softc *sc;
 	const char	*compatible;
+	const char	*name;
 	phandle_t	node;
-	u_int32_t	reg[3];
+	uint32_t	reg[3];
+	uint64_t	regbase;
+	cell_t		acells;
+	int		unit;
 
 	node = ofw_bus_get_node(dev);
 	sc = device_get_softc(dev);
+	name = device_get_name(dev);
+	unit = device_get_unit(dev);
 
 	if (OF_getprop(node, "reg", reg, sizeof(reg)) < 8)
 		return (ENXIO);
@@ -149,13 +158,22 @@ uninorth_attach(device_t dev)
 	if (strcmp(compatible, "u4-pcie") == 0)
 		sc->sc_ver = 4;
 
-	if (sc->sc_ver >= 3) {
-	   sc->sc_addr = (vm_offset_t)pmap_mapdev(reg[1] + 0x800000, PAGE_SIZE);
-	   sc->sc_data = (vm_offset_t)pmap_mapdev(reg[1] + 0xc00000, PAGE_SIZE);
-	} else {
-	   sc->sc_addr = (vm_offset_t)pmap_mapdev(reg[0] + 0x800000, PAGE_SIZE);
-	   sc->sc_data = (vm_offset_t)pmap_mapdev(reg[0] + 0xc00000, PAGE_SIZE);
+	acells = 1;
+	OF_getprop(OF_parent(node), "#address-cells", &acells, sizeof(acells));
+
+	regbase = reg[0];
+	if (acells == 2) {
+		regbase <<= 32;
+		regbase |= reg[1];
 	}
+
+	sc->sc_addr = (vm_offset_t)pmap_mapdev(regbase + 0x800000, PAGE_SIZE);
+	sc->sc_data = (vm_offset_t)pmap_mapdev(regbase + 0xc00000, PAGE_SIZE);
+
+	if (resource_int_value(name, unit, "skipslot", &sc->sc_skipslot) != 0)
+		sc->sc_skipslot = -1;
+
+	mtx_init(&sc->sc_cfg_mtx, "uninorth pcicfg", NULL, MTX_SPIN);
 
 	return (ofw_pci_attach(dev));
 }
@@ -166,25 +184,29 @@ uninorth_read_config(device_t dev, u_int bus, u_int slot, u_int func, u_int reg,
 {
 	struct		uninorth_softc *sc;
 	vm_offset_t	caoff;
+	u_int32_t	val;
 
 	sc = device_get_softc(dev);
 	caoff = sc->sc_data + (reg & 0x07);
+	val = 0xffffffff;
 
+	mtx_lock_spin(&sc->sc_cfg_mtx);
 	if (uninorth_enable_config(sc, bus, slot, func, reg) != 0) {
 		switch (width) {
 		case 1: 
-			return (in8rb(caoff));
+			val = in8rb(caoff);
 			break;
 		case 2:
-			return (in16rb(caoff));
+			val = in16rb(caoff);
 			break;
 		case 4:
-			return (in32rb(caoff));
+			val = in32rb(caoff);
 			break;
 		}
 	}
+	mtx_unlock_spin(&sc->sc_cfg_mtx);
 
-	return (0xffffffff);
+	return (val);
 }
 
 static void
@@ -197,6 +219,7 @@ uninorth_write_config(device_t dev, u_int bus, u_int slot, u_int func,
 	sc = device_get_softc(dev);
 	caoff = sc->sc_data + (reg & 0x07);
 
+	mtx_lock_spin(&sc->sc_cfg_mtx);
 	if (uninorth_enable_config(sc, bus, slot, func, reg)) {
 		switch (width) {
 		case 1:
@@ -210,6 +233,7 @@ uninorth_write_config(device_t dev, u_int bus, u_int slot, u_int func,
 			break;
 		}
 	}
+	mtx_unlock_spin(&sc->sc_cfg_mtx);
 }
 
 static int
@@ -217,13 +241,11 @@ uninorth_enable_config(struct uninorth_softc *sc, u_int bus, u_int slot,
     u_int func, u_int reg)
 {
 	uint32_t	cfgval;
-	uint32_t	pass;
 
-	if (resource_int_value(device_get_name(sc->pci_sc.sc_dev),
-	        device_get_unit(sc->pci_sc.sc_dev), "skipslot", &pass) == 0) {
-		if (pass == slot)
-			return (0);
-	}
+	mtx_assert(&sc->sc_cfg_mtx, MA_OWNED);
+
+	if (sc->sc_skipslot == slot)
+		return (0);
 
 	/*
 	 * Issue type 0 configuration space accesses for the root bus.

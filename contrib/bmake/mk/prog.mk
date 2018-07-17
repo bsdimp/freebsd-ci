@@ -1,4 +1,4 @@
-#	$Id: prog.mk,v 1.24 2012/12/13 23:04:14 sjg Exp $
+#	$Id: prog.mk,v 1.35 2018/01/26 20:04:07 sjg Exp $
 
 .if !target(__${.PARSEFILE}__)
 __${.PARSEFILE}__:
@@ -50,6 +50,15 @@ LIBCRT0=	${DESTDIR}/usr/lib/crt0.o
 .include <dpadd.mk>
 .endif
 
+.if ${MK_GPROF} == "yes"
+CFLAGS+= ${CC_PG} ${PROFFLAGS}
+LDADD+= ${CC_PG}
+.if ${MK_DPADD_MK} == "no"
+LDADD_LIBC_P?= -lc_p
+LDADD_LAST+= ${LDADD_LIBC_P}
+.endif
+.endif
+
 .if defined(SHAREDSTRINGS)
 CLEANFILES+=strings
 .c.o:
@@ -57,21 +66,17 @@ CLEANFILES+=strings
 	@${CC} ${CFLAGS} -c x.c -o ${.TARGET}
 	@rm -f x.c
 
-.cc.o:
+${CXX_SUFFIXES:%=%.o}:
 	${CXX} -E ${CXXFLAGS} ${.IMPSRC} | xstr -c -
 	@mv -f x.c x.cc
 	@${CXX} ${CXXFLAGS} -c x.cc -o ${.TARGET}
 	@rm -f x.cc
-
-.C.o:
-	${CXX} -E ${CXXFLAGS} ${.IMPSRC} | xstr -c -
-	@mv -f x.c x.C
-	@${CXX} ${CXXFLAGS} -c x.C -o ${.TARGET}
-	@rm -f x.C
 .endif
 
 
 .if defined(PROG)
+BINDIR ?= ${prefix}/bin
+
 SRCS?=	${PROG}.c
 .for s in ${SRCS:N*.h:N*.sh:M*/*}
 ${.o .po .lo:L:@o@${s:T:R}$o@}: $s
@@ -104,15 +109,21 @@ _SUPCXX=	-lstdc++ -lm
 
 _CCLINK?=	${CC}
 
+.if ${MK_PROG_LDORDER_MK} != "no"
+${PROG}: ldorder
+
+.include <ldorder.mk>
+.endif
+
 .if defined(DESTDIR) && exists(${LIBCRT0}) && ${LIBCRT0} != "/dev/null"
 
 ${PROG}: ${LIBCRT0} ${OBJS} ${LIBC} ${DPADD}
-	${_CCLINK} ${LDFLAGS} ${LDSTATIC} -o ${.TARGET} -nostdlib ${_PROGLDOPTS} -L${DESTDIR}/usr/lib ${LIBCRT0} ${LIBCRTBEGIN} ${OBJS} ${LDADD} -L${DESTDIR}/usr/lib ${_SUPCXX} -lgcc -lc -lgcc ${LIBCRTEND}
+	${_CCLINK} ${LDFLAGS} ${LDSTATIC} -o ${.TARGET} -nostdlib ${_PROGLDOPTS} -L${DESTDIR}/usr/lib ${LIBCRT0} ${LIBCRTBEGIN} ${OBJS} ${LDADD_LDORDER} ${LDADD} -L${DESTDIR}/usr/lib ${_SUPCXX} -lgcc -lc -lgcc ${LIBCRTEND}
 
 .else
 
 ${PROG}: ${LIBCRT0} ${OBJS} ${LIBC} ${DPADD}
-	${_CCLINK} ${LDFLAGS} ${LDSTATIC} -o ${.TARGET} ${_PROGLDOPTS} ${OBJS} ${LDADD}
+	${_CCLINK} ${LDFLAGS} ${LDSTATIC} -o ${.TARGET} ${_PROGLDOPTS} ${OBJS} ${LDADD_LDORDER} ${LDADD}
 
 .endif	# defined(DESTDIR)
 .endif	# defined(OBJS) && !empty(OBJS)
@@ -123,8 +134,9 @@ MAN=	${PROG}.1
 .endif	# defined(PROG)
 
 .if !defined(_SKIP_BUILD)
-all: ${PROG}
+realbuild: ${PROG}
 .endif
+
 all: _SUBDIRUSE
 
 .if !target(clean)
@@ -188,6 +200,8 @@ install_links:
 
 maninstall: afterinstall
 afterinstall: realinstall
+install_links: realinstall
+proginstall: beforeinstall
 realinstall: beforeinstall
 .endif
 
@@ -203,6 +217,10 @@ lint: ${LOBJS}
 .NOPATH:	${OBJS}
 .endif
 
+.if defined(FILES) || defined(FILESGROUPS)
+.include <files.mk>
+.endif
+
 .if ${MK_MAN} != "no"
 .include <man.mk>
 .endif
@@ -214,6 +232,20 @@ lint: ${LOBJS}
 .include <obj.mk>
 .include <dep.mk>
 .include <subdir.mk>
+
+.if !empty(PROG) && ${MK_STAGING_PROG} == "yes"
+STAGE_BINDIR ?= ${STAGE_OBJTOP}${BINDIR}
+STAGE_DIR.prog ?= ${STAGE_BINDIR}
+.if ${PROG_NAME:U${PROG}} != ${PROG}
+STAGE_AS_SETS += prog
+STAGE_AS_${PROG} = ${PROG_NAME}
+stage_as.prog: ${PROG}
+.else
+STAGE_SETS += prog
+stage_files.prog: ${PROG}
+.endif
+.endif
+
 .include <final.mk>
 
 .endif

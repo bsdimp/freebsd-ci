@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Alexey Zelkin <phantom@FreeBSD.org>
  * Copyright (c) 1997 FreeBSD Inc.
  * All rights reserved.
@@ -46,7 +48,7 @@ struct xlocale_time {
 
 struct xlocale_time __xlocale_global_time;
 
-#define LCTIME_SIZE (sizeof(struct lc_time_T) / sizeof(char *))
+#define	LCTIME_SIZE (sizeof(struct lc_time_T) / sizeof(char *))
 
 static const struct lc_time_T	_C_time_locale = {
 	{

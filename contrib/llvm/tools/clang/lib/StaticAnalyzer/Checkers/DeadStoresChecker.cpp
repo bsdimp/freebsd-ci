@@ -18,7 +18,6 @@
 #include "clang/AST/ParentMap.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Analysis/Analyses/LiveVariables.h"
-#include "clang/Analysis/Visitors/CFGRecStmtDeclVisitor.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporter.h"
 #include "clang/StaticAnalyzer/Core/Checker.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/AnalysisManager.h"
@@ -29,36 +28,36 @@
 using namespace clang;
 using namespace ento;
 
-namespace {  
-  
+namespace {
+
 /// A simple visitor to record what VarDecls occur in EH-handling code.
 class EHCodeVisitor : public RecursiveASTVisitor<EHCodeVisitor> {
 public:
   bool inEH;
   llvm::DenseSet<const VarDecl *> &S;
-  
+
   bool TraverseObjCAtFinallyStmt(ObjCAtFinallyStmt *S) {
     SaveAndRestore<bool> inFinally(inEH, true);
     return ::RecursiveASTVisitor<EHCodeVisitor>::TraverseObjCAtFinallyStmt(S);
   }
-  
+
   bool TraverseObjCAtCatchStmt(ObjCAtCatchStmt *S) {
     SaveAndRestore<bool> inCatch(inEH, true);
     return ::RecursiveASTVisitor<EHCodeVisitor>::TraverseObjCAtCatchStmt(S);
   }
-  
+
   bool TraverseCXXCatchStmt(CXXCatchStmt *S) {
     SaveAndRestore<bool> inCatch(inEH, true);
     return TraverseStmt(S->getHandlerBlock());
   }
-  
+
   bool VisitDeclRefExpr(DeclRefExpr *DR) {
     if (inEH)
       if (const VarDecl *D = dyn_cast<VarDecl>(DR->getDecl()))
         S.insert(D);
     return true;
   }
-  
+
   EHCodeVisitor(llvm::DenseSet<const VarDecl *> &S) :
   inEH(false), S(S) {}
 };
@@ -71,9 +70,9 @@ class ReachableCode {
 public:
   ReachableCode(const CFG &cfg)
     : cfg(cfg), reachable(cfg.getNumBlockIDs(), false) {}
-  
+
   void computeReachableBlocks();
-  
+
   bool isReachable(const CFGBlock *block) const {
     return reachable[block->getBlockID()];
   }
@@ -83,13 +82,12 @@ public:
 void ReachableCode::computeReachableBlocks() {
   if (!cfg.getNumBlockIDs())
     return;
-  
+
   SmallVector<const CFGBlock*, 10> worklist;
   worklist.push_back(&cfg.getEntry());
-  
+
   while (!worklist.empty()) {
-    const CFGBlock *block = worklist.back();
-    worklist.pop_back();
+    const CFGBlock *block = worklist.pop_back_val();
     llvm::BitVector::reference isReachable = reachable[block->getBlockID()];
     if (isReachable)
       continue;
@@ -101,13 +99,18 @@ void ReachableCode::computeReachableBlocks() {
   }
 }
 
-static const Expr *LookThroughTransitiveAssignments(const Expr *Ex) {
+static const Expr *
+LookThroughTransitiveAssignmentsAndCommaOperators(const Expr *Ex) {
   while (Ex) {
     const BinaryOperator *BO =
       dyn_cast<BinaryOperator>(Ex->IgnoreParenCasts());
     if (!BO)
       break;
     if (BO->getOpcode() == BO_Assign) {
+      Ex = BO->getRHS();
+      continue;
+    }
+    if (BO->getOpcode() == BO_Comma) {
       Ex = BO->getRHS();
       continue;
     }
@@ -121,23 +124,25 @@ class DeadStoreObs : public LiveVariables::Observer {
   const CFG &cfg;
   ASTContext &Ctx;
   BugReporter& BR;
+  const CheckerBase *Checker;
   AnalysisDeclContext* AC;
   ParentMap& Parents;
   llvm::SmallPtrSet<const VarDecl*, 20> Escaped;
-  OwningPtr<ReachableCode> reachableCode;
+  std::unique_ptr<ReachableCode> reachableCode;
   const CFGBlock *currentBlock;
-  OwningPtr<llvm::DenseSet<const VarDecl *> > InEH;
+  std::unique_ptr<llvm::DenseSet<const VarDecl *>> InEH;
 
   enum DeadStoreKind { Standard, Enclosing, DeadIncrement, DeadInit };
 
 public:
-  DeadStoreObs(const CFG &cfg, ASTContext &ctx,
-               BugReporter& br, AnalysisDeclContext* ac, ParentMap& parents,
-               llvm::SmallPtrSet<const VarDecl*, 20> &escaped)
-    : cfg(cfg), Ctx(ctx), BR(br), AC(ac), Parents(parents),
-      Escaped(escaped), currentBlock(0) {}
+  DeadStoreObs(const CFG &cfg, ASTContext &ctx, BugReporter &br,
+               const CheckerBase *checker, AnalysisDeclContext *ac,
+               ParentMap &parents,
+               llvm::SmallPtrSet<const VarDecl *, 20> &escaped)
+      : cfg(cfg), Ctx(ctx), BR(br), Checker(checker), AC(ac), Parents(parents),
+        Escaped(escaped), currentBlock(nullptr) {}
 
-  virtual ~DeadStoreObs() {}
+  ~DeadStoreObs() override {}
 
   bool isLive(const LiveVariables::LivenessValues &Live, const VarDecl *D) {
     if (Live.isLive(D))
@@ -155,25 +160,25 @@ public:
     // to analyze that yet.
     return InEH->count(D);
   }
-  
+
   void Report(const VarDecl *V, DeadStoreKind dsk,
               PathDiagnosticLocation L, SourceRange R) {
     if (Escaped.count(V))
       return;
-    
+
     // Compute reachable blocks within the CFG for trivial cases
     // where a bogus dead store can be reported because itself is unreachable.
     if (!reachableCode.get()) {
       reachableCode.reset(new ReachableCode(cfg));
       reachableCode->computeReachableBlocks();
     }
-    
+
     if (!reachableCode->isReachable(currentBlock))
       return;
 
     SmallString<64> buf;
     llvm::raw_svector_ostream os(buf);
-    const char *BugType = 0;
+    const char *BugType = nullptr;
 
     switch (dsk) {
       case DeadInit:
@@ -184,6 +189,7 @@ public:
 
       case DeadIncrement:
         BugType = "Dead increment";
+        LLVM_FALLTHROUGH;
       case Standard:
         if (!BugType) BugType = "Dead assignment";
         os << "Value stored to '" << *V << "' is never read";
@@ -191,12 +197,13 @@ public:
 
       case Enclosing:
         // Don't report issues in this case, e.g.: "if (x = foo())",
-        // where 'x' is unused later.  We have yet to see a case where 
+        // where 'x' is unused later.  We have yet to see a case where
         // this is a real bug.
         return;
     }
 
-    BR.EmitBasicReport(AC->getDecl(), BugType, "Dead store", os.str(), L, R);
+    BR.EmitBasicReport(AC->getDecl(), Checker, BugType, "Dead store", os.str(),
+                       L, R);
   }
 
   void CheckVarDecl(const VarDecl *VD, const Expr *Ex, const Expr *Val,
@@ -211,7 +218,8 @@ public:
       return;
 
     if (!isLive(Live, VD) &&
-        !(VD->getAttr<UnusedAttr>() || VD->getAttr<BlocksAttr>())) {
+        !(VD->hasAttr<UnusedAttr>() || VD->hasAttr<BlocksAttr>() ||
+          VD->hasAttr<ObjCPreciseLifetimeAttr>())) {
 
       PathDiagnosticLocation ExLoc =
         PathDiagnosticLocation::createBegin(Ex, BR.getSourceManager(), AC);
@@ -248,11 +256,11 @@ public:
     return false;
   }
 
-  virtual void observeStmt(const Stmt *S, const CFGBlock *block,
-                           const LiveVariables::LivenessValues &Live) {
+  void observeStmt(const Stmt *S, const CFGBlock *block,
+                   const LiveVariables::LivenessValues &Live) override {
 
     currentBlock = block;
-    
+
     // Skip statements in macros.
     if (S->getLocStart().isMacroID())
       return;
@@ -266,15 +274,18 @@ public:
         if (VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl())) {
           // Special case: check for assigning null to a pointer.
           //  This is a common form of defensive programming.
-          const Expr *RHS = LookThroughTransitiveAssignments(B->getRHS());
-          
+          const Expr *RHS =
+            LookThroughTransitiveAssignmentsAndCommaOperators(B->getRHS());
+          RHS = RHS->IgnoreParenCasts();
+
           QualType T = VD->getType();
+          if (T.isVolatileQualified())
+            return;
           if (T->isPointerType() || T->isObjCObjectPointerType()) {
             if (RHS->isNullPointerConstant(Ctx, Expr::NPC_ValueDependentIsNull))
               return;
           }
 
-          RHS = RHS->IgnoreParenCasts();
           // Special case: self-assignments.  These are often used to shut up
           //  "unused variable" compiler warnings.
           if (const DeclRefExpr *RhsDR = dyn_cast<DeclRefExpr>(RHS))
@@ -305,38 +316,38 @@ public:
     else if (const DeclStmt *DS = dyn_cast<DeclStmt>(S))
       // Iterate through the decls.  Warn if any initializers are complex
       // expressions that are not live (never used).
-      for (DeclStmt::const_decl_iterator DI=DS->decl_begin(), DE=DS->decl_end();
-           DI != DE; ++DI) {
-
-        VarDecl *V = dyn_cast<VarDecl>(*DI);
+      for (const auto *DI : DS->decls()) {
+        const auto *V = dyn_cast<VarDecl>(DI);
 
         if (!V)
           continue;
-          
-        if (V->hasLocalStorage()) {          
+
+        if (V->hasLocalStorage()) {
           // Reference types confuse the dead stores checker.  Skip them
           // for now.
           if (V->getType()->getAs<ReferenceType>())
             return;
-            
+
           if (const Expr *E = V->getInit()) {
             while (const ExprWithCleanups *exprClean =
                     dyn_cast<ExprWithCleanups>(E))
               E = exprClean->getSubExpr();
-            
+
             // Look through transitive assignments, e.g.:
             // int x = y = 0;
-            E = LookThroughTransitiveAssignments(E);
-            
+            E = LookThroughTransitiveAssignmentsAndCommaOperators(E);
+
             // Don't warn on C++ objects (yet) until we can show that their
             // constructors/destructors don't have side effects.
             if (isa<CXXConstructExpr>(E))
               return;
-            
+
             // A dead initialization is a variable that is dead after it
             // is initialized.  We don't flag warnings for those variables
-            // marked 'unused'.
-            if (!isLive(Live, V) && V->getAttr<UnusedAttr>() == 0) {
+            // marked 'unused' or 'objc_precise_lifetime'.
+            if (!isLive(Live, V) &&
+                !V->hasAttr<UnusedAttr>() &&
+                !V->hasAttr<ObjCPreciseLifetimeAttr>()) {
               // Special case: check for initializations with constants.
               //
               //  e.g. : int x = 0;
@@ -385,26 +396,51 @@ public:
 //===----------------------------------------------------------------------===//
 
 namespace {
-class FindEscaped : public CFGRecStmtDeclVisitor<FindEscaped>{
-  CFG *cfg;
+class FindEscaped {
 public:
-  FindEscaped(CFG *c) : cfg(c) {}
-
-  CFG& getCFG() { return *cfg; }
-
   llvm::SmallPtrSet<const VarDecl*, 20> Escaped;
 
-  void VisitUnaryOperator(UnaryOperator* U) {
-    // Check for '&'.  Any VarDecl whose value has its address-taken we
-    // treat as escaped.
-    Expr *E = U->getSubExpr()->IgnoreParenCasts();
-    if (U->getOpcode() == UO_AddrOf)
-      if (DeclRefExpr *DR = dyn_cast<DeclRefExpr>(E))
-        if (VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl())) {
-          Escaped.insert(VD);
-          return;
-        }
-    Visit(E);
+  void operator()(const Stmt *S) {
+    // Check for '&'. Any VarDecl whose address has been taken we treat as
+    // escaped.
+    // FIXME: What about references?
+    if (auto *LE = dyn_cast<LambdaExpr>(S)) {
+      findLambdaReferenceCaptures(LE);
+      return;
+    }
+
+    const UnaryOperator *U = dyn_cast<UnaryOperator>(S);
+    if (!U)
+      return;
+    if (U->getOpcode() != UO_AddrOf)
+      return;
+
+    const Expr *E = U->getSubExpr()->IgnoreParenCasts();
+    if (const DeclRefExpr *DR = dyn_cast<DeclRefExpr>(E))
+      if (const VarDecl *VD = dyn_cast<VarDecl>(DR->getDecl()))
+        Escaped.insert(VD);
+  }
+
+  // Treat local variables captured by reference in C++ lambdas as escaped.
+  void findLambdaReferenceCaptures(const LambdaExpr *LE)  {
+    const CXXRecordDecl *LambdaClass = LE->getLambdaClass();
+    llvm::DenseMap<const VarDecl *, FieldDecl *> CaptureFields;
+    FieldDecl *ThisCaptureField;
+    LambdaClass->getCaptureFields(CaptureFields, ThisCaptureField);
+
+    for (const LambdaCapture &C : LE->captures()) {
+      if (!C.capturesVariable())
+        continue;
+
+      VarDecl *VD = C.getCapturedVar();
+      const FieldDecl *FD = CaptureFields[VD];
+      if (!FD)
+        continue;
+
+      // If the capture field is a reference type, it is capture-by-reference.
+      if (FD->getType()->isReferenceType())
+        Escaped.insert(VD);
+    }
   }
 };
 } // end anonymous namespace
@@ -432,9 +468,9 @@ public:
       CFG &cfg = *mgr.getCFG(D);
       AnalysisDeclContext *AC = mgr.getAnalysisDeclContext(D);
       ParentMap &pmap = mgr.getParentMap(D);
-      FindEscaped FS(&cfg);
-      FS.getCFG().VisitBlockStmts(FS);
-      DeadStoreObs A(cfg, BR.getContext(), BR, AC, pmap, FS.Escaped);
+      FindEscaped FS;
+      cfg.VisitBlockStmts(FS);
+      DeadStoreObs A(cfg, BR.getContext(), BR, this, AC, pmap, FS.Escaped);
       L->runOnAllBlocks(A);
     }
   }

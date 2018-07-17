@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008-2012 Juli Mallett <jmallett@FreeBSD.org>
  * All rights reserved.
  *
@@ -158,7 +160,7 @@ gxemul_disk_probe(device_t dev)
 {
 	device_set_desc(dev, "GXemul test disk");
 
-	return (0);
+	return (BUS_PROBE_NOWILDCARD);
 }
 
 static void
@@ -171,7 +173,7 @@ gxemul_disk_attach_geom(void *arg, int flag)
 	sc->sc_geom = g_new_geomf(&g_gxemul_disk_class, "%s", device_get_nameunit(sc->sc_dev));
 	sc->sc_geom->softc = sc;
 
-	sc->sc_provider = g_new_providerf(sc->sc_geom, sc->sc_geom->name);
+	sc->sc_provider = g_new_providerf(sc->sc_geom, "%s", sc->sc_geom->name);
 	sc->sc_provider->sectorsize = GXEMUL_DISK_DEV_BLOCKSIZE;
 	sc->sc_provider->mediasize = sc->sc_size;
 	g_error_provider(sc->sc_provider, 0);
@@ -214,7 +216,14 @@ gxemul_disk_read(unsigned diskid, void *buf, off_t off)
 	if (off < 0 || off % GXEMUL_DISK_DEV_BLOCKSIZE != 0)
 		return (EINVAL);
 
+#ifdef _LP64
 	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_OFFSET, (uint64_t)off);
+#else
+	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_OFFSET_LO,
+	    (uint32_t)(off & 0xffffffff));
+	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_OFFSET_HI,
+	    (uint32_t)((off >> 32) & 0xffffffff));
+#endif
 	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_DISKID, diskid);
 	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_START, GXEMUL_DISK_DEV_START_READ);
 	switch (GXEMUL_DISK_DEV_READ(GXEMUL_DISK_DEV_STATUS)) {
@@ -280,7 +289,15 @@ gxemul_disk_write(unsigned diskid, const void *buf, off_t off)
 	if (off < 0 || off % GXEMUL_DISK_DEV_BLOCKSIZE != 0)
 		return (EINVAL);
 
+#ifdef _LP64
 	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_OFFSET, (uint64_t)off);
+#else
+	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_OFFSET_LO,
+	    (uint32_t)(off & 0xffffffff));
+	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_OFFSET_HI,
+	    (uint32_t)((off >> 32) & 0xffffffff));
+#endif
+
 	GXEMUL_DISK_DEV_WRITE(GXEMUL_DISK_DEV_DISKID, diskid);
 
 	dst = GXEMUL_DISK_DEV_FUNCTION(GXEMUL_DISK_DEV_BLOCK);

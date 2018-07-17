@@ -1,21 +1,22 @@
 /*	$FreeBSD$	*/
 
 /*
- * Copyright (C) 2000-2003 by Darren Reed.
+ * Copyright (C) 2012 by Darren Reed.
  *
  * See the IPFILTER.LICENCE file for details on licencing.
  *
- * $Id: portname.c,v 1.7.2.1 2006/06/16 17:21:09 darrenr Exp $
+ * $Id$
  */
 #include "ipf.h"
 
 
-char	*portname(pr, port)
-int	pr, port;
+char *
+portname(int pr, int port)
 {
-	static	char	buf[32];
-	struct	protoent	*p = NULL;
-	struct	servent	*sv = NULL, *sv1 = NULL;
+	static char buf[32];
+	struct protoent *p = NULL;
+	struct servent *sv = NULL;
+	struct servent *sv1 = NULL;
 
 	if ((opts & OPT_NORESOLVE) == 0) {
 		if (pr == -1) {
@@ -27,16 +28,16 @@ int	pr, port;
 				     NULL : sv1;
 			}
 			if (sv)
-				return buf;
+				return (buf);
 		} else if ((pr != -2) && (p = getprotobynumber(pr))) {
 			if ((sv = getservbyport(htons(port), p->p_name))) {
 				strncpy(buf, sv->s_name, sizeof(buf)-1);
 				buf[sizeof(buf)-1] = '\0';
-				return buf;
+				return (buf);
 			}
 		}
 	}
 
 	(void) sprintf(buf, "%d", port);
-	return buf;
+	return (buf);
 }

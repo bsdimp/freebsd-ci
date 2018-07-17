@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1998 Doug Rabson.
  * Copyright (c) 2001 Jake Burkholder.
  * All rights reserved.
@@ -36,6 +38,8 @@
 #define	mb()	__asm__ __volatile__ ("membar #MemIssue": : :"memory")
 #define	wmb()	mb()
 #define	rmb()	mb()
+
+#include <sys/atomic_common.h>
 
 /* Userland needs different ASI's. */
 #ifdef _KERNEL
@@ -133,17 +137,14 @@
 	t;								\
 })
 
-#define	atomic_load(p, sz)						\
-	atomic_cas((p), 0, 0, sz)
-
-#define	atomic_load_acq(p, sz) ({					\
+#define	atomic_ld_acq(p, sz) ({						\
 	itype(sz) v;							\
-	v = atomic_load((p), sz);					\
+	v = atomic_cas((p), 0, 0, sz);					\
 	__compiler_membar();						\
 	v;								\
 })
 
-#define	atomic_load_clear(p, sz) ({					\
+#define	atomic_ld_clear(p, sz) ({					\
 	itype(sz) e, r;							\
 	for (e = *(volatile itype(sz) *)(p);; e = r) {			\
 		r = atomic_cas((p), e, 0, sz);				\
@@ -153,7 +154,7 @@
 	e;								\
 })
 
-#define	atomic_store(p, v, sz) do {					\
+#define	atomic_st(p, v, sz) do {					\
 	itype(sz) e, r;							\
 	for (e = *(volatile itype(sz) *)(p);; e = r) {			\
 		r = atomic_cas((p), e, (v), sz);			\
@@ -162,9 +163,14 @@
 	}								\
 } while (0)
 
-#define	atomic_store_rel(p, v, sz) do {					\
+#define	atomic_st_acq(p, v, sz) do {					\
+	atomic_st((p), (v), sz);					\
+	__compiler_membar();						\
+} while (0)
+
+#define	atomic_st_rel(p, v, sz) do {					\
 	membar(LoadStore | StoreStore);					\
-	atomic_store((p), (v), sz);					\
+	atomic_st((p), (v), sz);					\
 } while (0)
 
 #define	ATOMIC_GEN(name, ptype, vtype, atype, sz)			\
@@ -217,11 +223,40 @@ atomic_cmpset_rel_ ## name(volatile ptype p, vtype e, vtype s)		\
 	return (((vtype)atomic_cas_rel((p), (e), (s), sz)) == (e));	\
 }									\
 									\
-static __inline vtype							\
-atomic_load_ ## name(volatile ptype p)					\
+static __inline int							\
+atomic_fcmpset_ ## name(volatile ptype p, vtype *ep, vtype s)		\
 {									\
-	return ((vtype)atomic_cas((p), 0, 0, sz));			\
+	vtype t;							\
+									\
+	t = (vtype)atomic_cas((p), (*ep), (s), sz);			\
+	if (t == (*ep))	 						\
+		return (1);						\
+	*ep = t;							\
+	return (0);							\
 }									\
+static __inline int							\
+atomic_fcmpset_acq_ ## name(volatile ptype p, vtype *ep, vtype s)	\
+{									\
+	vtype t;							\
+									\
+	t = (vtype)atomic_cas_acq((p), (*ep), (s), sz);			\
+	if (t == (*ep))	 						\
+		return (1);						\
+	*ep = t;							\
+	return (0);							\
+}									\
+static __inline int							\
+atomic_fcmpset_rel_ ## name(volatile ptype p, vtype *ep, vtype s)	\
+{									\
+	vtype t;							\
+									\
+	t = (vtype)atomic_cas_rel((p), (*ep), (s), sz);			\
+	if (t == (*ep))	 						\
+		return (1);						\
+	*ep = t;							\
+	return (0);							\
+}									\
+									\
 static __inline vtype							\
 atomic_load_acq_ ## name(volatile ptype p)				\
 {									\
@@ -231,7 +266,7 @@ atomic_load_acq_ ## name(volatile ptype p)				\
 static __inline vtype							\
 atomic_readandclear_ ## name(volatile ptype p)				\
 {									\
-	return ((vtype)atomic_load_clear((p), sz));			\
+	return ((vtype)atomic_ld_clear((p), sz));			\
 }									\
 									\
 static __inline vtype							\
@@ -267,15 +302,44 @@ atomic_subtract_rel_ ## name(volatile ptype p, atype v)			\
 }									\
 									\
 static __inline void							\
-atomic_store_ ## name(volatile ptype p, vtype v)			\
+atomic_store_acq_ ## name(volatile ptype p, vtype v)			\
 {									\
-	atomic_store((p), (v), sz);					\
+	atomic_st_acq((p), (v), sz);					\
 }									\
 static __inline void							\
 atomic_store_rel_ ## name(volatile ptype p, vtype v)			\
 {									\
-	atomic_store_rel((p), (v), sz);					\
+	atomic_st_rel((p), (v), sz);					\
 }
+
+static __inline void
+atomic_thread_fence_acq(void)
+{
+
+	__compiler_membar();
+}
+
+static __inline void
+atomic_thread_fence_rel(void)
+{
+
+	__compiler_membar();
+}
+
+static __inline void
+atomic_thread_fence_acq_rel(void)
+{
+
+	__compiler_membar();
+}
+
+static __inline void
+atomic_thread_fence_seq_cst(void)
+{
+
+	membar(LoadLoad | LoadStore | StoreStore | StoreLoad);
+}
+
 
 ATOMIC_GEN(int, u_int *, u_int, u_int, 32);
 ATOMIC_GEN(32, uint32_t *, uint32_t, uint32_t, 32);
@@ -288,6 +352,7 @@ ATOMIC_GEN(ptr, uintptr_t *, uintptr_t, uintptr_t, 64);
 #define	atomic_fetchadd_int	atomic_add_int
 #define	atomic_fetchadd_32	atomic_add_32
 #define	atomic_fetchadd_long	atomic_add_long
+#define	atomic_fetchadd_64	atomic_add_64
 
 #undef ATOMIC_GEN
 #undef atomic_cas
@@ -296,8 +361,10 @@ ATOMIC_GEN(ptr, uintptr_t *, uintptr_t, uintptr_t, 64);
 #undef atomic_op
 #undef atomic_op_acq
 #undef atomic_op_rel
-#undef atomic_load_acq
-#undef atomic_store_rel
-#undef atomic_load_clear
+#undef atomic_ld_acq
+#undef atomic_ld_clear
+#undef atomic_st
+#undef atomic_st_acq
+#undef atomic_st_rel
 
 #endif /* !_MACHINE_ATOMIC_H_ */

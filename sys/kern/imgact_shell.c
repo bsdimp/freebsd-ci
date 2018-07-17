@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1993, David Greenman
  * All rights reserved.
  *
@@ -97,8 +99,7 @@ CTASSERT(MAXSHELLCMDLEN >= MAXINTERP + 3);
  * 6.x branch on May 28, 2005 (matching __FreeBSD_version 600029).
  */
 int
-exec_shell_imgact(imgp)
-	struct image_params *imgp;
+exec_shell_imgact(struct image_params *imgp)
 {
 	const char *image_header = imgp->image_header;
 	const char *ihp, *interpb, *interpe, *maxp, *optb, *opte, *fname;
@@ -115,17 +116,17 @@ exec_shell_imgact(imgp)
 	 * Don't allow a shell script to be the shell for a shell
 	 *	script. :-)
 	 */
-	if (imgp->interpreted)
+	if (imgp->interpreted & IMGACT_SHELL)
 		return (ENOEXEC);
 
-	imgp->interpreted = 1;
+	imgp->interpreted |= IMGACT_SHELL;
 
 	/*
 	 * At this point we have the first page of the file mapped.
 	 * However, we don't know how far into the page the contents are
 	 * valid -- the actual file might be much shorter than the page.
 	 * So find out the file size.
- 	 */
+	 */
 	error = VOP_GETATTR(imgp->vp, &vattr, imgp->proc->p_ucred);
 	if (error)
 		return (error);
@@ -254,5 +255,8 @@ exec_shell_imgact(imgp)
 /*
  * Tell kern_execve.c about it, with a little help from the linker.
  */
-static struct execsw shell_execsw = { exec_shell_imgact, "#!" };
+static struct execsw shell_execsw = {
+	.ex_imgact = exec_shell_imgact,
+	.ex_name = "#!"
+};
 EXEC_SET(shell, shell_execsw);

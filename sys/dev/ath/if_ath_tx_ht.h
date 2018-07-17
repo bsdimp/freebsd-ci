@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 Adrian Chadd, Xenion Pty Ltd.
  * All rights reserved.
  *
@@ -46,6 +48,7 @@ typedef enum {
 	ATH_AGGR_8K_LIMITED,
 	ATH_AGGR_ERROR,
 	ATH_AGGR_NONAGGR,
+	ATH_AGGR_LEAK_CLOSED,
 } ATH_AGGR_STATUS;
 
 extern int	ath_max_4ms_framelen[4][32];

@@ -3,6 +3,7 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/mman.h>
 
 #include <errno.h>
@@ -15,6 +16,47 @@ __FBSDID("$FreeBSD$");
 
 #include "debug.h"
 #include "rtld.h"
+#include "paths.h"
+
+#ifdef __ARM_FP
+/*
+ * On processors that have hard floating point supported, we also support
+ * running soft float binaries. If we're being built with hard float support,
+ * check the ELF headers to make sure that this is a hard float binary. If it is
+ * a soft float binary, force the dynamic linker to use the alternative soft
+ * float path.
+ */
+void
+arm_abi_variant_hook(Elf_Auxinfo **aux_info)
+{
+	Elf_Word ehdr;
+
+	/*
+	 * If we're running an old kernel that doesn't provide any data fail
+	 * safe by doing nothing.
+	 */
+	if (aux_info[AT_EHDRFLAGS] == NULL)
+		return;
+	ehdr = aux_info[AT_EHDRFLAGS]->a_un.a_val;
+
+	/*
+	 * Hard float ABI binaries are the default, and use the default paths
+	 * and such.
+	 */
+	if ((ehdr & EF_ARM_VFP_FLOAT) != 0)
+		return;
+
+	/*
+	 * This is a soft float ABI binary. We need to use the soft float
+	 * settings.
+	 */
+	ld_elf_hints_default = _PATH_SOFT_ELF_HINTS;
+	ld_path_libmap_conf = _PATH_SOFT_LIBMAP_CONF;
+	ld_path_rtld = _PATH_SOFT_RTLD;
+	ld_standard_library_path = SOFT_STANDARD_LIBRARY_PATH;
+	ld_env_prefix = LD_SOFT_;
+}
+#endif
 
 void
 init_pltgot(Obj_Entry *obj)
@@ -56,8 +98,8 @@ do_copy_relocations(Obj_Entry *dstobj)
 			    ELF_R_SYM(rel->r_info));
 			req.flags = SYMLOOK_EARLY;
 
-			for (srcobj = dstobj->next;  srcobj != NULL; 
-			     srcobj = srcobj->next) {
+			for (srcobj = globallist_next(dstobj); srcobj != NULL;
+			    srcobj = globallist_next(srcobj)) {
 				res = symlook_obj(&req, srcobj);
 				if (res == 0) {
 					srcsym = req.sym_out;
@@ -88,7 +130,7 @@ int _open();
 void
 _rtld_relocate_nonplt_self(Elf_Dyn *dynp, Elf_Addr relocbase)
 {
-	const Elf_Rel *rel = 0, *rellim;
+	const Elf_Rel *rel = NULL, *rellim;
 	Elf_Addr relsz = 0;
 	Elf_Addr *where;
 	uint32_t size;
@@ -324,6 +366,10 @@ reloc_non_plt(Obj_Entry *obj, Obj_Entry *obj_rtld, int flags,
 	/* The relocation for the dynamic loader has already been done. */
 	if (obj == obj_rtld)
 		return (0);
+	if ((flags & SYMLOOK_IFUNC) != 0)
+		/* XXX not implemented */
+		return (0);
+
 	/*
  	 * The dynamic loader may be called from a thread, we have
 	 * limited amounts of stack available so we cannot use alloca().
@@ -419,15 +465,26 @@ reloc_gnu_ifunc(Obj_Entry *obj, int flags,
 
 Elf_Addr
 reloc_jmpslot(Elf_Addr *where, Elf_Addr target, const Obj_Entry *defobj,
-    		const Obj_Entry *obj, const Elf_Rel *rel)
+    const Obj_Entry *obj, const Elf_Rel *rel)
 {
 
 	assert(ELF_R_TYPE(rel->r_info) == R_ARM_JUMP_SLOT);
 
-	if (*where != target)
+	if (*where != target && !ld_bind_not)
 		*where = target;
+	return (target);
+}
 
-	return target;
+void
+ifunc_init(Elf_Auxinfo aux_info[__min_size(AT_COUNT)] __unused)
+{
+
+}
+
+void
+pre_init(void)
+{
+
 }
 
 void

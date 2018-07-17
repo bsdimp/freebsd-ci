@@ -9,12 +9,9 @@
 #include <rpc/rpc.h>
 #include <rpc/rpcb_prot.h>
 #include <rpc/pmap_prot.h>
-#include <err.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <libutil.h>
 #include <syslog.h>
 #include <netdb.h>
 
@@ -108,13 +105,15 @@ check_access(SVCXPRT *xprt, rpcproc_t proc, void *args, unsigned int rpcbvers)
 	}
 
 #ifdef LIBWRAP
-	if (addr->sa_family == AF_LOCAL)
-		return 1;
-	request_init(&req, RQ_DAEMON, "rpcbind", RQ_CLIENT_SIN, addr, 0);
-	sock_methods(&req);
-	if(!hosts_access(&req)) {
-		logit(deny_severity, addr, proc, prog, ": request from unauthorized host");
-		return 0;
+	if (libwrap && addr->sa_family != AF_LOCAL) {
+		request_init(&req, RQ_DAEMON, "rpcbind", RQ_CLIENT_SIN, addr,
+		    0);
+		sock_methods(&req);
+		if(!hosts_access(&req)) {
+			logit(deny_severity, addr, proc, prog,
+			    ": request from unauthorized host");
+			return 0;
+		}
 	}
 #endif
 	if (verboselog)

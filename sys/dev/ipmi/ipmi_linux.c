@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 IronPort Systems Inc. <ambrisko@ironport.com>
  * All rights reserved.
  *
@@ -33,7 +35,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/conf.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
@@ -89,11 +91,13 @@ MODULE_DEPEND(ipmi_linux, linux, 1, 1, 1);
 static int
 ipmi_linux_ioctl(struct thread *td, struct linux_ioctl_args *args)
 {
+	cap_rights_t rights;
 	struct file *fp;
 	u_long cmd;
 	int error;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, cap_rights_init(&rights, CAP_IOCTL), &fp);
+	if (error != 0)
 		return (error);
 	cmd = args->cmd;
 

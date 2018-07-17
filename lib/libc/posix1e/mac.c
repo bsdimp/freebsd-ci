@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999, 2000, 2001, 2002 Robert N. M. Watson
  * Copyright (c) 2002, 2003 Networks Associates Technology, Inc.
  * All rights reserved.
@@ -179,7 +181,7 @@ mac_init_internal(int ignore_errors)
 		filename = getenv("MAC_CONFFILE");
 	else
 		filename = MAC_CONFFILE;
-	file = fopen(filename, "r");
+	file = fopen(filename, "re");
 	if (file == NULL)
 		return (0);
 

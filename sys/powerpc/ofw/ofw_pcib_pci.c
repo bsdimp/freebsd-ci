@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Michael Smith
  * Copyright (c) 2000 BSDi
  * All rights reserved.
@@ -29,6 +31,7 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/module.h>
 #include <sys/bus.h>
 #include <sys/malloc.h>
@@ -60,6 +63,7 @@ static device_method_t ofw_pcib_pci_methods[] = {
 
 	/* pcib interface */
 	DEVMETHOD(pcib_route_interrupt,	ofw_pcib_pci_route_interrupt),
+	DEVMETHOD(pcib_request_feature,	pcib_request_feature_allow),
 
 	/* ofw_bus interface */
 	DEVMETHOD(ofw_bus_get_node,	ofw_pcib_pci_get_node),
@@ -113,10 +117,7 @@ ofw_pcib_pci_attach(device_t dev)
 	    sizeof(cell_t));
 
 	pcib_attach_common(dev);
-
-	device_add_child(dev, "pci", -1);
-
-	return (bus_generic_attach(dev));
+	return (pcib_attach_child(dev));
 }
 
 static phandle_t
@@ -133,23 +134,33 @@ ofw_pcib_pci_route_interrupt(device_t bridge, device_t dev, int intpin)
 	struct ofw_pcib_softc *sc;
 	struct ofw_bus_iinfo *ii;
 	struct ofw_pci_register reg;
-	cell_t pintr, mintr;
+	cell_t pintr, mintr[2];
+	int intrcells;
 	phandle_t iparent;
-	uint8_t maskbuf[sizeof(reg) + sizeof(pintr)];
 
 	sc = device_get_softc(bridge);
 	ii = &sc->ops_iinfo;
 	if (ii->opi_imapsz > 0) {
 		pintr = intpin;
-		if (ofw_bus_lookup_imap(ofw_bus_get_node(dev), ii, &reg,
-		    sizeof(reg), &pintr, sizeof(pintr), &mintr, sizeof(mintr),
-		    &iparent, maskbuf)) {
+
+		/* Fabricate imap information if this isn't an OFW device */
+		bzero(&reg, sizeof(reg));
+		reg.phys_hi = (pci_get_bus(dev) << OFW_PCI_PHYS_HI_BUSSHIFT) |
+		    (pci_get_slot(dev) << OFW_PCI_PHYS_HI_DEVICESHIFT) |
+		    (pci_get_function(dev) << OFW_PCI_PHYS_HI_FUNCTIONSHIFT);
+
+		intrcells = ofw_bus_lookup_imap(ofw_bus_get_node(dev), ii, &reg,
+		    sizeof(reg), &pintr, sizeof(pintr), mintr, sizeof(mintr),
+		    &iparent);
+		if (intrcells) {
 			/*
 			 * If we've found a mapping, return it and don't map
 			 * it again on higher levels - that causes problems
 			 * in some cases, and never seems to be required.
 			 */
-			return (MAP_IRQ(iparent, mintr));
+			mintr[0] = ofw_bus_map_intr(dev, iparent, intrcells,
+			    mintr);
+			return (mintr[0]);
 		}
 	} else if (intpin >= 1 && intpin <= 4) {
 		/*

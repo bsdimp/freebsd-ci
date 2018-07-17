@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2008 Kip Macy <kmacy@freebsd.org>
  * All rights reserved.
  *
@@ -34,7 +36,6 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/ktr.h>
-#include <sys/sf_buf.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
@@ -43,10 +44,6 @@ __FBSDID("$FreeBSD$");
 
 #include <cxgb_include.h>
 #include <sys/mvec.h>
-
-#include <vm/vm.h>
-#include <vm/vm_page.h>
-#include <vm/pmap.h>
 
 #ifdef INVARIANTS
 #define M_SANITY m_sanity

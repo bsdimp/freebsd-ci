@@ -1,4 +1,6 @@
 /*************************************************************************
+SPDX-License-Identifier: BSD-3-Clause
+
 Copyright (c) 2003-2007  Cavium Networks (support@cavium.com). All rights
 reserved.
 
@@ -44,6 +46,7 @@ AND WITH ALL FAULTS AND CAVIUM  NETWORKS MAKES NO PROMISES, REPRESENTATIONS OR W
 #include <contrib/octeon-sdk/cvmx-app-init.h>
 #include <contrib/octeon-sdk/cvmx-helper.h>
 #include <contrib/octeon-sdk/cvmx-helper-board.h>
+#include <contrib/octeon-sdk/cvmx-mgmt-port.h>
 #include <mips/cavium/octeon_irq.h>
 #include <contrib/octeon-sdk/octeon-model.h>
 

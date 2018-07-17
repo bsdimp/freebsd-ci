@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002, 2003 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -30,18 +32,14 @@
  * IPsec-specific mbuf routines.
  */
 
-#include "opt_param.h"
-
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 
-#include <net/route.h>
 #include <net/vnet.h>
-
 #include <netinet/in.h>
-
 #include <netipsec/ipsec.h>
 
 /*
@@ -74,7 +72,21 @@ m_makespace(struct mbuf *m0, int skip, int hlen, int *off)
 	 * the contents of m as needed.
 	 */
 	remain = m->m_len - skip;		/* data to move */
-	if (hlen > M_TRAILINGSPACE(m)) {
+	if (remain > skip &&
+	    hlen + max_linkhdr < M_LEADINGSPACE(m)) {
+		/*
+		 * mbuf has enough free space at the beginning.
+		 * XXX: which operation is the most heavy - copying of
+		 *	possible several hundred of bytes or allocation
+		 *	of new mbuf? We can remove max_linkhdr check
+		 *	here, but it is possible that this will lead
+		 *	to allocation of new mbuf in Layer 2 code.
+		 */
+		m->m_data -= hlen;
+		bcopy(mtodo(m, hlen), mtod(m, caddr_t), skip);
+		m->m_len += hlen;
+		*off = skip;
+	} else if (hlen > M_TRAILINGSPACE(m)) {
 		struct mbuf *n0, *n, **np;
 		int todo, len, done, alloc;
 
@@ -135,14 +147,14 @@ m_makespace(struct mbuf *m0, int skip, int hlen, int *off)
 			m = n;			/* header is at front ... */
 			*off = 0;		/* ... of new mbuf */
 		}
-		V_ipsec4stat.ips_mbinserted++;
+		IPSECSTAT_INC(ips_mbinserted);
 	} else {
 		/*
 		 * Copy the remainder to the back of the mbuf
 		 * so there's space to write the new header.
 		 */
 		bcopy(mtod(m, caddr_t) + skip,
-		      mtod(m, caddr_t) + skip + hlen, remain);
+		    mtod(m, caddr_t) + skip + hlen, remain);
 		m->m_len += hlen;
 		*off = skip;
 	}
@@ -158,8 +170,8 @@ m_makespace(struct mbuf *m0, int skip, int hlen, int *off)
 caddr_t
 m_pad(struct mbuf *m, int n)
 {
-	register struct mbuf *m0, *m1;
-	register int len, pad;
+	struct mbuf *m0, *m1;
+	int len, pad;
 	caddr_t retval;
 
 	if (n <= 0) {  /* No stupid arguments. */
@@ -204,7 +216,7 @@ m_pad(struct mbuf *m, int n)
 	if (pad > M_TRAILINGSPACE(m0)) {
 		/* Add an mbuf to the chain. */
 		MGET(m1, M_NOWAIT, MT_DATA);
-		if (m1 == 0) {
+		if (m1 == NULL) {
 			m_freem(m0);
 			DPRINTF(("%s: unable to get extra mbuf\n", __func__));
 			return NULL;
@@ -241,25 +253,28 @@ m_striphdr(struct mbuf *m, int skip, int hlen)
 	/* Remove the header and associated data from the mbuf. */
 	if (roff == 0) {
 		/* The header was at the beginning of the mbuf */
-		V_ipsec4stat.ips_input_front++;
+		IPSECSTAT_INC(ips_input_front);
 		m_adj(m1, hlen);
-		if ((m1->m_flags & M_PKTHDR) == 0)
+		if (m1 != m)
 			m->m_pkthdr.len -= hlen;
 	} else if (roff + hlen >= m1->m_len) {
 		struct mbuf *mo;
+		int adjlen;
 
 		/*
 		 * Part or all of the header is at the end of this mbuf,
 		 * so first let's remove the remainder of the header from
 		 * the beginning of the remainder of the mbuf chain, if any.
 		 */
-		V_ipsec4stat.ips_input_end++;
+		IPSECSTAT_INC(ips_input_end);
 		if (roff + hlen > m1->m_len) {
+			adjlen = roff + hlen - m1->m_len;
+
 			/* Adjust the next mbuf by the remainder */
-			m_adj(m1->m_next, roff + hlen - m1->m_len);
+			m_adj(m1->m_next, adjlen);
 
 			/* The second mbuf is guaranteed not to have a pkthdr... */
-			m->m_pkthdr.len -= (roff + hlen - m1->m_len);
+			m->m_pkthdr.len -= adjlen;
 		}
 
 		/* Now, let's unlink the mbuf chain for a second...*/
@@ -267,9 +282,10 @@ m_striphdr(struct mbuf *m, int skip, int hlen)
 		m1->m_next = NULL;
 
 		/* ...and trim the end of the first part of the chain...sick */
-		m_adj(m1, -(m1->m_len - roff));
-		if ((m1->m_flags & M_PKTHDR) == 0)
-			m->m_pkthdr.len -= (m1->m_len - roff);
+		adjlen = m1->m_len - roff;
+		m_adj(m1, -adjlen);
+		if (m1 != m)
+			m->m_pkthdr.len -= adjlen;
 
 		/* Finally, let's relink */
 		m1->m_next = mo;
@@ -278,7 +294,7 @@ m_striphdr(struct mbuf *m, int skip, int hlen)
 		 * The header lies in the "middle" of the mbuf; copy
 		 * the remainder of the mbuf down over the header.
 		 */
-		V_ipsec4stat.ips_input_middle++;
+		IPSECSTAT_INC(ips_input_middle);
 		bcopy(mtod(m1, u_char *) + roff + hlen,
 		      mtod(m1, u_char *) + roff,
 		      m1->m_len - (roff + hlen));

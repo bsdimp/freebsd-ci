@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Daniel Eischen <deischen@freebsd.org>
  * Copyright (c) 2000-2001 Jason Evans <jasone@freebsd.org>
  * All rights reserved.
@@ -23,9 +25,10 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/mman.h>
@@ -161,9 +164,8 @@ singlethread_map_stacks_exec(void)
 	    rlim.rlim_cur, _rtld_get_stack_prot());
 }
 
-void __pthread_map_stacks_exec(void);
 void
-__pthread_map_stacks_exec(void)
+__thr_map_stacks_exec(void)
 {
 	struct pthread *curthread, *thrd;
 	struct stack *st;
@@ -246,7 +248,10 @@ _thr_stack_alloc(struct pthread_attr *attr)
 		THREAD_LIST_UNLOCK(curthread);
 	}
 	else {
-		/* Allocate a stack from usrstack. */
+		/*
+		 * Allocate a stack from or below usrstack, depending
+		 * on the LIBPTHREAD_BIGSTACK_MAIN env variable.
+		 */
 		if (last_stack == NULL)
 			last_stack = _usrstack - _thr_stack_initial -
 			    _thr_guard_default;
@@ -268,7 +273,7 @@ _thr_stack_alloc(struct pthread_attr *attr)
 
 		/* Map the stack and guard page together, and split guard
 		   page from allocated space: */
-		if ((stackaddr = mmap(stackaddr, stacksize+guardsize,
+		if ((stackaddr = mmap(stackaddr, stacksize + guardsize,
 		     _rtld_get_stack_prot(), MAP_STACK,
 		     -1, 0)) != MAP_FAILED &&
 		    (guardsize == 0 ||

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 Sam Leffler, Errno Consulting
  * Copyright (c) 2003 Global Technology Associates, Inc.
  * All rights reserved.
@@ -211,7 +213,8 @@ safe_partname(struct safe_softc *sc)
 static void
 default_harvest(struct rndtest_state *rsp, void *buf, u_int count)
 {
-	random_harvest(buf, count, count*NBBY, 0, RANDOM_PURE);
+	/* MarkM: FIX!! Check that this does not swamp the harvester! */
+	random_harvest_queue(buf, count, count*NBBY/2, RANDOM_PURE_SAFE);
 }
 #endif /* SAFE_NO_RNG */
 
@@ -220,28 +223,15 @@ safe_attach(device_t dev)
 {
 	struct safe_softc *sc = device_get_softc(dev);
 	u_int32_t raddr;
-	u_int32_t cmd, i, devinfo;
+	u_int32_t i, devinfo;
 	int rid;
 
 	bzero(sc, sizeof (*sc));
 	sc->sc_dev = dev;
 
 	/* XXX handle power management */
- 
-	cmd = pci_read_config(dev, PCIR_COMMAND, 4);
-	cmd |= PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN;
-	pci_write_config(dev, PCIR_COMMAND, cmd, 4);
-	cmd = pci_read_config(dev, PCIR_COMMAND, 4);
 
-	if (!(cmd & PCIM_CMD_MEMEN)) {
-		device_printf(dev, "failed to enable memory mapping\n");
-		goto bad;
-	}
-
-	if (!(cmd & PCIM_CMD_BUSMASTEREN)) {
-		device_printf(dev, "failed to enable bus mastering\n");
-		goto bad;
-	}
+	pci_enable_busmaster(dev);
 
 	/* 
 	 * Setup memory-mapping of PCI registers.
@@ -438,7 +428,7 @@ safe_attach(device_t dev)
 #endif
 		safe_rng_init(sc);
 
-		callout_init(&sc->sc_rngto, CALLOUT_MPSAFE);
+		callout_init(&sc->sc_rngto, 1);
 		callout_reset(&sc->sc_rngto, hz*safe_rnginterval, safe_rng, sc);
 	}
 #endif /* SAFE_NO_RNG */
@@ -665,13 +655,13 @@ safe_setup_mackey(struct safe_session *ses, int algo, caddr_t key, int klen)
 	if (algo == CRYPTO_MD5_HMAC) {
 		MD5Init(&md5ctx);
 		MD5Update(&md5ctx, key, klen);
-		MD5Update(&md5ctx, hmac_ipad_buffer, MD5_HMAC_BLOCK_LEN - klen);
+		MD5Update(&md5ctx, hmac_ipad_buffer, MD5_BLOCK_LEN - klen);
 		bcopy(md5ctx.state, ses->ses_hminner, sizeof(md5ctx.state));
 	} else {
 		SHA1Init(&sha1ctx);
 		SHA1Update(&sha1ctx, key, klen);
 		SHA1Update(&sha1ctx, hmac_ipad_buffer,
-		    SHA1_HMAC_BLOCK_LEN - klen);
+		    SHA1_BLOCK_LEN - klen);
 		bcopy(sha1ctx.h.b32, ses->ses_hminner, sizeof(sha1ctx.h.b32));
 	}
 
@@ -681,13 +671,13 @@ safe_setup_mackey(struct safe_session *ses, int algo, caddr_t key, int klen)
 	if (algo == CRYPTO_MD5_HMAC) {
 		MD5Init(&md5ctx);
 		MD5Update(&md5ctx, key, klen);
-		MD5Update(&md5ctx, hmac_opad_buffer, MD5_HMAC_BLOCK_LEN - klen);
+		MD5Update(&md5ctx, hmac_opad_buffer, MD5_BLOCK_LEN - klen);
 		bcopy(md5ctx.state, ses->ses_hmouter, sizeof(md5ctx.state));
 	} else {
 		SHA1Init(&sha1ctx);
 		SHA1Update(&sha1ctx, key, klen);
 		SHA1Update(&sha1ctx, hmac_opad_buffer,
-		    SHA1_HMAC_BLOCK_LEN - klen);
+		    SHA1_BLOCK_LEN - klen);
 		bcopy(sha1ctx.h.b32, ses->ses_hmouter, sizeof(sha1ctx.h.b32));
 	}
 
@@ -1341,8 +1331,7 @@ safe_process(device_t dev, struct cryptop *crp, int hint)
 					goto errout;
 				}
 				if (totlen >= MINCLSIZE) {
-					MCLGET(m, M_NOWAIT);
-					if ((m->m_flags & M_EXT) == 0) {
+					if (!(MCLGET(m, M_NOWAIT))) {
 						m_free(m);
 						safestats.st_nomcl++;
 						err = sc->sc_nqchip ?
@@ -1368,8 +1357,7 @@ safe_process(device_t dev, struct cryptop *crp, int hint)
 						len = MLEN;
 					}
 					if (top && totlen >= MINCLSIZE) {
-						MCLGET(m, M_NOWAIT);
-						if ((m->m_flags & M_EXT) == 0) {
+						if (!(MCLGET(m, M_NOWAIT))) {
 							*mp = m;
 							m_freem(top);
 							safestats.st_nomcl++;
@@ -1607,9 +1595,7 @@ safe_mcopy(struct mbuf *srcm, struct mbuf *dstm, u_int offset)
 	 * Advance src and dst to offset.
 	 */
 	j = offset;
-	while (j >= 0) {
-		if (srcm->m_len > j)
-			break;
+	while (j >= srcm->m_len) {
 		j -= srcm->m_len;
 		srcm = srcm->m_next;
 		if (srcm == NULL)
@@ -1619,9 +1605,7 @@ safe_mcopy(struct mbuf *srcm, struct mbuf *dstm, u_int offset)
 	slen = srcm->m_len - j;
 
 	j = offset;
-	while (j >= 0) {
-		if (dstm->m_len > j)
-			break;
+	while (j >= dstm->m_len) {
 		j -= dstm->m_len;
 		dstm = dstm->m_next;
 		if (dstm == NULL)
@@ -1820,20 +1804,13 @@ safe_dma_malloc(
 		goto fail_0;
 	}
 
-	r = bus_dmamap_create(dma->dma_tag, BUS_DMA_NOWAIT, &dma->dma_map);
-	if (r != 0) {
-		device_printf(sc->sc_dev, "safe_dma_malloc: "
-			"bus_dmamap_create failed; error %u\n", r);
-		goto fail_1;
-	}
-
 	r = bus_dmamem_alloc(dma->dma_tag, (void**) &dma->dma_vaddr,
 			     BUS_DMA_NOWAIT, &dma->dma_map);
 	if (r != 0) {
 		device_printf(sc->sc_dev, "safe_dma_malloc: "
-			"bus_dmammem_alloc failed; size %zu, error %u\n",
-			size, r);
-		goto fail_2;
+			"bus_dmammem_alloc failed; size %ju, error %u\n",
+			(uintmax_t)size, r);
+		goto fail_1;
 	}
 
 	r = bus_dmamap_load(dma->dma_tag, dma->dma_map, dma->dma_vaddr,
@@ -1844,21 +1821,18 @@ safe_dma_malloc(
 	if (r != 0) {
 		device_printf(sc->sc_dev, "safe_dma_malloc: "
 			"bus_dmamap_load failed; error %u\n", r);
-		goto fail_3;
+		goto fail_2;
 	}
 
 	dma->dma_size = size;
 	return (0);
 
-fail_3:
 	bus_dmamap_unload(dma->dma_tag, dma->dma_map);
 fail_2:
 	bus_dmamem_free(dma->dma_tag, dma->dma_vaddr, dma->dma_map);
 fail_1:
-	bus_dmamap_destroy(dma->dma_tag, dma->dma_map);
 	bus_dma_tag_destroy(dma->dma_tag);
 fail_0:
-	dma->dma_map = NULL;
 	dma->dma_tag = NULL;
 	return (r);
 }
@@ -1868,7 +1842,6 @@ safe_dma_free(struct safe_softc *sc, struct safe_dma_alloc *dma)
 {
 	bus_dmamap_unload(dma->dma_tag, dma->dma_map);
 	bus_dmamem_free(dma->dma_tag, dma->dma_vaddr, dma->dma_map);
-	bus_dmamap_destroy(dma->dma_tag, dma->dma_map);
 	bus_dma_tag_destroy(dma->dma_tag);
 }
 

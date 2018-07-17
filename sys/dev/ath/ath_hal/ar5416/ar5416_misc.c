@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -466,6 +468,10 @@ ar5416GetCapability(struct ath_hal *ah, HAL_CAPABILITY_TYPE type,
 	case HAL_CAP_DIVERSITY:		/* disable classic fast diversity */
 		return HAL_ENXIO;
 	case HAL_CAP_ENFORCE_TXOP:
+		if (capability == 0)
+			return (HAL_OK);
+		if (capability != 1)
+			return (HAL_ENOTSUPP);
 		(*result) =
 		    !! (AH5212(ah)->ah_miscMode & AR_PCU_TXOP_TBTT_LIMIT_ENA);
 		return (HAL_OK);
@@ -499,6 +505,8 @@ ar5416SetCapability(struct ath_hal *ah, HAL_CAPABILITY_TYPE type,
 			pCap->halTxStreams = 1;
 		return AH_TRUE;
 	case HAL_CAP_ENFORCE_TXOP:
+		if (capability != 1)
+			return AH_FALSE;
 		if (setting) {
 			AH5212(ah)->ah_miscMode
 			    |= AR_PCU_TXOP_TBTT_LIMIT_ENA;

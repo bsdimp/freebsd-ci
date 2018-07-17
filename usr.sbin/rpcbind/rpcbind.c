@@ -1,33 +1,34 @@
 /*	$NetBSD: rpcbind.c,v 1.3 2002/11/08 00:16:40 fvdl Exp $	*/
 /*	$FreeBSD$ */
 
-/*
- * Sun RPC is a product of Sun Microsystems, Inc. and is provided for
- * unrestricted use provided that this legend is included on all tape
- * media and as a part of the software program in whole or part.  Users
- * may copy or modify Sun RPC without charge, but are not authorized
- * to license or distribute it to anyone else except as part of a product or
- * program developed by the user.
- * 
- * SUN RPC IS PROVIDED AS IS WITH NO WARRANTIES OF ANY KIND INCLUDING THE
- * WARRANTIES OF DESIGN, MERCHANTIBILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE, OR ARISING FROM A COURSE OF DEALING, USAGE OR TRADE PRACTICE.
- * 
- * Sun RPC is provided with no support and without any obligation on the
- * part of Sun Microsystems, Inc. to assist in its use, correction,
- * modification or enhancement.
- * 
- * SUN MICROSYSTEMS, INC. SHALL HAVE NO LIABILITY WITH RESPECT TO THE
- * INFRINGEMENT OF COPYRIGHTS, TRADE SECRETS OR ANY PATENTS BY SUN RPC
- * OR ANY PART THEREOF.
- * 
- * In no event will Sun Microsystems, Inc. be liable for any lost revenue
- * or profits or other special, indirect and consequential damages, even if
- * Sun has been advised of the possibility of such damages.
- * 
- * Sun Microsystems, Inc.
- * 2550 Garcia Avenue
- * Mountain View, California  94043
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2009, Sun Microsystems, Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * - Redistributions of source code must retain the above copyright notice,
+ *   this list of conditions and the following disclaimer.
+ * - Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ * - Neither the name of Sun Microsystems, Inc. nor the names of its
+ *   contributors may be used to endorse or promote products derived
+ *   from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 /*
  * Copyright (c) 1984 - 1991 by Sun Microsystems, Inc.
@@ -70,7 +71,6 @@ static	char sccsid[] = "@(#)rpcbind.c 1.35 89/04/21 Copyr 1984 Sun Micro";
 #include <unistd.h>
 #include <syslog.h>
 #include <err.h>
-#include <libutil.h>
 #include <pwd.h>
 #include <string.h>
 #include <errno.h>
@@ -79,24 +79,30 @@ static	char sccsid[] = "@(#)rpcbind.c 1.35 89/04/21 Copyr 1984 Sun Micro";
 /* Global variables */
 int debugging = 0;	/* Tell me what's going on */
 int doabort = 0;	/* When debugging, do an abort on errors */
+int terminate_rfd;	/* Pipefd to wake on signal */
+volatile sig_atomic_t doterminate = 0;	/* Terminal signal received */
 rpcblist_ptr list_rbl;	/* A list of version 3/4 rpcbind services */
+int rpcbindlockfd;
 
 /* who to suid to if -s is given */
 #define RUN_AS  "daemon"
 
 #define RPCBINDDLOCK "/var/run/rpcbind.lock"
 
-int runasdaemon = 0;
+static int runasdaemon = 0;
 int insecure = 0;
 int oldstyle_local = 0;
+#ifdef LIBWRAP
+int libwrap = 0;
+#endif
 int verboselog = 0;
 
-char **hosts = NULL;
-struct sockaddr **bound_sa;
-int ipv6_only = 0;
-int nhosts = 0;
-int on = 1;
-int rpcbindlockfd;
+static char **hosts = NULL;
+static struct sockaddr **bound_sa;
+static int ipv6_only = 0;
+static int nhosts = 0;
+static int on = 1;
+static int terminate_wfd;
 
 #ifdef WARMSTART
 /* Local Variable */
@@ -129,6 +135,7 @@ main(int argc, char *argv[])
 	void *nc_handle;	/* Net config handle */
 	struct rlimit rl;
 	int maxrec = RPC_MAXDATASIZE;
+	int error, fds[2];
 
 	parseargs(argc, argv);
 
@@ -187,6 +194,16 @@ main(int argc, char *argv[])
 	    }
 	}
 	endnetconfig(nc_handle);
+
+	/*
+	 * Allocate pipe fd to wake main thread from signal handler in non-racy
+	 * way.
+	 */
+	error = pipe(fds);
+	if (error != 0)
+		err(1, "pipe failed");
+	terminate_rfd = fds[0];
+	terminate_wfd = fds[1];
 
 	/* catch the usual termination signals for graceful exit */
 	(void) signal(SIGCHLD, reap);
@@ -548,6 +565,8 @@ init_transport(struct netconfig *nconf)
 		pml->pml_map.pm_port = PMAPPORT;
 		if (strcmp(nconf->nc_proto, NC_TCP) == 0) {
 			if (tcptrans[0]) {
+				free(pml);
+				pml = NULL;
 				syslog(LOG_ERR,
 				"cannot have more than one TCP transport");
 				goto error;
@@ -755,15 +774,15 @@ rbllist_add(rpcprog_t prog, rpcvers_t vers, struct netconfig *nconf,
  * Catch the signal and die
  */
 static void
-terminate(int dummy __unused)
+terminate(int signum)
 {
-	close(rpcbindlockfd);
-#ifdef WARMSTART
-	syslog(LOG_ERR,
-		"rpcbind terminating on signal. Restart with \"rpcbind -w\"");
-	write_warmstart();	/* Dump yourself */
-#endif
-	exit(2);
+	char c = '\0';
+	ssize_t wr;
+
+	doterminate = signum;
+	wr = write(terminate_wfd, &c, 1);
+	if (wr < 1)
+		_exit(2);
 }
 
 void
@@ -786,7 +805,12 @@ parseargs(int argc, char *argv[])
 #else
 #define	WSOP	""
 #endif
-	while ((c = getopt(argc, argv, "6adh:iLls" WSOP)) != -1) {
+#ifdef LIBWRAP
+#define WRAPOP	"W"
+#else
+#define WRAPOP	""
+#endif
+	while ((c = getopt(argc, argv, "6adh:iLls" WRAPOP WSOP)) != -1) {
 		switch (c) {
 		case '6':
 			ipv6_only = 1;
@@ -819,6 +843,11 @@ parseargs(int argc, char *argv[])
 		case 's':
 			runasdaemon = 1;
 			break;
+#ifdef LIBWRAP
+		case 'W':
+			libwrap = 1;
+			break;
+#endif
 #ifdef WARMSTART
 		case 'w':
 			warmstart = 1;
@@ -826,8 +855,8 @@ parseargs(int argc, char *argv[])
 #endif
 		default:	/* error */
 			fprintf(stderr,
-			    "usage: rpcbind [-6adiLls%s] [-h bindip]\n",
-			    WSOP);
+			    "usage: rpcbind [-6adiLls%s%s] [-h bindip]\n",
+			    WRAPOP, WSOP);
 			exit (1);
 		}
 	}

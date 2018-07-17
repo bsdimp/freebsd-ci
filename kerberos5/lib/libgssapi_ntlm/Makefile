@@ -2,8 +2,7 @@
 
 LIB=	gssapi_ntlm
 LDFLAGS= -Wl,-Bsymbolic -Wl,--no-undefined
-LDADD=	-lcrypto -lgssapi -lkrb5 -lhx509 -lheimntlm -lroken
-DPADD=	${LIBCRYPTO} ${LIBGSSAPI} ${LIBKRB5} ${LIBHX509} ${LIBHEIMNTLM} ${LIBROKEN}
+LIBADD=	crypto gssapi krb5 heimntlm roken
 SHLIB_MAJOR=	10
 
 SRCS=	accept_sec_context.c \
@@ -46,4 +45,4 @@ CFLAGS+=-I${KRB5DIR}/lib/ntlm
 
 .include <bsd.lib.mk>
 
-.PATH: ${KRB5DIR}/lib/gssapi/ntlm ${.CURDIR}/../../../lib/libgssapi ${.CURDIR}/../libgssapi_krb5
+.PATH: ${KRB5DIR}/lib/gssapi/ntlm ${SRCTOP}/lib/libgssapi ${.CURDIR:H}/libgssapi_krb5

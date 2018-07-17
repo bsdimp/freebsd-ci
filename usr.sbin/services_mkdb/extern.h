@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2007 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -29,6 +31,6 @@
  * $FreeBSD$
  */
 
-extern const HASHINFO hinfo;
+extern HASHINFO hinfo;
 
 void uniq(const char *);

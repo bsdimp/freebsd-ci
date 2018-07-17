@@ -1,13 +1,13 @@
 # $FreeBSD$
 
-GCCDIR=	${.CURDIR}/../../../../contrib/gcc
-GCCLIB=	${.CURDIR}/../../../../contrib/gcclibs
+GCCDIR=	${SRCTOP}/contrib/gcc
+GCCLIB=	${SRCTOP}/contrib/gcclibs
 
 .PATH: ${GCCLIB}/libssp ${GCCLIB}/libssp/ssp
 
 LIB=	ssp_nonshared
 NO_PIC=
-NO_PROFILE=
+MK_PROFILE=no
 
 SRCS=	ssp-local.c
 

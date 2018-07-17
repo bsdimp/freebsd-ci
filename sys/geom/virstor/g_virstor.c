@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006-2007 Ivan Voras <ivoras@freebsd.org>
  * All rights reserved.
  *
@@ -84,20 +86,16 @@ static SYSCTL_NODE(_kern_geom, OID_AUTO, virstor, CTLFLAG_RW, 0,
     "GEOM_GVIRSTOR information");
 
 static u_int g_virstor_debug = 2; /* XXX: lower to 2 when released to public */
-TUNABLE_INT("kern.geom.virstor.debug", &g_virstor_debug);
-SYSCTL_UINT(_kern_geom_virstor, OID_AUTO, debug, CTLFLAG_RW, &g_virstor_debug,
+SYSCTL_UINT(_kern_geom_virstor, OID_AUTO, debug, CTLFLAG_RWTUN, &g_virstor_debug,
     0, "Debug level (2=production, 5=normal, 15=excessive)");
 
 static u_int g_virstor_chunk_watermark = 100;
-TUNABLE_INT("kern.geom.virstor.chunk_watermark", &g_virstor_chunk_watermark);
-SYSCTL_UINT(_kern_geom_virstor, OID_AUTO, chunk_watermark, CTLFLAG_RW,
+SYSCTL_UINT(_kern_geom_virstor, OID_AUTO, chunk_watermark, CTLFLAG_RWTUN,
     &g_virstor_chunk_watermark, 0,
     "Minimum number of free chunks before issuing administrative warning");
 
 static u_int g_virstor_component_watermark = 1;
-TUNABLE_INT("kern.geom.virstor.component_watermark",
-    &g_virstor_component_watermark);
-SYSCTL_UINT(_kern_geom_virstor, OID_AUTO, component_watermark, CTLFLAG_RW,
+SYSCTL_UINT(_kern_geom_virstor, OID_AUTO, component_watermark, CTLFLAG_RWTUN,
     &g_virstor_component_watermark, 0,
     "Minimum number of free components before issuing administrative warning");
 
@@ -475,7 +473,7 @@ static void
 update_metadata(struct g_virstor_softc *sc)
 {
 	struct g_virstor_metadata md;
-	int n;
+	u_int n;
 
 	if (virstor_valid_components(sc) != sc->n_components)
 		return; /* Incomplete device */
@@ -904,11 +902,9 @@ remove_component(struct g_virstor_softc *sc, struct g_virstor_component *comp,
 	LOG_MSG(LVL_DEBUG, "Component %s removed from %s", c->provider->name,
 	    sc->geom->name);
 	if (sc->provider != NULL) {
-		/* Whither, GEOM? */
-		sc->provider->flags |= G_PF_WITHER;
-		g_orphan_provider(sc->provider, ENXIO);
+		LOG_MSG(LVL_INFO, "Removing provider %s", sc->provider->name);
+		g_wither_provider(sc->provider, ENXIO);
 		sc->provider = NULL;
-		LOG_MSG(LVL_INFO, "Removing provider %s", sc->geom->name);
 	}
 
 	if (c->acr > 0 || c->acw > 0 || c->ace > 0)
@@ -932,7 +928,7 @@ virstor_geom_destroy(struct g_virstor_softc *sc, boolean_t force,
 {
 	struct g_provider *pp;
 	struct g_geom *gp;
-	int n;
+	u_int n;
 
 	g_topology_assert();
 
@@ -1046,6 +1042,7 @@ write_metadata(struct g_consumer *cp, struct g_virstor_metadata *md)
 	pp = cp->provider;
 
 	buf = malloc(pp->sectorsize, M_GVIRSTOR, M_WAITOK);
+	bzero(buf, pp->sectorsize);
 	virstor_metadata_encode(md, buf);
 	g_topology_unlock();
 	error = g_write_data(cp, pp->mediasize - pp->sectorsize, buf,
@@ -1261,7 +1258,7 @@ virstor_check_and_run(struct g_virstor_softc *sc)
 		bs = MIN(MAXPHYS, sc->map_size - count);
 		if (bs % sc->sectorsize != 0) {
 			/* Check for alignment errors */
-			bs = (bs / sc->sectorsize) * sc->sectorsize;
+			bs = rounddown(bs, sc->sectorsize);
 			if (bs == 0)
 				break;
 			LOG_MSG(LVL_ERROR, "Trouble: map is not sector-aligned "
@@ -1727,13 +1724,12 @@ g_virstor_start(struct bio *b)
 				 * sc_offset will end up pointing to the drive
 				 * sector. */
 				s_offset = chunk_index * sizeof *me;
-				s_offset = (s_offset / sc->sectorsize) *
-				    sc->sectorsize;
+				s_offset = rounddown(s_offset, sc->sectorsize);
 
 				/* data_me points to map entry sector
-				 * in memory (analoguos to offset) */
-				data_me = &sc->map[(chunk_index /
-				    sc->me_per_sector) * sc->me_per_sector];
+				 * in memory (analogous to offset) */
+				data_me = &sc->map[rounddown(chunk_index,
+				    sc->me_per_sector)];
 
 				/* Commit sector with map entry to storage */
 				cb->bio_to = sc->components[0].gcons->provider;
@@ -1895,3 +1891,4 @@ invalid_call(void)
 }
 
 DECLARE_GEOM_CLASS(g_virstor_class, g_virstor); /* Let there be light */
+MODULE_VERSION(geom_virstor, 0);

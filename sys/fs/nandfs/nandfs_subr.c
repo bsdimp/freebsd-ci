@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2012 Semihalf
  * Copyright (c) 2008, 2009 Reinoud Zandijk
  * All rights reserved.
@@ -80,7 +82,7 @@ nandfs_bufsync(struct bufobj *bo, int waitfor)
 	struct vnode *vp;
 	int error = 0;
 
-	vp = bo->__bo_vnode;
+	vp = bo2vnode(bo);
 
 	ASSERT_VOP_LOCKED(vp, __func__);
 	error = nandfs_sync_file(vp);
@@ -639,16 +641,14 @@ nandfs_get_node_raw(struct nandfs_device *nandfsdev, struct nandfsmount *nmp,
 	if (nmp) {
 		mp = nmp->nm_vfs_mountp;
 		error = getnewvnode("nandfs", mp, &nandfs_vnodeops, &nvp);
-		if (error) {
+		if (error)
 			return (error);
-		}
 	} else {
 		mp = NULL;
 		error = getnewvnode("snandfs", mp, &nandfs_system_vnodeops,
 		    &nvp);
-		if (error) {
+		if (error)
 			return (error);
-		}
 	}
 
 	if (mp)
@@ -910,7 +910,7 @@ nandfs_fs_full(struct nandfs_device *nffsdev)
 	DPRINTF(BUF, ("%s: bufs:%jx space:%jx\n", __func__,
 	    (uintmax_t)nffsdev->nd_dirty_bufs, (uintmax_t)space));
 
-	if (nffsdev->nd_dirty_bufs + (10 * bps) >= space)
+	if (nffsdev->nd_dirty_bufs + (nffsdev->nd_segs_reserved * bps) >= space)
 		return (1);
 
 	return (0);
@@ -1065,42 +1065,12 @@ nandfs_buf_check(struct buf *bp, uint32_t bits)
 int
 nandfs_erase(struct nandfs_device *fsdev, off_t offset, size_t size)
 {
-	struct buf *bp;
-	int read_size, error, i;
-
 	DPRINTF(BLOCK, ("%s: performing erase at offset %jx size %zx\n",
 	    __func__, offset, size));
 
 	MPASS(size % fsdev->nd_erasesize == 0);
 
-	if (fsdev->nd_is_nand) {
-		error = g_delete_data(fsdev->nd_gconsumer, offset, size);
-		return (error);
-	}
-
-	if (size > MAXBSIZE)
-		read_size = MAXBSIZE;
-	else
-		read_size = size;
-
-	error = 0;
-	for (i = 0; i < size / MAXBSIZE; i++) {
-		error = bread(fsdev->nd_devvp, btodb(offset + i * read_size),
-		    read_size, NOCRED, &bp);
-		if (error) {
-			brelse(bp);
-			return (error);
-		}
-		memset(bp->b_data, 0xff, read_size);
-		error = bwrite(bp);
-		if (error) {
-			nandfs_error("%s: err:%d from bwrite\n",
-			    __func__, error);
-			return (error);
-		}
-	}
-
-	return (error);
+	return (g_delete_data(fsdev->nd_gconsumer, offset, size));
 }
 
 int

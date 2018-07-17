@@ -1,8 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
-
-.PATH: ${.CURDIR}/../../../netinet/khelp
+.PATH: ${SRCTOP}/sys/netinet/khelp
 KMOD=	h_ertt
 SRCS=	h_ertt.c
 

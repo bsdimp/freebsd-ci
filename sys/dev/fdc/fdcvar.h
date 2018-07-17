@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2005 M. Warner Losh.
  * All rights reserved.
  *
@@ -64,7 +66,7 @@ struct fdc_data {
 	bus_space_handle_t ioh[FDC_MAXREG];
 	int	ioff[FDC_MAXREG];
 	void	*fdc_intr;
-	struct	device *fdc_dev;
+	device_t fdc_dev;
 	struct mtx fdc_mtx;
 	struct proc *fdc_thread;
 };
@@ -81,6 +83,7 @@ __BUS_ACCESSOR(fdc, fdtype, FDC, FDTYPE, int);
 
 void fdc_release_resources(struct fdc_data *);
 int fdc_attach(device_t);
+void fdc_start_worker(device_t);
 int fdc_hints_probe(device_t);
 int fdc_detach(device_t dev);
 device_t fdc_add_child(device_t, const char *, int);

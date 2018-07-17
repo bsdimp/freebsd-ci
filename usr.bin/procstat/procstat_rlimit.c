@@ -1,5 +1,8 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 Mikolaj Golub
+ * Copyright (c) 2015 Allan Jude <allanjude@freebsd.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -46,7 +49,7 @@
 static struct {
 	const char *name;
 	const char *suffix;
-} rlimit_param[13] = {
+} rlimit_param[15] = {
 	{"cputime",          "sec"},
 	{"filesize",         "B  "},
 	{"datasize",         "B  "},
@@ -60,9 +63,11 @@ static struct {
 	{"vmemoryuse",       "B  "},
 	{"pseudo-terminals", "   "},
 	{"swapuse",          "B  "},
+	{"kqueues",          "   "},
+	{"umtxp",            "   "},
 };
 
-#if RLIM_NLIMITS > 13
+#if RLIM_NLIMITS > 15
 #error "Resource limits have grown. Add new entries to rlimit_param[]."
 #endif
 
@@ -86,34 +91,39 @@ humanize_rlimit(int indx, rlim_t limit)
 }
 
 void
-procstat_rlimit(struct kinfo_proc *kipp)
+procstat_rlimit(struct procstat *prstat, struct kinfo_proc *kipp)
 {
 	struct rlimit rlimit;
-	int error, i, name[5];
-	size_t len;
+	int i;
 
-	if (!hflag) {
-		printf("%5s %-16s %-16s %16s %16s\n",
+	if ((procstat_opts & PS_OPT_NOHEADER) == 0) {
+		xo_emit("{T:/%5s %-16s %-16s %16s %16s}\n",
 		    "PID", "COMM", "RLIMIT", "SOFT     ", "HARD     ");
 	}
-	len = sizeof(struct rlimit);
-	name[0] = CTL_KERN;
-	name[1] = KERN_PROC;
-	name[2] = KERN_PROC_RLIMIT;
-	name[3] = kipp->ki_pid;
+	xo_emit("{ek:process_id/%5d}{e:command/%-16s/%s}", kipp->ki_pid,
+	    kipp->ki_comm);
 	for (i = 0; i < RLIM_NLIMITS; i++) {
-		name[4] = i;
-		error = sysctl(name, 5, &rlimit, &len, NULL, 0);
-		if (error < 0 && errno != ESRCH) {
-			warn("sysctl: kern.proc.rlimit: %d", kipp->ki_pid);
+		if (procstat_getrlimit(prstat, kipp, i, &rlimit) == -1)
 			return;
-		}
-		if (error < 0 || len != sizeof(struct rlimit))
-			return;
-
-		printf("%5d %-16s %-16s ", kipp->ki_pid, kipp->ki_comm,
+		xo_emit("{dk:process_id/%5d} {d:command/%-16s} "
+		    "{d:rlimit_param/%-16s} ", kipp->ki_pid, kipp->ki_comm,
 		    rlimit_param[i].name);
-		printf("%16s ", humanize_rlimit(i, rlimit.rlim_cur));
-		printf("%16s\n", humanize_rlimit(i, rlimit.rlim_max));
+
+		xo_open_container(rlimit_param[i].name);
+		if (rlimit.rlim_cur == RLIM_INFINITY)
+			xo_emit("{e:soft_limit/infinity}");
+		else
+			xo_emit("{e:soft_limit/%U}", rlimit.rlim_cur);
+
+		if (rlimit.rlim_max == RLIM_INFINITY)
+			xo_emit("{e:hard_limit/infinity}");
+		else
+			xo_emit("{e:hard_limit/%U}", rlimit.rlim_max);
+		xo_close_container(rlimit_param[i].name);
+
+		xo_emit("{d:rlim_cur/%16s} ",
+		    humanize_rlimit(i, rlimit.rlim_cur));
+		xo_emit("{d:rlim_max/%16s}\n",
+		    humanize_rlimit(i, rlimit.rlim_max));
 	}
 }

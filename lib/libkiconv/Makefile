@@ -2,8 +2,9 @@
 
 SHLIBDIR?=	/lib
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
+PACKAGE=lib${LIB}
 LIB=		kiconv
 SRCS=		kiconv_sysctl.c xlat16_iconv.c xlat16_sysctl.c
 SRCS+=		quirks.c
@@ -16,7 +17,7 @@ MLINKS+=	kiconv.3 kiconv_add_xlat16_cspair.3 \
 		kiconv.3 kiconv_add_xlat16_cspairs.3 \
 		kiconv.3 kiconv_add_xlat16_table.3
 
-CFLAGS+=	-I${.CURDIR}/../../sys
+CFLAGS+=	-I${SRCTOP}/sys
 
 WARNS?=		1
 

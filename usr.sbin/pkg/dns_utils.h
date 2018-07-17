@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Baptiste Daroussin <bapt@FreeBSD.org>
  * All rights reserved.
  *
@@ -35,6 +37,7 @@ struct dns_srvinfo {
 	unsigned int priority;
 	unsigned int weight;
 	unsigned int port;
+	unsigned int finalweight;
 	char host[MAXHOSTNAMELEN];
 	struct dns_srvinfo *next;
 };

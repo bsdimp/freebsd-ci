@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * BSD LICENSE
  *
  * Copyright(c) 2008 - 2011 Intel Corporation. All rights reserved.
@@ -300,7 +302,7 @@ scif_cb_domain_device_removed(SCI_CONTROLLER_HANDLE_T controller,
 
 	isci_controller->remote_device[isci_remote_device->index] = NULL;
 
-	xpt_create_path(&ccb->ccb_h.path, xpt_periph, path,
+	xpt_create_path(&ccb->ccb_h.path, NULL, path,
 	    isci_remote_device->index, CAM_LUN_WILDCARD);
 
 	xpt_rescan(ccb);

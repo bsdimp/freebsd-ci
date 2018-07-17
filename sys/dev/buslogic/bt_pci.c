@@ -2,6 +2,8 @@
  * Product specific probe and attach routines for:
  *      Buslogic BT946, BT948, BT956, BT958 SCSI controllers
  *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1995, 1997, 1998 Justin T. Gibbs
  * All rights reserved.
  *
@@ -57,24 +59,19 @@ __FBSDID("$FreeBSD$");
 static int
 bt_pci_alloc_resources(device_t dev)
 {
-	int		command, type = 0, rid, zero;
-	struct resource *regs = 0;
-	struct resource *irq = 0;
+	int		type = 0, rid, zero;
+	struct resource *regs = NULL;
+	struct resource *irq = NULL;
 
-	command = pci_read_config(dev, PCIR_COMMAND, /*bytes*/1);
 #if 0
 	/* XXX Memory Mapped I/O seems to cause problems */
-	if (command & PCIM_CMD_MEMEN) {
-		type = SYS_RES_MEMORY;
-		rid = BT_PCI_MEMADDR;
-		regs = bus_alloc_resource_any(dev, type, &rid, RF_ACTIVE);
-	}
+	type = SYS_RES_MEMORY;
+	rid = BT_PCI_MEMADDR;
+	regs = bus_alloc_resource_any(dev, type, &rid, RF_ACTIVE);
 #else
-	if (!regs && (command & PCIM_CMD_PORTEN)) {
-		type = SYS_RES_IOPORT;
-		rid = BT_PCI_IOADDR;
-		regs = bus_alloc_resource_any(dev, type, &rid, RF_ACTIVE);
-	}
+	type = SYS_RES_IOPORT;
+	rid = BT_PCI_IOADDR;
+	regs = bus_alloc_resource_any(dev, type, &rid, RF_ACTIVE);
 #endif
 	if (!regs)
 		return (ENOMEM);

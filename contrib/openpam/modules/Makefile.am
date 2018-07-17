@@ -1,3 +1,7 @@
-# $Id: Makefile.am 320 2006-02-16 20:33:19Z des $
+# $OpenPAM: Makefile.am 938 2017-04-30 21:34:42Z des $
 
-SUBDIRS = pam_unix pam_deny pam_permit
+SUBDIRS = pam_deny pam_permit pam_return
+
+if WITH_PAM_UNIX
+SUBDIRS += pam_unix
+endif

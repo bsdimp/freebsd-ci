@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2006 Marcel Moolenaar
  * All rights reserved.
  *
@@ -94,4 +96,4 @@ static driver_t scc_ebus_driver = {
 	sizeof(struct scc_softc),
 };
 
-DRIVER_MODULE(scc, ebus, scc_ebus_driver, scc_devclass, 0, 0);
+DRIVER_MODULE(scc, ebus, scc_ebus_driver, scc_devclass, NULL, NULL);

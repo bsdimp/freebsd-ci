@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Nokia Corporation
  * All rights reserved.
  *
@@ -35,16 +37,18 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 
 #include <ctype.h>
+#include <paths.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <unistd.h>
 
-#define	FNBUFF	161
-#define	LNBUFF	161
+/* NB: Make sure FNBUFF is as large as LNBUFF, otherwise it could overflow */
+#define	FNBUFF	512
+#define	LNBUFF	512
 
-#define	TMPPATH	"/tmp/pmcannotate.XXXXXX"
+#define	TMPNAME	"pmcannotate.XXXXXX"
 
 #define	FATAL(ptr, x ...) do {						\
 	fqueue_deleteall();						\
@@ -118,8 +122,6 @@ isasminline(const char *str)
 	void *ptr;
 	int nbytes;
 
-	if (isxdigit(str[1]) == 0)
-		return (0);
 	if (sscanf(str, " %p%n", &ptr, &nbytes) != 1)
 		return (0);
 	if (str[nbytes] != ':' || isspace(str[nbytes + 1]) == 0)
@@ -670,7 +672,8 @@ usage(const char *progname)
 int
 main(int argc, char *argv[])
 {
-	char buffer[LNBUFF], fname[FNBUFF], tbfl[] = TMPPATH, tofl[] = TMPPATH;
+	char buffer[LNBUFF], fname[FNBUFF];
+	char *tbfl, *tofl, *tmpdir;
 	char tmpf[MAXPATHLEN * 2 + 50];
 	float limit;
 	char *bin, *exec, *kfile, *ofile;
@@ -720,6 +723,17 @@ main(int argc, char *argv[])
 		    exec);
 
 	bzero(tmpf, sizeof(tmpf));
+	tmpdir = getenv("TMPDIR");
+	if (tmpdir == NULL) {
+		asprintf(&tbfl, "%s/%s", _PATH_TMP, TMPNAME);
+		asprintf(&tofl, "%s/%s", _PATH_TMP, TMPNAME);
+	} else {
+		asprintf(&tbfl, "%s/%s", tmpdir, TMPNAME);
+		asprintf(&tofl, "%s/%s", tmpdir, TMPNAME);
+	}
+	if (tofl == NULL || tbfl == NULL)
+		FATAL(exec, "%s: Cannot create tempfile templates\n",
+		    exec);
 	if (mkstemp(tofl) == -1)
 		FATAL(exec, "%s: Impossible to create the tmp file\n",
 		    exec);

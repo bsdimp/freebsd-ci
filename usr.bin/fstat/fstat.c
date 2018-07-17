@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2009 Stanislav Sedov <stas@FreeBSD.org>
  * Copyright (c) 1988, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -11,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -67,7 +69,7 @@ static int	vflg;	/* be verbose */
 
 typedef struct devs {
 	struct devs	*next;
-	uint32_t	fsid;
+	uint64_t	fsid;
 	uint64_t	ino;
 	const char	*name;
 } DEVS;
@@ -83,6 +85,8 @@ static void	print_file_info(struct procstat *procstat,
 static void	print_pipe_info(struct procstat *procstat,
     struct filestat *fst);
 static void	print_pts_info(struct procstat *procstat,
+    struct filestat *fst);
+static void	print_sem_info(struct procstat *procstat,
     struct filestat *fst);
 static void	print_shm_info(struct procstat *procstat,
     struct filestat *fst);
@@ -294,6 +298,9 @@ print_file_info(struct procstat *procstat, struct filestat *fst,
 	case PS_FST_TYPE_SHM:
 		print_shm_info(procstat, fst);
 		break;
+	case PS_FST_TYPE_SEM:
+		print_sem_info(procstat, fst);
+		break;
 	default:	
 		if (vflg)
 			fprintf(stderr,
@@ -420,6 +427,30 @@ print_pts_info(struct procstat *procstat, struct filestat *fst)
 	} else {
 		printf("%10s", pts.devname);
 	}
+	print_access_flags(fst->fs_fflags);
+}
+
+static void
+print_sem_info(struct procstat *procstat, struct filestat *fst)
+{
+	struct semstat sem;
+	char errbuf[_POSIX2_LINE_MAX];
+	char mode[15];
+	int error;
+
+	error = procstat_get_sem_info(procstat, fst, &sem, errbuf);
+	if (error != 0) {
+		printf("* error");
+		return;
+	}
+	if (nflg) {
+		printf("             ");
+		(void)snprintf(mode, sizeof(mode), "%o", sem.mode);
+	} else {
+		printf(" %-15s", fst->fs_path != NULL ? fst->fs_path : "-");
+		strmode(sem.mode, mode);
+	}
+	printf(" %10s %6u", mode, sem.value);
 	print_access_flags(fst->fs_fflags);
 }
 

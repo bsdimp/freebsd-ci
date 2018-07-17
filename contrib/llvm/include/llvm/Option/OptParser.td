@@ -14,10 +14,10 @@
 
 // Define the kinds of options.
 
-class OptionKind<string name, int predecence = 0, bit sentinel = 0> {
+class OptionKind<string name, int precedence = 0, bit sentinel = 0> {
   string Name = name;
   // The kind precedence, kinds with lower precedence are matched first.
-  int Precedence = predecence;
+  int Precedence = precedence;
   // Indicate a sentinel option.
   bit Sentinel = sentinel;
 }
@@ -44,6 +44,11 @@ def KIND_JOINED_OR_SEPARATE : OptionKind<"JoinedOrSeparate">;
 // An option which is both joined to its (first) value, and followed by its
 // (second) value.
 def KIND_JOINED_AND_SEPARATE : OptionKind<"JoinedAndSeparate">;
+// An option which consumes all remaining arguments if there are any.
+def KIND_REMAINING_ARGS : OptionKind<"RemainingArgs">;
+// An option which consumes an optional joined argument and any other remaining
+// arguments.
+def KIND_REMAINING_ARGS_JOINED : OptionKind<"RemainingArgsJoined">;
 
 // Define the option flags.
 
@@ -73,6 +78,7 @@ class OptionGroup<string name> {
   string Name = name;
   string HelpText = ?;
   OptionGroup Group = ?;
+  list<OptionFlag> Flags = [];
 }
 
 // Define the option class.
@@ -86,9 +92,12 @@ class Option<list<string> prefixes, string name, OptionKind kind> {
   int NumArgs = 0;
   string HelpText = ?;
   string MetaVarName = ?;
+  string Values = ?;
+  code ValuesCode = ?;
   list<OptionFlag> Flags = [];
   OptionGroup Group = ?;
   Option Alias = ?;
+  list<string> AliasArgs = [];
 }
 
 // Helpers for defining options.
@@ -113,11 +122,14 @@ class JoinedAndSeparate<list<string> prefixes, string name>
 // Mix-ins for adding optional attributes.
 
 class Alias<Option alias> { Option Alias = alias; }
+class AliasArgs<list<string> aliasargs> { list<string> AliasArgs = aliasargs; }
 class EnumName<string name> { string EnumName = name; }
 class Flags<list<OptionFlag> flags> { list<OptionFlag> Flags = flags; }
 class Group<OptionGroup group> { OptionGroup Group = group; }
 class HelpText<string text> { string HelpText = text; }
 class MetaVarName<string name> { string MetaVarName = name; }
+class Values<string value> { string Values = value; }
+class ValuesCode<code valuecode> { code ValuesCode = valuecode; }
 
 // Predefined options.
 

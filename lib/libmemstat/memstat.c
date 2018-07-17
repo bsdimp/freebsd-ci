@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Robert N. M. Watson
  * All rights reserved.
  *
@@ -27,6 +29,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/queue.h>
 #include <sys/sysctl.h>
 
 #include <err.h>
@@ -251,6 +254,13 @@ memstat_get_size(const struct memory_type *mtp)
 {
 
 	return (mtp->mt_size);
+}
+
+uint64_t
+memstat_get_rsize(const struct memory_type *mtp)
+{
+
+	return (mtp->mt_rsize);
 }
 
 uint64_t

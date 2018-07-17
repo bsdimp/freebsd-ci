@@ -1,55 +1,22 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-SUBDIR= ${_binutils} \
-	${_cc} \
-	${_cvs} \
-	dialog \
-	diff \
-	diff3 \
-	${_dtc} \
-	${_gdb} \
-	${_gperf} \
-	grep \
-	${_groff} \
-	patch \
-	${_rcs} \
-	sdiff \
-	send-pr \
-	${_texinfo}
 
 .if ${MK_CXX} != "no"
-_gperf=		gperf
-.if ${MK_GROFF} != "no"
-_groff=		groff
-.endif
+SUBDIR.${MK_GCC}+=	gperf
 .endif
 
-.if ${MK_CVS} != "no"
-_cvs=		cvs
-.endif
+SUBDIR.${MK_BINUTILS}+=	binutils
+SUBDIR.${MK_DIALOG}+=	dialog
+SUBDIR.${MK_GCC}+=	cc
+SUBDIR.${MK_GNU_DIFF}+=	diff3
+SUBDIR.${MK_GNU_GREP}+=	grep
+SUBDIR.${MK_GDB}+=	gdb
+SUBDIR_DEPEND_gdb=	binutils
+SUBDIR.${MK_GPL_DTC}+=	dtc
+SUBDIR.${MK_TESTS}+=	tests
 
-.if ${MK_GPL_DTC} != "no"
-_dtc=		dtc
-.endif
-
-.if ${MK_INFO} != "no"
-_texinfo=	texinfo
-.endif
-
-.if ${MK_RCS} != "no"
-_rcs=		rcs
-.endif
-
-.if ${MK_BINUTILS} != "no"
-_binutils=	binutils
-.endif
-.if ${MK_GCC} != "no"
-_cc=		cc
-.endif
-.if ${MK_GDB} != "no"
-_gdb=		gdb
-.endif
+SUBDIR_PARALLEL=
 
 .include <bsd.subdir.mk>

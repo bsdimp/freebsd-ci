@@ -14,7 +14,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -43,7 +43,7 @@
 #include <machine/regnum.h>
 #include <machine/cpuregs.h>
 
-#include "assym.s"
+#include "assym.inc"
 
 #define	SEXP_INF	0xff
 #define	DEXP_INF	0x7ff
@@ -76,6 +76,8 @@
 #define	COND_LESS	0x4
 #define	COND_SIGNAL	0x8
 
+.set hardfloat
+
 /*----------------------------------------------------------------------------
  *
  * MipsEmulateFP --
@@ -94,7 +96,7 @@
  *
  *----------------------------------------------------------------------------
  */
-NON_LEAF(MipsEmulateFP, CALLFRAME_SIZ, ra)
+NESTED(MipsEmulateFP, CALLFRAME_SIZ, ra)
 	subu	sp, sp, CALLFRAME_SIZ
 	sw	ra, CALLFRAME_RA(sp)
 /*
@@ -2460,7 +2462,7 @@ get_ft_s_done:
  *
  *----------------------------------------------------------------------------
  */
-ALEAF(get_fs_s)
+XLEAF(get_fs_s)
 	srl	a3, a0, 12 - 2			# get FS field (even regs only)
 	and	a3, a3, 0xF << 2		# mask FS field
 	lw	a3, get_fs_s_tbl(a3)		# switch on register number
@@ -2679,7 +2681,7 @@ get_ft_d_done:
  *
  *----------------------------------------------------------------------------
  */
-ALEAF(get_fs_d)
+XLEAF(get_fs_d)
 	srl	a3, a0, 12 - 2			# get FS field (even regs only)
 	and	a3, a3, 0xF << 2		# mask FS field
 	lw	a3, get_fs_d_tbl(a3)		# switch on register number
@@ -3194,7 +3196,7 @@ LEAF(set_fd_s)
 	sll	t1, t1, 23			# position exponent
 	or	t2, t2, t0
 	or	t2, t2, t1
-ALEAF(set_fd_word)
+XLEAF(set_fd_word)
 	srl	a3, a0, 7 - 2			# get FD field (even regs only)
 	and	a3, a3, 0xF << 2		# mask FT field
 	lw	a3, set_fd_s_tbl(a3)		# switch on register number

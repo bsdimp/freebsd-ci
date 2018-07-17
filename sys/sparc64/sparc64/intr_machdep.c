@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991 The Regents of the University of California.
  * All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -73,6 +75,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/smp.h>
 #include <sys/sx.h>
+#include <sys/vmmeter.h>
 
 #include <machine/frame.h>
 #include <machine/intr_machdep.h>
@@ -116,12 +119,13 @@ static void intr_assign_next_cpu(struct intr_vector *iv);
 static void intr_shuffle_irqs(void *arg __unused);
 #endif
 
-static int intr_assign_cpu(void *arg, u_char cpu);
+static int intr_assign_cpu(void *arg, int cpu);
 static void intr_execute_handlers(void *);
 static void intr_stray_level(struct trapframe *);
 static void intr_stray_vector(void *);
 static int intrcnt_setname(const char *, int);
 static void intrcnt_updatename(int, const char *, int);
+void counter_intr_inc(void);
 
 static void
 intrcnt_updatename(int vec, const char *name, int ispil)
@@ -256,7 +260,7 @@ intr_init2()
 }
 
 static int
-intr_assign_cpu(void *arg, u_char cpu)
+intr_assign_cpu(void *arg, int cpu)
 {
 #ifdef SMP
 	struct pcpu *pc;
@@ -367,7 +371,7 @@ inthand_add(const char *name, int vec, driver_filter_t *filt,
 		/*
 		 * Check if we need to upgrade from PIL_ITHREAD to PIL_FILTER.
 		 * Given that apart from the on-board SCCs and UARTs shared
-		 * interrupts are rather uncommon on sparc64 this sould be
+		 * interrupts are rather uncommon on sparc64 this should be
 		 * pretty rare in practice.
 		 */
 		filter = 0;
@@ -448,6 +452,19 @@ intr_describe(int vec, void *ih, const char *descr)
 	intrcnt_updatename(vec, iv->iv_event->ie_fullname, 0);
 	sx_xunlock(&intr_table_lock);
 	return (error);
+}
+
+/*
+ * Do VM_CNT_INC(intr), being in the interrupt context already. This is
+ * called from assembly.
+ * To avoid counter_enter() and appropriate assertion, unwrap VM_CNT_INC()
+ * and hardcode the actual increment.
+ */
+void
+counter_intr_inc(void)
+{
+
+	*(uint64_t *)zpcpu_get(vm_cnt.v_intr) += 1;
 }
 
 #ifdef SMP

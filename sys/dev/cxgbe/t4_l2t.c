@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Chelsio Communications, Inc.
  * All rights reserved.
  *
@@ -30,6 +32,7 @@ __FBSDID("$FreeBSD$");
 #include "opt_inet6.h"
 
 #include <sys/param.h>
+#include <sys/eventhandler.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
@@ -58,7 +61,7 @@ __FBSDID("$FreeBSD$");
  * can change state or increment its ref count during allocation as both of
  * these perform lookups.
  *
- * Note: We do not take refereces to ifnets in this module because both
+ * Note: We do not take references to ifnets in this module because both
  * the TOE and the sockets already hold references to the interfaces and the
  * lifetime of an L2T entry is fully contained in the lifetime of the TOE.
  */
@@ -110,28 +113,34 @@ found:
  * The write may be synchronous or asynchronous.
  */
 int
-t4_write_l2e(struct adapter *sc, struct l2t_entry *e, int sync)
+t4_write_l2e(struct l2t_entry *e, int sync)
 {
-	struct wrqe *wr;
+	struct sge_wrq *wrq;
+	struct adapter *sc;
+	struct wrq_cookie cookie;
 	struct cpl_l2t_write_req *req;
-	int idx = e->idx + sc->vres.l2t.start;
+	int idx;
 
 	mtx_assert(&e->lock, MA_OWNED);
+	MPASS(e->wrq != NULL);
 
-	wr = alloc_wrqe(sizeof(*req), &sc->sge.mgmtq);
-	if (wr == NULL)
+	wrq = e->wrq;
+	sc = wrq->adapter;
+
+	req = start_wrq_wr(wrq, howmany(sizeof(*req), 16), &cookie);
+	if (req == NULL)
 		return (ENOMEM);
-	req = wrtod(wr);
 
+	idx = e->idx + sc->vres.l2t.start;
 	INIT_TP_WR(req, 0);
 	OPCODE_TID(req) = htonl(MK_OPCODE_TID(CPL_L2T_WRITE_REQ, idx |
-	    V_SYNC_WR(sync) | V_TID_QID(sc->sge.fwq.abs_id)));
+	    V_SYNC_WR(sync) | V_TID_QID(e->iqid)));
 	req->params = htons(V_L2T_W_PORT(e->lport) | V_L2T_W_NOREPLY(!sync));
 	req->l2t_idx = htons(idx);
 	req->vlan = htons(e->vlan);
 	memcpy(req->dst_mac, e->dmac, sizeof(req->dst_mac));
 
-	t4_wrq_tx(sc, wr);
+	commit_wrq_wr(wrq, req, &cookie);
 
 	if (sync && e->state != L2T_STATE_SWITCHING)
 		e->state = L2T_STATE_SYNC_WRITE;
@@ -173,9 +182,11 @@ t4_l2t_set_switching(struct adapter *sc, struct l2t_entry *e, uint16_t vlan,
 
 	e->vlan = vlan;
 	e->lport = port;
+	e->wrq = &sc->sge.mgmtq;
+	e->iqid = sc->sge.fwq.abs_id;
 	memcpy(e->dmac, eth_addr, ETHER_ADDR_LEN);
 	mtx_lock(&e->lock);
-	rc = t4_write_l2e(sc, e, 0);
+	rc = t4_write_l2e(e, 0);
 	mtx_unlock(&e->lock);
 	return (rc);
 }
@@ -211,7 +222,6 @@ t4_init_l2t(struct adapter *sc, int flags)
 	}
 
 	sc->l2t = d;
-	t4_register_cpl_handler(sc, CPL_L2T_WRITE_RPL, do_l2t_write_rpl);
 
 	return (0);
 }
@@ -247,7 +257,6 @@ do_l2t_write_rpl(struct sge_iq *iq, const struct rss_header *rss,
 	return (0);
 }
 
-#ifdef SBUF_DRAIN
 static inline unsigned int
 vlan_prio(const struct l2t_entry *e)
 {
@@ -307,7 +316,6 @@ sysctl_l2t(SYSCTL_HANDLER_ARGS)
 		}
 
 		/*
-		 * XXX: e->ifp may not be around.
 		 * XXX: IPv6 addresses may not align properly in the output.
 		 */
 		sbuf_printf(sb, "\n%4u %-15s %02x:%02x:%02x:%02x:%02x:%02x %4d"
@@ -316,7 +324,7 @@ sysctl_l2t(SYSCTL_HANDLER_ARGS)
 			   e->dmac[3], e->dmac[4], e->dmac[5],
 			   e->vlan & 0xfff, vlan_prio(e), e->lport,
 			   l2e_state(e), atomic_load_acq_int(&e->refcnt),
-			   e->ifp->if_xname);
+			   e->ifp ? e->ifp->if_xname : "-");
 skip:
 		mtx_unlock(&e->lock);
 	}
@@ -326,4 +334,3 @@ skip:
 
 	return (rc);
 }
-#endif

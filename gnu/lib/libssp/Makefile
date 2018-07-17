@@ -2,18 +2,20 @@
 
 SHLIBDIR?=	/lib
 
-.include <bsd.own.mk>
+MK_PROFILE=	no
 MK_SSP=		no
 
-GCCDIR=	${.CURDIR}/../../../contrib/gcc
-GCCLIB=	${.CURDIR}/../../../contrib/gcclibs
+.include <bsd.own.mk>
+
+GCCDIR=	${SRCTOP}/contrib/gcc
+GCCLIB=	${SRCTOP}/contrib/gcclibs
 SRCDIR=	${GCCLIB}/libssp
 
 .PATH: ${SRCDIR} ${SRCDIR}/ssp
 
 LIB=		ssp
 SHLIB_MAJOR=	0
-NO_PROFILE=
+LD_FATAL_WARNINGS=	no
 
 SRCS=	ssp.c gets-chk.c memcpy-chk.c memmove-chk.c mempcpy-chk.c \
 	memset-chk.c snprintf-chk.c sprintf-chk.c stpcpy-chk.c \

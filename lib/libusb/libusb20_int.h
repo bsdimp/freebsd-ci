@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -211,6 +213,9 @@ struct libusb20_device {
 	/* claimed interface */
 	uint8_t claimed_interface;
 
+	/* auto detach kernel driver */
+	uint8_t auto_detach;
+  
 	/* device file handle */
 	int	file;
 
@@ -230,8 +235,11 @@ struct libusb20_device {
 	uint8_t	is_opened;
 	uint8_t parent_address;
 	uint8_t parent_port;
+	uint8_t port_level;
 
 	char	usb_desc[96];
+#define	LIBUSB20_DEVICE_PORT_PATH_MAX	32
+	uint8_t	port_path[LIBUSB20_DEVICE_PORT_PATH_MAX];
 };
 
 extern const struct libusb20_backend_methods libusb20_ugen20_backend;

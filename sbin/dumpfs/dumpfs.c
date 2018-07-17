@@ -1,4 +1,6 @@
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2009 Robert N. M. Watson
  * All rights reserved.
  *
@@ -25,7 +27,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -165,7 +167,7 @@ dumpfs(const char *name)
 		fstime = afs.fs_time;
 		printf("magic\t%x (UFS2)\ttime\t%s",
 		    afs.fs_magic, ctime(&fstime));
-		printf("superblock location\t%jd\tid\t[ %x %x ]\n",
+		printf("superblock location\t%jd\tid\t[ %08x %08x ]\n",
 		    (intmax_t)afs.fs_sblockloc, afs.fs_id[0], afs.fs_id[1]);
 		printf("ncg\t%d\tsize\t%jd\tblocks\t%jd\n",
 		    afs.fs_ncg, (intmax_t)fssize, (intmax_t)afs.fs_dsize);
@@ -197,15 +199,15 @@ dumpfs(const char *name)
 		    "maxbsize", afs.fs_maxbsize, afs.fs_maxbpg,
 		    afs.fs_maxcontig, afs.fs_contigsumsize);
 		printf("nbfree\t%jd\tndir\t%jd\tnifree\t%jd\tnffree\t%jd\n",
-		    (intmax_t)afs.fs_cstotal.cs_nbfree, 
+		    (intmax_t)afs.fs_cstotal.cs_nbfree,
 		    (intmax_t)afs.fs_cstotal.cs_ndir,
-		    (intmax_t)afs.fs_cstotal.cs_nifree, 
+		    (intmax_t)afs.fs_cstotal.cs_nifree,
 		    (intmax_t)afs.fs_cstotal.cs_nffree);
 		printf("bpg\t%d\tfpg\t%d\tipg\t%d\tunrefs\t%jd\n",
 		    afs.fs_fpg / afs.fs_frag, afs.fs_fpg, afs.fs_ipg,
 		    (intmax_t)afs.fs_unrefs);
 		printf("nindir\t%d\tinopb\t%d\tmaxfilesize\t%ju\n",
-		    afs.fs_nindir, afs.fs_inopb, 
+		    afs.fs_nindir, afs.fs_inopb,
 		    (uintmax_t)afs.fs_maxfilesize);
 		printf("sbsize\t%d\tcgsize\t%d\tcsaddr\t%jd\tcssize\t%d\n",
 		    afs.fs_sbsize, afs.fs_cgsize, (intmax_t)afs.fs_csaddr,
@@ -255,9 +257,9 @@ dumpfs(const char *name)
 	if (fsflags & FS_DOSOFTDEP)
 		printf("soft-updates%s ", (fsflags & FS_SUJ) ? "+journal" : "");
 	if (fsflags & FS_NEEDSFSCK)
-		printf("needs fsck run ");
+		printf("needs-fsck-run ");
 	if (fsflags & FS_INDEXDIRS)
-		printf("indexed directories ");
+		printf("indexed-directories ");
 	if (fsflags & FS_ACLS)
 		printf("acls ");
 	if (fsflags & FS_MULTILABEL)
@@ -265,14 +267,34 @@ dumpfs(const char *name)
 	if (fsflags & FS_GJOURNAL)
 		printf("gjournal ");
 	if (fsflags & FS_FLAGS_UPDATED)
-		printf("fs_flags expanded ");
+		printf("fs_flags-expanded ");
 	if (fsflags & FS_NFS4ACLS)
 		printf("nfsv4acls ");
 	if (fsflags & FS_TRIM)
 		printf("trim ");
-	fsflags &= ~(FS_UNCLEAN | FS_DOSOFTDEP | FS_NEEDSFSCK | FS_INDEXDIRS |
+	fsflags &= ~(FS_UNCLEAN | FS_DOSOFTDEP | FS_NEEDSFSCK | FS_METACKHASH |
 		     FS_ACLS | FS_MULTILABEL | FS_GJOURNAL | FS_FLAGS_UPDATED |
-		     FS_NFS4ACLS | FS_SUJ | FS_TRIM);
+		     FS_NFS4ACLS | FS_SUJ | FS_TRIM | FS_INDEXDIRS);
+	if (fsflags != 0)
+		printf("unknown-flags (%#x)", fsflags);
+	putchar('\n');
+	if (afs.fs_flags & FS_METACKHASH) {
+		printf("check hashes\t");
+		fsflags = afs.fs_metackhash;
+		if (fsflags == 0)
+			printf("none");
+		if (fsflags & CK_SUPERBLOCK)
+			printf("superblock ");
+		if (fsflags & CK_CYLGRP)
+			printf("cylinder-groups ");
+		if (fsflags & CK_INODE)
+			printf("inodes ");
+		if (fsflags & CK_INDIR)
+			printf("indirect-blocks ");
+		if (fsflags & CK_DIR)
+			printf("directories ");
+	}
+	fsflags &= ~(CK_SUPERBLOCK | CK_CYLGRP | CK_INODE | CK_INDIR | CK_DIR);
 	if (fsflags != 0)
 		printf("unknown flags (%#x)", fsflags);
 	putchar('\n');
@@ -353,8 +375,7 @@ dumpcg(void)
 		for (i = 1; i < afs.fs_contigsumsize; i++) {
 			if ((i - 1) % 8 == 0)
 				printf("\nclusters %d-%d:", i,
-				    afs.fs_contigsumsize - 1 < i + 7 ?
-				    afs.fs_contigsumsize - 1 : i + 7);
+				    MIN(afs.fs_contigsumsize - 1, i + 7));
 			printf("\t%d", cg_clustersum(&acg)[i]);
 		}
 		printf("\nclusters size %d and over: %d\n",
@@ -417,12 +438,15 @@ marshal(const char *name)
 	printf("-f %d ", fs->fs_fsize);
 	printf("-g %d ", fs->fs_avgfilesize);
 	printf("-h %d ", fs->fs_avgfpdir);
-	/* -i is dumb */
+	printf("-i %jd ", fragroundup(fs, lblktosize(fs, fragstoblks(fs,
+	    fs->fs_fpg)) / fs->fs_ipg));
 	if (fs->fs_flags & FS_SUJ)
 		printf("-j ");
 	if (fs->fs_flags & FS_GJOURNAL)
 		printf("-J ");
-	/* -k..l unimplemented */
+	printf("-k %jd ", fs->fs_metaspace);
+	if (fs->fs_flags & FS_MULTILABEL)
+		printf("-l ");
 	printf("-m %d ", fs->fs_minfree);
 	/* -n unimplemented */
 	printf("-o ");

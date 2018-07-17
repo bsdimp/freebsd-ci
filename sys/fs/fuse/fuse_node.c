@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2007-2009 Google Inc. and Amit Singh
  * All rights reserved.
  *
@@ -270,11 +272,31 @@ void
 fuse_vnode_open(struct vnode *vp, int32_t fuse_open_flags, struct thread *td)
 {
 	/*
-         * Funcation is called for every vnode open.
-         * Merge fuse_open_flags it may be 0
-         *
-         * XXXIP: Handle FOPEN_DIRECT_IO and FOPEN_KEEP_CACHE
-         */
+	 * Funcation is called for every vnode open.
+	 * Merge fuse_open_flags it may be 0
+	 */
+	/*
+	 * Ideally speaking, direct io should be enabled on
+	 * fd's but do not see of any way of providing that
+	 * this implementation.
+	 *
+	 * Also cannot think of a reason why would two
+	 * different fd's on same vnode would like
+	 * have DIRECT_IO turned on and off. But linux
+	 * based implementation works on an fd not an
+	 * inode and provides such a feature.
+	 *
+	 * XXXIP: Handle fd based DIRECT_IO
+	 */
+	if (fuse_open_flags & FOPEN_DIRECT_IO) {
+		ASSERT_VOP_ELOCKED(vp, __func__);
+		VTOFUD(vp)->flag |= FN_DIRECTIO;
+		fuse_io_invalbuf(vp, td);
+	} else {
+		if ((fuse_open_flags & FOPEN_KEEP_CACHE) == 0)
+			fuse_io_invalbuf(vp, td);
+	        VTOFUD(vp)->flag &= ~FN_DIRECTIO;
+	}
 
 	if (vnode_vtype(vp) == VREG) {
 		/* XXXIP prevent getattr, by using cached node size */

@@ -2,6 +2,8 @@
 /*	$NetBSD: vmparam.h,v 1.5 1994/10/26 21:10:10 cgd Exp $	*/
 
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -18,7 +20,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -101,13 +103,6 @@
 #endif
 
 /*
- * Only one memory domain.
- */
-#ifndef VM_NDOMAIN
-#define	VM_NDOMAIN		1
-#endif
-
-/*
  * Disable superpage reservations. (not sure if this is right
  * I copied it from ARM)
  */
@@ -115,22 +110,23 @@
 #define	VM_NRESERVLEVEL		0
 #endif
 
-/* virtual sizes (bytes) for various kernel submaps */
-#ifndef VM_KMEM_SIZE
-#define	VM_KMEM_SIZE		(12 * 1024 * 1024)
-#endif
-
 /*
- * How many physical pages per KVA page allocated.
- * min(max(VM_KMEM_SIZE, Physical memory/VM_KMEM_SIZE_SCALE), VM_KMEM_SIZE_MAX)
- * is the total KVA space allocated for kmem_map.
+ * How many physical pages per kmem arena virtual page.
  */
 #ifndef VM_KMEM_SIZE_SCALE
 #define	VM_KMEM_SIZE_SCALE	(3)
 #endif
 
 /*
- * Ceiling on the amount of kmem_map KVA space: 40% of the entire KVA space.
+ * Optional floor (in bytes) on the size of the kmem arena.
+ */
+#ifndef VM_KMEM_SIZE_MIN
+#define	VM_KMEM_SIZE_MIN	(12 * 1024 * 1024)
+#endif
+
+/*
+ * Optional ceiling (in bytes) on the size of the kmem arena: 40% of the
+ * kernel map.
  */
 #ifndef VM_KMEM_SIZE_MAX
 #define	VM_KMEM_SIZE_MAX	((VM_MAX_KERNEL_ADDRESS - \
@@ -155,24 +151,21 @@
 #define	VM_PHYSSEG_SPARSE
 
 /*
- * Create three free page pools: VM_FREEPOOL_DEFAULT is the default pool
+ * Create two free page pools: VM_FREEPOOL_DEFAULT is the default pool
  * from which physical pages are allocated and VM_FREEPOOL_DIRECT is
  * the pool from which physical pages for small UMA objects are
  * allocated.
  */
-#define	VM_NFREEPOOL		3
-#define	VM_FREEPOOL_CACHE	2
+#define	VM_NFREEPOOL		2
 #define	VM_FREEPOOL_DEFAULT	0
 #define	VM_FREEPOOL_DIRECT	1
 
 /*
- * we support 2 free lists:
- *
- *	- DEFAULT for direct mapped (KSEG0) pages.
- *	  Note: This usage of DEFAULT may be misleading because we use
- *	  DEFAULT for allocating direct mapped pages. The normal page
- *	  allocations use HIGHMEM if available, and then DEFAULT. 
- *	- HIGHMEM for other pages 
+ * Create up to two free lists on !__mips_n64: VM_FREELIST_DEFAULT is for
+ * physical pages that are above the largest physical address that is
+ * accessible through the direct map (KSEG0) and VM_FREELIST_LOWMEM is for
+ * physical pages that are below that address.  VM_LOWMEM_BOUNDARY is the
+ * physical address for the end of the direct map (KSEG0).
  */
 #ifdef __mips_n64
 #define	VM_NFREELIST		1
@@ -180,10 +173,10 @@
 #define	VM_FREELIST_DIRECT	VM_FREELIST_DEFAULT
 #else
 #define	VM_NFREELIST		2
-#define	VM_FREELIST_DEFAULT	1
-#define	VM_FREELIST_HIGHMEM	0
-#define	VM_FREELIST_DIRECT	VM_FREELIST_DEFAULT
-#define	VM_HIGHMEM_ADDRESS	((vm_paddr_t)0x20000000)
+#define	VM_FREELIST_DEFAULT	0
+#define	VM_FREELIST_LOWMEM	1
+#define	VM_FREELIST_DIRECT	VM_FREELIST_LOWMEM
+#define	VM_LOWMEM_BOUNDARY	((vm_paddr_t)0x20000000)
 #endif
 
 /*
@@ -192,5 +185,16 @@
 #define	VM_NFREEORDER		9
 
 #define	ZERO_REGION_SIZE	(64 * 1024)	/* 64KB */
+
+#ifndef __mips_n64
+#define	SFBUF
+#define	SFBUF_MAP
+#define	PMAP_HAS_DMAP	0
+#else
+#define	PMAP_HAS_DMAP	1
+#endif
+
+#define	PHYS_TO_DMAP(x)	MIPS_PHYS_TO_DIRECT(x)
+#define	DMAP_TO_PHYS(x)	MIPS_DIRECT_TO_PHYS(x)
 
 #endif /* !_MACHINE_VMPARAM_H_ */

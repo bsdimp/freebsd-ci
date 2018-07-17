@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2010 Daniel Braniss <danny@cs.huji.ac.il>
  * All rights reserved.
  *
@@ -40,9 +42,6 @@ __FBSDID("$FreeBSD$");
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
-#if __FreeBSD_version < 500000
-#include <sys/time.h>
-#endif
 #include <sys/ioctl.h>
 #include <netdb.h>
 #include <stdlib.h>
@@ -56,7 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <stdarg.h>
 #include <camlib.h>
 
-#include <dev/iscsi/initiator/iscsi.h>
+#include <dev/iscsi_initiator/iscsi.h>
 #include "iscontrol.h"
 
 typedef enum {
@@ -202,6 +201,7 @@ tcpConnect(isess_t *sess)
      perror("connect");
      switch(sv_errno) {
      case ECONNREFUSED:
+     case EHOSTUNREACH:
      case ENETUNREACH:
      case ETIMEDOUT:
 	  if((sess->flags & SESS_REDIRECT) == 0) {
@@ -374,7 +374,7 @@ doCAM(isess_t *sess)
 	  debug(2, "pathstr=%s", pathstr);
 
 	  ccb = cam_getccb(sess->camdev);
-	  bzero(&(&ccb->ccb_h)[1], sizeof(struct ccb_relsim) - sizeof(struct ccb_hdr));
+	  CCB_CLEAR_ALL_EXCEPT_HDR(&ccb->crs);
 	  ccb->ccb_h.func_code = XPT_REL_SIMQ;
 	  ccb->crs.release_flags = RELSIM_ADJUST_OPENINGS;
 	  ccb->crs.openings = sess->op->tags;

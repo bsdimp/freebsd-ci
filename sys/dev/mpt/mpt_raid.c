@@ -1,6 +1,8 @@
 /*-
  * Routines for handling the integrated RAID features LSI MPT Fusion adapters.
  *
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2005, WHEEL Sp. z o.o.
  * Copyright (c) 2005 Justin T. Gibbs.
  * All rights reserved.
@@ -595,7 +597,7 @@ mpt_issue_raid_req(struct mpt_softc *mpt, struct mpt_raid_volume *vol,
 	rap->Function = MPI_FUNCTION_RAID_ACTION;
 	rap->VolumeID = vol->config_page->VolumeID;
 	rap->VolumeBus = vol->config_page->VolumeBus;
-	if (disk != 0)
+	if (disk != NULL)
 		rap->PhysDiskNum = disk->config_page.PhysDiskNum;
 	else
 		rap->PhysDiskNum = 0xFF;
@@ -605,7 +607,7 @@ mpt_issue_raid_req(struct mpt_softc *mpt, struct mpt_raid_volume *vol,
 	MPI_pSGE_SET_FLAGS(se, (MPI_SGE_FLAGS_SIMPLE_ELEMENT |
 	    MPI_SGE_FLAGS_LAST_ELEMENT | MPI_SGE_FLAGS_END_OF_BUFFER |
 	    MPI_SGE_FLAGS_END_OF_LIST |
-	    write ? MPI_SGE_FLAGS_HOST_TO_IOC : MPI_SGE_FLAGS_IOC_TO_HOST));
+	    (write ? MPI_SGE_FLAGS_HOST_TO_IOC : MPI_SGE_FLAGS_IOC_TO_HOST)));
 	se->FlagsLength = htole32(se->FlagsLength);
 	rap->MsgContext = htole32(req->index | raid_handler_id);
 
@@ -636,7 +638,7 @@ mpt_spawn_raid_thread(struct mpt_softc *mpt)
 	MPT_LOCK(mpt);
 	xpt_freeze_simq(mpt->phydisk_sim, 1);
 	MPT_UNLOCK(mpt);
-	error = mpt_kthread_create(mpt_raid_thread, mpt,
+	error = kproc_create(mpt_raid_thread, mpt,
 	    &mpt->raid_thread, /*flags*/0, /*altstack*/0,
 	    "mpt_raid%d", mpt->unit);
 	if (error != 0) {
@@ -705,7 +707,7 @@ mpt_raid_thread(void *arg)
 			ccb = xpt_alloc_ccb();
 
 			MPT_LOCK(mpt);
-			error = xpt_create_path(&ccb->ccb_h.path, xpt_periph,
+			error = xpt_create_path(&ccb->ccb_h.path, NULL,
 			    cam_sim_path(mpt->phydisk_sim),
 			    CAM_TARGET_WILDCARD, CAM_LUN_WILDCARD);
 			if (error != CAM_REQ_CMP) {
@@ -719,7 +721,7 @@ mpt_raid_thread(void *arg)
 	mpt->raid_thread = NULL;
 	wakeup(&mpt->raid_thread);
 	MPT_UNLOCK(mpt);
-	mpt_kthread_exit(0);
+	kproc_exit(0);
 }
 
 #if 0
@@ -782,7 +784,7 @@ mpt_raid_quiesce_disk(struct mpt_softc *mpt, struct mpt_raid_disk *mpt_disk,
 }
 #endif
 
-/* XXX Ignores that there may be multiple busses/IOCs involved. */
+/* XXX Ignores that there may be multiple buses/IOCs involved. */
 cam_status
 mpt_map_physdisk(struct mpt_softc *mpt, union ccb *ccb, target_id_t *tgt)
 {
@@ -799,7 +801,7 @@ mpt_map_physdisk(struct mpt_softc *mpt, union ccb *ccb, target_id_t *tgt)
 	return (-1);
 }
 
-/* XXX Ignores that there may be multiple busses/IOCs involved. */
+/* XXX Ignores that there may be multiple buses/IOCs involved. */
 int
 mpt_is_raid_member(struct mpt_softc *mpt, target_id_t tgt)
 {
@@ -818,7 +820,7 @@ mpt_is_raid_member(struct mpt_softc *mpt, target_id_t tgt)
 	
 }
 
-/* XXX Ignores that there may be multiple busses/IOCs involved. */
+/* XXX Ignores that there may be multiple buses/IOCs involved. */
 int
 mpt_is_raid_volume(struct mpt_softc *mpt, target_id_t tgt)
 {
@@ -1662,7 +1664,7 @@ mpt_raid_set_vol_queue_depth(struct mpt_softc *mpt, u_int vol_queue_depth)
 
 		mpt->raid_rescan = 0;
 
-		error = xpt_create_path(&path, xpt_periph,
+		error = xpt_create_path(&path, NULL,
 					cam_sim_path(mpt->sim),
 					mpt_vol->config_page->VolumeID,
 					/*lun*/0);

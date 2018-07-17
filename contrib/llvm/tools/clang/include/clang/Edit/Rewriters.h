@@ -12,7 +12,12 @@
 
 namespace clang {
   class ObjCMessageExpr;
+  class ObjCMethodDecl;
+  class ObjCInterfaceDecl;
+  class ObjCProtocolDecl;
   class NSAPI;
+  class EnumDecl;
+  class TypedefDecl;
   class ParentMap;
 
 namespace edit {
@@ -24,7 +29,7 @@ bool rewriteObjCRedundantCallWithLiteral(const ObjCMessageExpr *Msg,
 bool rewriteToObjCLiteralSyntax(const ObjCMessageExpr *Msg,
                                 const NSAPI &NS, Commit &commit,
                                 const ParentMap *PMap);
-
+  
 bool rewriteToObjCSubscriptSyntax(const ObjCMessageExpr *Msg,
                                   const NSAPI &NS, Commit &commit);
 

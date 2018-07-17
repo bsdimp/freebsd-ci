@@ -1,33 +1,34 @@
 /*	$NetBSD: rpcb_svc_com.c,v 1.9 2002/11/08 00:16:39 fvdl Exp $	*/
 /*	$FreeBSD$ */
 
-/*
- * Sun RPC is a product of Sun Microsystems, Inc. and is provided for
- * unrestricted use provided that this legend is included on all tape
- * media and as a part of the software program in whole or part.  Users
- * may copy or modify Sun RPC without charge, but are not authorized
- * to license or distribute it to anyone else except as part of a product or
- * program developed by the user.
- * 
- * SUN RPC IS PROVIDED AS IS WITH NO WARRANTIES OF ANY KIND INCLUDING THE
- * WARRANTIES OF DESIGN, MERCHANTIBILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE, OR ARISING FROM A COURSE OF DEALING, USAGE OR TRADE PRACTICE.
- * 
- * Sun RPC is provided with no support and without any obligation on the
- * part of Sun Microsystems, Inc. to assist in its use, correction,
- * modification or enhancement.
- * 
- * SUN MICROSYSTEMS, INC. SHALL HAVE NO LIABILITY WITH RESPECT TO THE
- * INFRINGEMENT OF COPYRIGHTS, TRADE SECRETS OR ANY PATENTS BY SUN RPC
- * OR ANY PART THEREOF.
- * 
- * In no event will Sun Microsystems, Inc. be liable for any lost revenue
- * or profits or other special, indirect and consequential damages, even if
- * Sun has been advised of the possibility of such damages.
- * 
- * Sun Microsystems, Inc.
- * 2550 Garcia Avenue
- * Mountain View, California  94043
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 2009, Sun Microsystems, Inc.
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ * - Redistributions of source code must retain the above copyright notice,
+ *   this list of conditions and the following disclaimer.
+ * - Redistributions in binary form must reproduce the above copyright notice,
+ *   this list of conditions and the following disclaimer in the documentation
+ *   and/or other materials provided with the distribution.
+ * - Neither the name of Sun Microsystems, Inc. nor the names of its
+ *   contributors may be used to endorse or promote products derived
+ *   from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 /*
  * Copyright (c) 1986 - 1991 by Sun Microsystems, Inc.
@@ -48,17 +49,19 @@
 #include <rpc/rpc.h>
 #include <rpc/rpcb_prot.h>
 #include <rpc/svc_dg.h>
+#include <assert.h>
 #include <netconfig.h>
 #include <errno.h>
 #include <syslog.h>
-#include <unistd.h>
 #include <stdio.h>
-#ifdef PORTMAP
-#include <netinet/in.h>
-#include <rpc/pmap_prot.h>
-#endif /* PORTMAP */
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#ifdef PORTMAP
+#include <netinet/in.h>
+#include <rpc/rpc_com.h>
+#include <rpc/pmap_prot.h>
+#endif /* PORTMAP */
 
 #include "rpcbind.h"
 
@@ -180,12 +183,9 @@ map_set(RPCB *regp, char *owner)
 	a->r_addr = strdup(reg.r_addr);
 	a->r_owner = strdup(owner);
 	if (!a->r_addr || !a->r_netid || !a->r_owner) {
-		if (a->r_netid)
-			free(a->r_netid);
-		if (a->r_addr)
-			free(a->r_addr);
-		if (a->r_owner)
-			free(a->r_owner);
+		free(a->r_netid);
+		free(a->r_addr);
+		free(a->r_owner);
 		free(rbl);
 		return (FALSE);
 	}
@@ -369,11 +369,8 @@ rpcbproc_uaddr2taddr_com(void *arg, struct svc_req *rqstp __unused,
 	static struct netbuf nbuf;
 	static struct netbuf *taddr;
 
-	if (taddr) {
-		free(taddr->buf);
-		free(taddr);
-		taddr = NULL;
-	}
+	netbuffree(taddr);
+	taddr = NULL;
 	if (((nconf = rpcbind_get_conf(transp->xp_netid)) == NULL) ||
 	    ((taddr = uaddr2taddr(nconf, *uaddrp)) == NULL)) {
 		(void) memset((char *)&nbuf, 0, sizeof (struct netbuf));
@@ -418,7 +415,8 @@ rpcbproc_taddr2uaddr_com(void *arg, struct svc_req *rqstp __unused,
 static bool_t
 xdr_encap_parms(XDR *xdrs, struct encap_parms *epp)
 {
-	return (xdr_bytes(xdrs, &(epp->args), (u_int *) &(epp->arglen), ~0));
+	return (xdr_bytes(xdrs, &(epp->args), (u_int *) &(epp->arglen),
+	    RPC_MAXDATASIZE));
 }
 
 /*
@@ -429,9 +427,9 @@ static bool_t
 xdr_rmtcall_args(XDR *xdrs, struct r_rmtcall_args *cap)
 {
 	/* does not get the address or the arguments */
-	if (xdr_u_int32_t(xdrs, &(cap->rmt_prog)) &&
-	    xdr_u_int32_t(xdrs, &(cap->rmt_vers)) &&
-	    xdr_u_int32_t(xdrs, &(cap->rmt_proc))) {
+	if (xdr_rpcprog(xdrs, &(cap->rmt_prog)) &&
+	    xdr_rpcvers(xdrs, &(cap->rmt_vers)) &&
+	    xdr_rpcproc(xdrs, &(cap->rmt_proc))) {
 		return (xdr_encap_parms(xdrs, &(cap->rmt_args)));
 	}
 	return (FALSE);
@@ -634,7 +632,7 @@ rpcbproc_callit_com(struct svc_req *rqstp, SVCXPRT *transp,
 	/*
 	 * Should be multiple of 4 for XDR.
 	 */
-	sendsz = ((sendsz + 3) / 4) * 4;
+	sendsz = roundup(sendsz, 4);
 	if (sendsz > RPC_BUF_MAX) {
 #ifdef	notyet
 		buf_alloc = alloca(sendsz);		/* not in IDR2? */
@@ -681,8 +679,7 @@ rpcbproc_callit_com(struct svc_req *rqstp, SVCXPRT *transp,
 			(unsigned long)a.rmt_prog, (unsigned long)a.rmt_vers,
 			(unsigned long)a.rmt_proc, transp->xp_netid,
 			uaddr ? uaddr : "unknown");
-		if (uaddr)
-			free(uaddr);
+		free(uaddr);
 	}
 #endif
 
@@ -726,8 +723,7 @@ rpcbproc_callit_com(struct svc_req *rqstp, SVCXPRT *transp,
 			rbl->rpcb_map.r_addr, NULL);
 		if (uaddr == NULL || uaddr[0] == '\0') {
 			svcerr_noprog(transp);
-			if (uaddr != NULL)
-				free(uaddr);
+			free(uaddr);
 			goto error;
 		}
 		free(uaddr);
@@ -906,18 +902,11 @@ error:
 	if (call_msg.rm_xid != 0)
 		(void) free_slot_by_xid(call_msg.rm_xid);
 out:
-	if (local_uaddr)
-		free(local_uaddr);
-	if (buf_alloc)
-		free(buf_alloc);
-	if (outbuf_alloc)
-		free(outbuf_alloc);
-	if (na) {
-		free(na->buf);
-		free(na);
-	}
-	if (m_uaddr != NULL)
-		free(m_uaddr);
+	free(local_uaddr);
+	free(buf_alloc);
+	free(outbuf_alloc);
+	netbuffree(na);
+	free(m_uaddr);
 }
 
 /*
@@ -1048,26 +1037,46 @@ netbufcmp(struct netbuf *n1, struct netbuf *n2)
 	return ((n1->len != n2->len) || memcmp(n1->buf, n2->buf, n1->len));
 }
 
+static bool_t
+netbuf_copybuf(struct netbuf *dst, const struct netbuf *src)
+{
+	assert(src->len <= src->maxlen);
+
+	if (dst->maxlen < src->len || dst->buf == NULL) {
+		free(dst->buf);
+		if ((dst->buf = calloc(1, src->maxlen)) == NULL)
+			return (FALSE);
+		dst->maxlen = src->maxlen;
+	}
+
+	dst->len = src->len;
+	memcpy(dst->buf, src->buf, src->len);
+
+	return (TRUE);
+}
+
 static struct netbuf *
 netbufdup(struct netbuf *ap)
 {
 	struct netbuf  *np;
 
-	if ((np = malloc(sizeof(struct netbuf))) == NULL)
+	if ((np = calloc(1, sizeof(struct netbuf))) == NULL)
 		return (NULL);
-	if ((np->buf = malloc(ap->len)) == NULL) {
+	if (netbuf_copybuf(np, ap) == FALSE) {
 		free(np);
 		return (NULL);
 	}
-	np->maxlen = np->len = ap->len;
-	memcpy(np->buf, ap->buf, ap->len);
 	return (np);
 }
 
 static void
 netbuffree(struct netbuf *ap)
 {
+
+	if (ap == NULL)
+		return;
 	free(ap->buf);
+	ap->buf = NULL;
 	free(ap);
 }
 
@@ -1079,7 +1088,7 @@ void
 my_svc_run(void)
 {
 	size_t nfds;
-	struct pollfd pollfds[FD_SETSIZE];
+	struct pollfd pollfds[FD_SETSIZE + 1];
 	int poll_ret, check_ret;
 	int n;
 #ifdef SVC_RUN_DEBUG
@@ -1090,6 +1099,9 @@ my_svc_run(void)
 
 	for (;;) {
 		p = pollfds;
+		p->fd = terminate_rfd;
+		p->events = MASKVAL;
+		p++;
 		for (n = 0; n <= svc_maxfd; n++) {
 			if (FD_ISSET(n, &svc_fdset)) {
 				p->fd = n;
@@ -1108,7 +1120,20 @@ my_svc_run(void)
 			fprintf(stderr, ">\n");
 		}
 #endif
-		switch (poll_ret = poll(pollfds, nfds, 30 * 1000)) {
+		poll_ret = poll(pollfds, nfds, 30 * 1000);
+
+		if (doterminate != 0) {
+			close(rpcbindlockfd);
+#ifdef WARMSTART
+			syslog(LOG_ERR,
+			    "rpcbind terminating on signal %d. Restart with \"rpcbind -w\"",
+			    (int)doterminate);
+			write_warmstart();	/* Dump yourself */
+#endif
+			exit(2);
+		}
+
+		switch (poll_ret) {
 		case -1:
 			/*
 			 * We ignore all errors, continuing with the assumption
@@ -1185,7 +1210,7 @@ xprt_set_caller(SVCXPRT *xprt, struct finfo *fi)
 {
 	u_int32_t *xidp;
 
-	*(svc_getrpccaller(xprt)) = *(fi->caller_addr);
+	netbuf_copybuf(svc_getrpccaller(xprt), fi->caller_addr);
 	xidp = __rpcb_get_dg_xidp(xprt);
 	*xidp = fi->caller_xid;
 }
@@ -1279,13 +1304,11 @@ handle_reply(int fd, SVCXPRT *xprt)
 		fprintf(stderr, "handle_reply:  forwarding address %s to %s\n",
 			a.rmt_uaddr, uaddr ? uaddr : "unknown");
 	}
-	if (uaddr)
-		free(uaddr);
+	free(uaddr);
 #endif
 	svc_sendreply(xprt, (xdrproc_t) xdr_rmtcall_result, (char *) &a);
 done:
-	if (buffer)
-		free(buffer);
+	free(buffer);
 
 	if (reply_msg.rm_xid == 0) {
 #ifdef	SVC_RUN_DEBUG

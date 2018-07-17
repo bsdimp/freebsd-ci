@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2004 Atheros Communications, Inc.
  *
@@ -108,7 +110,6 @@ struct ath_hal_5210 {
 	uint32_t	ah_txDescInterruptMask;
 	uint32_t	ah_txEolInterruptMask;
 	uint32_t	ah_txUrnInterruptMask;
-	HAL_POWER_MODE	ah_powerMode;
 	uint8_t		ah_bssid[IEEE80211_ADDR_LEN];
 	HAL_TX_QUEUE_INFO ah_txq[HAL_NUM_TX_QUEUES]; /* beacon+cab+data */
 	/*
@@ -121,6 +122,8 @@ struct ath_hal_5210 {
 	u_int		ah_slottime;		/* user-specified slot time */
 	u_int		ah_acktimeout;		/* user-specified ack timeout */
 	u_int		ah_ctstimeout;		/* user-specified cts timeout */
+
+	uint16_t	ah_associd;		/* association id */
 };
 #define	AH5210(ah)	((struct ath_hal_5210 *)(ah))
 
@@ -128,7 +131,8 @@ struct ath_hal;
 
 extern	void ar5210Detach(struct ath_hal *ah);
 extern	HAL_BOOL ar5210Reset(struct ath_hal *, HAL_OPMODE,
-		struct ieee80211_channel *, HAL_BOOL bChannelChange, HAL_STATUS *);
+		struct ieee80211_channel *, HAL_BOOL bChannelChange,
+		HAL_RESET_TYPE, HAL_STATUS *);
 extern	void ar5210SetPCUConfig(struct ath_hal *);
 extern	HAL_BOOL ar5210PhyDisable(struct ath_hal *);
 extern	HAL_BOOL ar5210Disable(struct ath_hal *);
@@ -249,6 +253,8 @@ extern	HAL_BOOL ar5210SetCTSTimeout(struct ath_hal *, u_int);
 extern	u_int ar5210GetCTSTimeout(struct ath_hal *);
 extern  HAL_BOOL ar5210SetDecompMask(struct ath_hal *, uint16_t, int);
 void 	ar5210SetCoverageClass(struct ath_hal *, uint8_t, int);
+extern	HAL_STATUS ar5210SetQuiet(struct ath_hal *, uint32_t, uint32_t,
+		uint32_t, HAL_QUIET_FLAG);
 extern	HAL_STATUS ar5210GetCapability(struct ath_hal *, HAL_CAPABILITY_TYPE,
 		uint32_t, uint32_t *);
 extern	HAL_BOOL ar5210SetCapability(struct ath_hal *, HAL_CAPABILITY_TYPE,

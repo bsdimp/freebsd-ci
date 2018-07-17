@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008, M. Warner Losh
  * Copyright (c) 2000,2001 Jonathan Chen.
  * All rights reserved.
@@ -69,6 +71,9 @@ struct cardbus_devinfo
 struct cardbus_softc 
 {
 	device_t	sc_dev;
+#ifdef PCI_RES_BUS
+	struct resource *sc_bus;
+#endif
 };
 
 /*

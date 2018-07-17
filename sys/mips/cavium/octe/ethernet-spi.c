@@ -1,4 +1,6 @@
 /*************************************************************************
+SPDX-License-Identifier: BSD-3-Clause
+
 Copyright (c) 2003-2007  Cavium Networks (support@cavium.com). All rights
 reserved.
 
@@ -41,6 +43,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 
 #include "wrapper-cvmx-includes.h"
 #include "ethernet-headers.h"

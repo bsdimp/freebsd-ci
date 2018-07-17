@@ -1,4 +1,5 @@
 /**************************************************************************
+SPDX-License-Identifier: BSD-2-Clause-FreeBSD
 
 Copyright (c) 2007-2009, Chelsio Inc.
 All rights reserved.
@@ -41,9 +42,11 @@ $FreeBSD$
 #include <sys/sockio.h>
 #include <sys/condvar.h>
 #include <sys/buf_ring.h>
+#include <sys/taskqueue.h>
 
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_media.h>
 #include <net/if_dl.h>
 #include <netinet/in.h>
@@ -52,12 +55,10 @@ $FreeBSD$
 #include <machine/bus.h>
 #include <machine/resource.h>
 
-#include <sys/bus_dma.h>
 #include <dev/pci/pcireg.h>
 #include <dev/pci/pcivar.h>
 
 #include <cxgb_osdep.h>
-#include <sys/mbufq.h>
 
 struct adapter;
 struct sge_qset;
@@ -95,6 +96,7 @@ struct port_info {
 	const struct port_type_info *port_type;
 	struct cphy	phy;
 	struct cmac	mac;
+	struct timeval	last_refreshed;
 	struct link_config link_config;
 	struct ifmedia	media;
 	struct mtx	lock;
@@ -248,7 +250,7 @@ struct sge_txq {
 	bus_dma_tag_t	desc_tag;
 	bus_dmamap_t	desc_map;
 	bus_dma_tag_t   entry_tag;
-	struct mbuf_head sendq;
+	struct mbufq	sendq;
 
 	struct buf_ring *txq_mr;
 	struct ifaltq	*txq_ifq;
@@ -469,7 +471,7 @@ t3_get_next_mcaddr(struct t3_rx_mode *rm)
 	int i = 0;
 
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		if (i == rm->idx) {
@@ -573,4 +575,12 @@ void cxgb_tx_watchdog(void *arg);
 int cxgb_transmit(struct ifnet *ifp, struct mbuf *m);
 void cxgb_qflush(struct ifnet *ifp);
 void t3_iterate(void (*)(struct adapter *, void *), void *);
+void cxgb_refresh_stats(struct port_info *);
+
+#ifdef NETDUMP
+int cxgb_netdump_encap(struct sge_qset *qs, struct mbuf **m);
+int cxgb_netdump_poll_rx(adapter_t *adap, struct sge_qset *qs);
+int cxgb_netdump_poll_tx(struct sge_qset *qs);
+#endif
+
 #endif

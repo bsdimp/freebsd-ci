@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002, 2005-2009 Marcel Moolenaar
  * All rights reserved.
  *
@@ -29,7 +31,6 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bio.h>
-#include <sys/diskmbr.h>
 #include <sys/endian.h>
 #include <sys/kernel.h>
 #include <sys/kobj.h>
@@ -70,7 +71,9 @@ struct g_part_alias_list {
 	const char *lexeme;
 	enum g_part_alias alias;
 } g_part_alias_list[G_PART_ALIAS_COUNT] = {
+	{ "apple-apfs", G_PART_ALIAS_APPLE_APFS },
 	{ "apple-boot", G_PART_ALIAS_APPLE_BOOT },
+	{ "apple-core-storage", G_PART_ALIAS_APPLE_CORE_STORAGE },
 	{ "apple-hfs", G_PART_ALIAS_APPLE_HFS },
 	{ "apple-label", G_PART_ALIAS_APPLE_LABEL },
 	{ "apple-raid", G_PART_ALIAS_APPLE_RAID },
@@ -78,10 +81,24 @@ struct g_part_alias_list {
 	{ "apple-tv-recovery", G_PART_ALIAS_APPLE_TV_RECOVERY },
 	{ "apple-ufs", G_PART_ALIAS_APPLE_UFS },
 	{ "bios-boot", G_PART_ALIAS_BIOS_BOOT },
+	{ "chromeos-firmware", G_PART_ALIAS_CHROMEOS_FIRMWARE },
+	{ "chromeos-kernel", G_PART_ALIAS_CHROMEOS_KERNEL },
+	{ "chromeos-reserved", G_PART_ALIAS_CHROMEOS_RESERVED },
+	{ "chromeos-root", G_PART_ALIAS_CHROMEOS_ROOT },
+	{ "dragonfly-ccd", G_PART_ALIAS_DFBSD_CCD },
+	{ "dragonfly-hammer", G_PART_ALIAS_DFBSD_HAMMER },
+	{ "dragonfly-hammer2", G_PART_ALIAS_DFBSD_HAMMER2 },
+	{ "dragonfly-label32", G_PART_ALIAS_DFBSD },
+	{ "dragonfly-label64", G_PART_ALIAS_DFBSD64 },
+	{ "dragonfly-legacy", G_PART_ALIAS_DFBSD_LEGACY },
+	{ "dragonfly-swap", G_PART_ALIAS_DFBSD_SWAP },
+	{ "dragonfly-ufs", G_PART_ALIAS_DFBSD_UFS },
+	{ "dragonfly-vinum", G_PART_ALIAS_DFBSD_VINUM },
 	{ "ebr", G_PART_ALIAS_EBR },
 	{ "efi", G_PART_ALIAS_EFI },
 	{ "fat16", G_PART_ALIAS_MS_FAT16 },
 	{ "fat32", G_PART_ALIAS_MS_FAT32 },
+	{ "fat32lba", G_PART_ALIAS_MS_FAT32LBA },
 	{ "freebsd", G_PART_ALIAS_FREEBSD },
 	{ "freebsd-boot", G_PART_ALIAS_FREEBSD_BOOT },
 	{ "freebsd-nandfs", G_PART_ALIAS_FREEBSD_NANDFS },
@@ -97,27 +114,35 @@ struct g_part_alias_list {
 	{ "ms-basic-data", G_PART_ALIAS_MS_BASIC_DATA },
 	{ "ms-ldm-data", G_PART_ALIAS_MS_LDM_DATA },
 	{ "ms-ldm-metadata", G_PART_ALIAS_MS_LDM_METADATA },
+	{ "ms-recovery", G_PART_ALIAS_MS_RECOVERY },
 	{ "ms-reserved", G_PART_ALIAS_MS_RESERVED },
-	{ "ntfs", G_PART_ALIAS_MS_NTFS },
+	{ "ms-spaces", G_PART_ALIAS_MS_SPACES },
 	{ "netbsd-ccd", G_PART_ALIAS_NETBSD_CCD },
 	{ "netbsd-cgd", G_PART_ALIAS_NETBSD_CGD },
 	{ "netbsd-ffs", G_PART_ALIAS_NETBSD_FFS },
 	{ "netbsd-lfs", G_PART_ALIAS_NETBSD_LFS },
 	{ "netbsd-raid", G_PART_ALIAS_NETBSD_RAID },
 	{ "netbsd-swap", G_PART_ALIAS_NETBSD_SWAP },
+	{ "ntfs", G_PART_ALIAS_MS_NTFS },
+	{ "openbsd-data", G_PART_ALIAS_OPENBSD_DATA },
+	{ "prep-boot", G_PART_ALIAS_PREP_BOOT },
+	{ "vmware-reserved", G_PART_ALIAS_VMRESERVED },
 	{ "vmware-vmfs", G_PART_ALIAS_VMFS },
 	{ "vmware-vmkdiag", G_PART_ALIAS_VMKDIAG },
-	{ "vmware-reserved", G_PART_ALIAS_VMRESERVED },
+	{ "vmware-vsanhdr", G_PART_ALIAS_VMVSANHDR },
 };
 
 SYSCTL_DECL(_kern_geom);
 SYSCTL_NODE(_kern_geom, OID_AUTO, part, CTLFLAG_RW, 0,
     "GEOM_PART stuff");
 static u_int check_integrity = 1;
-TUNABLE_INT("kern.geom.part.check_integrity", &check_integrity);
 SYSCTL_UINT(_kern_geom_part, OID_AUTO, check_integrity,
-    CTLFLAG_RW | CTLFLAG_TUN, &check_integrity, 1,
+    CTLFLAG_RWTUN, &check_integrity, 1,
     "Enable integrity checking");
+static u_int auto_resize = 1;
+SYSCTL_UINT(_kern_geom_part, OID_AUTO, auto_resize,
+    CTLFLAG_RWTUN, &auto_resize, 1,
+    "Enable auto resize");
 
 /*
  * The GEOM partitioning class.
@@ -133,6 +158,8 @@ static g_dumpconf_t g_part_dumpconf;
 static g_orphan_t g_part_orphan;
 static g_spoiled_t g_part_spoiled;
 static g_start_t g_part_start;
+static g_resize_t g_part_resize;
+static g_ioctl_t g_part_ioctl;
 
 static struct g_class g_part_class = {
 	.name = "PART",
@@ -149,6 +176,8 @@ static struct g_class g_part_class = {
 	.orphan = g_part_orphan,
 	.spoiled = g_part_spoiled,
 	.start = g_part_start,
+	.resize = g_part_resize,
+	.ioctl = g_part_ioctl,
 };
 
 DECLARE_GEOM_CLASS(g_part_class, g_part);
@@ -247,6 +276,35 @@ g_part_geometry(struct g_part_table *table, struct g_consumer *cp,
 	}
 }
 
+static void
+g_part_get_physpath_done(struct bio *bp)
+{
+	struct g_geom *gp;
+	struct g_part_entry *entry;
+	struct g_part_table *table;
+	struct g_provider *pp;
+	struct bio *pbp;
+
+	pbp = bp->bio_parent;
+	pp = pbp->bio_to;
+	gp = pp->geom;
+	table = gp->softc;
+	entry = pp->private;
+
+	if (bp->bio_error == 0) {
+		char *end;
+		size_t len, remainder;
+		len = strlcat(bp->bio_data, "/", bp->bio_length);
+		if (len < bp->bio_length) {
+			end = bp->bio_data + len;
+			remainder = bp->bio_length - len;
+			G_PART_NAME(table, entry, end, remainder);
+		}
+	}
+	g_std_done(bp);
+}
+
+
 #define	DPRINTF(...)	if (bootverbose) {	\
 	printf("GEOM_PART: " __VA_ARGS__);	\
 }
@@ -308,8 +366,10 @@ g_part_check_integrity(struct g_part_table *table, struct g_consumer *cp)
 			if (e1->gpe_offset > offset)
 				offset = e1->gpe_offset;
 			if ((offset + pp->stripeoffset) % pp->stripesize) {
-				DPRINTF("partition %d is not aligned on %u "
-				    "bytes\n", e1->gpe_index, pp->stripesize);
+				DPRINTF("partition %d on (%s, %s) is not "
+				    "aligned on %u bytes\n", e1->gpe_index,
+				    pp->name, table->gpt_scheme->name,
+				    pp->stripesize);
 				/* Don't treat this as a critical failure */
 			}
 		}
@@ -402,6 +462,7 @@ g_part_new_provider(struct g_geom *gp, struct g_part_table *table,
 	struct g_consumer *cp;
 	struct g_provider *pp;
 	struct sbuf *sb;
+	struct g_geom_alias *gap;
 	off_t offset;
 
 	cp = LIST_FIRST(&gp->consumer);
@@ -412,11 +473,25 @@ g_part_new_provider(struct g_geom *gp, struct g_part_table *table,
 		entry->gpe_offset = offset;
 
 	if (entry->gpe_pp == NULL) {
+		/*
+		 * Add aliases to the geom before we create the provider so that
+		 * geom_dev can taste it with all the aliases in place so all
+		 * the aliased dev_t instances get created for each partition
+		 * (eg foo5p7 gets created for bar5p7 when foo is an alias of bar).
+		 */
+		LIST_FOREACH(gap, &table->gpt_gp->aliases, ga_next) {
+			sb = sbuf_new_auto();
+			G_PART_FULLNAME(table, entry, sb, gap->ga_alias);
+			sbuf_finish(sb);
+			g_geom_add_alias(gp, sbuf_data(sb));
+			sbuf_delete(sb);
+		}
 		sb = sbuf_new_auto();
 		G_PART_FULLNAME(table, entry, sb, gp->name);
 		sbuf_finish(sb);
 		entry->gpe_pp = g_new_providerf(gp, "%s", sbuf_data(sb));
 		sbuf_delete(sb);
+		entry->gpe_pp->flags |= G_PF_DIRECT_SEND | G_PF_DIRECT_RECEIVE;
 		entry->gpe_pp->private = entry;		/* Close the circle. */
 	}
 	entry->gpe_pp->index = entry->gpe_index - 1;	/* index is 1-based. */
@@ -437,7 +512,8 @@ g_part_find_geom(const char *name)
 {
 	struct g_geom *gp;
 	LIST_FOREACH(gp, &g_part_class.geom, geom) {
-		if (!strcmp(name, gp->name))
+		if ((gp->flags & G_GEOM_WITHER) == 0 &&
+		    strcmp(name, gp->name) == 0)
 			break;
 	}
 	return (gp);
@@ -458,10 +534,6 @@ g_part_parm_geom(struct gctl_req *req, const char *name, struct g_geom **v)
 	if (gp == NULL) {
 		gctl_error(req, "%d %s '%s'", EINVAL, name, gname);
 		return (EINVAL);
-	}
-	if ((gp->flags & G_GEOM_WITHER) != 0) {
-		gctl_error(req, "%d %s", ENXIO, gname);
-		return (ENXIO);
 	}
 	*v = gp;
 	return (0);
@@ -863,6 +935,11 @@ g_part_ctl_commit(struct gctl_req *req, struct g_part_parms *gpp)
 
 	LIST_FOREACH_SAFE(entry, &table->gpt_entry, gpe_entry, tmp) {
 		if (!entry->gpe_deleted) {
+			/* Notify consumers that provider might be changed. */
+			if (entry->gpe_modified && (
+			    entry->gpe_pp->acw + entry->gpe_pp->ace +
+			    entry->gpe_pp->acr) == 0)
+				g_media_changed(entry->gpe_pp, M_NOWAIT);
 			entry->gpe_created = 0;
 			entry->gpe_modified = 0;
 			continue;
@@ -929,6 +1006,7 @@ g_part_ctl_create(struct gctl_req *req, struct g_part_parms *gpp)
 	LIST_INIT(&table->gpt_entry);
 	if (null == NULL) {
 		cp = g_new_consumer(gp);
+		cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
 		error = g_attach(cp, pp);
 		if (error == 0)
 			error = g_access(cp, 1, 1, 1);
@@ -1307,12 +1385,14 @@ g_part_ctl_resize(struct gctl_req *req, struct g_part_parms *gpp)
 			/* Deny shrinking of an opened partition. */
 			gctl_error(req, "%d", EBUSY);
 			return (EBUSY);
-		} 
+		}
 	}
 
 	error = G_PART_RESIZE(table, entry, gpp);
 	if (error) {
-		gctl_error(req, "%d", error);
+		gctl_error(req, "%d%s", error, error != EBUSY ? "":
+		    " resizing will lead to unexpected shrinking"
+		    " due to alignment");
 		return (error);
 	}
 
@@ -1352,16 +1432,20 @@ g_part_ctl_setunset(struct gctl_req *req, struct g_part_parms *gpp,
 
 	table = gp->softc;
 
-	LIST_FOREACH(entry, &table->gpt_entry, gpe_entry) {
-		if (entry->gpe_deleted || entry->gpe_internal)
-			continue;
-		if (entry->gpe_index == gpp->gpp_index)
-			break;
-	}
-	if (entry == NULL) {
-		gctl_error(req, "%d index '%d'", ENOENT, gpp->gpp_index);
-		return (ENOENT);
-	}
+	if (gpp->gpp_parms & G_PART_PARM_INDEX) {
+		LIST_FOREACH(entry, &table->gpt_entry, gpe_entry) {
+			if (entry->gpe_deleted || entry->gpe_internal)
+				continue;
+			if (entry->gpe_index == gpp->gpp_index)
+				break;
+		}
+		if (entry == NULL) {
+			gctl_error(req, "%d index '%d'", ENOENT,
+			    gpp->gpp_index);
+			return (ENOENT);
+		}
+	} else
+		entry = NULL;
 
 	error = G_PART_SETUNSET(table, entry, gpp->gpp_attrib, set);
 	if (error) {
@@ -1374,8 +1458,11 @@ g_part_ctl_setunset(struct gctl_req *req, struct g_part_parms *gpp,
 		sb = sbuf_new_auto();
 		sbuf_printf(sb, "%s %sset on ", gpp->gpp_attrib,
 		    (set) ? "" : "un");
-		G_PART_FULLNAME(table, entry, sb, gp->name);
-		sbuf_printf(sb, "\n");
+		if (entry)
+			G_PART_FULLNAME(table, entry, sb, gp->name);
+		else
+			sbuf_cat(sb, gp->name);
+		sbuf_cat(sb, "\n");
 		sbuf_finish(sb);
 		gctl_set_param(req, "output", sbuf_data(sb), sbuf_len(sb) + 1);
 		sbuf_delete(sb);
@@ -1484,18 +1571,23 @@ g_part_wither(struct g_geom *gp, int error)
 {
 	struct g_part_entry *entry;
 	struct g_part_table *table;
+	struct g_provider *pp;
 
 	table = gp->softc;
 	if (table != NULL) {
-		G_PART_DESTROY(table, NULL);
+		gp->softc = NULL;
 		while ((entry = LIST_FIRST(&table->gpt_entry)) != NULL) {
 			LIST_REMOVE(entry, gpe_entry);
+			pp = entry->gpe_pp;
+			entry->gpe_pp = NULL;
+			if (pp != NULL) {
+				pp->private = NULL;
+				g_wither_provider(pp, error);
+			}
 			g_free(entry);
 		}
-		if (gp->softc != NULL) {
-			kobj_delete((kobj_t)gp->softc, M_GEOM);
-			gp->softc = NULL;
-		}
+		G_PART_DESTROY(table, NULL);
+		kobj_delete((kobj_t)table, M_GEOM);
 	}
 	g_wither_geom(gp, error);
 }
@@ -1581,8 +1673,8 @@ g_part_ctlreq(struct gctl_req *req, struct g_class *mp, const char *verb)
 	case 's':
 		if (!strcmp(verb, "set")) {
 			ctlreq = G_PART_CTL_SET;
-			mparms |= G_PART_PARM_ATTRIB | G_PART_PARM_GEOM |
-			    G_PART_PARM_INDEX;
+			mparms |= G_PART_PARM_ATTRIB | G_PART_PARM_GEOM;
+			oparms |= G_PART_PARM_INDEX;
 		}
 		break;
 	case 'u':
@@ -1592,8 +1684,8 @@ g_part_ctlreq(struct gctl_req *req, struct g_class *mp, const char *verb)
 			modifies = 0;
 		} else if (!strcmp(verb, "unset")) {
 			ctlreq = G_PART_CTL_UNSET;
-			mparms |= G_PART_PARM_ATTRIB | G_PART_PARM_GEOM |
-			    G_PART_PARM_INDEX;
+			mparms |= G_PART_PARM_ATTRIB | G_PART_PARM_GEOM;
+			oparms |= G_PART_PARM_INDEX;
 		}
 		break;
 	}
@@ -1861,6 +1953,7 @@ g_part_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 	struct g_part_entry *entry;
 	struct g_part_table *table;
 	struct root_hold_token *rht;
+	struct g_geom_alias *gap;
 	int attr, depth;
 	int error;
 
@@ -1873,11 +1966,14 @@ g_part_taste(struct g_class *mp, struct g_provider *pp, int flags __unused)
 
 	/*
 	 * Create a GEOM with consumer and hook it up to the provider.
-	 * With that we become part of the topology. Optain read access
+	 * With that we become part of the topology. Obtain read access
 	 * to the provider.
 	 */
 	gp = g_new_geomf(mp, "%s", pp->name);
+	LIST_FOREACH(gap, &pp->geom->aliases, ga_next)
+		g_geom_add_alias(gp, gap->ga_alias);
 	cp = g_new_consumer(gp);
+	cp->flags |= G_CF_DIRECT_SEND | G_CF_DIRECT_RECEIVE;
 	error = g_attach(cp, pp);
 	if (error == 0)
 		error = g_access(cp, 1, 0, 0);
@@ -2036,6 +2132,54 @@ g_part_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 	}
 }
 
+/*-
+ * This start routine is only called for non-trivial requests, all the
+ * trivial ones are handled autonomously by the slice code.
+ * For requests we handle here, we must call the g_io_deliver() on the
+ * bio, and return non-zero to indicate to the slice code that we did so.
+ * This code executes in the "DOWN" I/O path, this means:
+ *    * No sleeping.
+ *    * Don't grab the topology lock.
+ *    * Don't call biowait, g_getattr(), g_setattr() or g_read_data()
+ */
+static int
+g_part_ioctl(struct g_provider *pp, u_long cmd, void *data, int fflag, struct thread *td)
+{
+	struct g_part_table *table;
+
+	table = pp->geom->softc;
+	return G_PART_IOCTL(table, pp, cmd, data, fflag, td);
+}
+
+static void
+g_part_resize(struct g_consumer *cp)
+{
+	struct g_part_table *table;
+
+	G_PART_TRACE((G_T_TOPOLOGY, "%s(%s)", __func__, cp->provider->name));
+	g_topology_assert();
+
+	if (auto_resize == 0)
+		return;
+
+	table = cp->geom->softc;
+	if (table->gpt_opened == 0) {
+		if (g_access(cp, 1, 1, 1) != 0)
+			return;
+		table->gpt_opened = 1;
+	}
+	if (G_PART_RESIZE(table, NULL, NULL) == 0)
+		printf("GEOM_PART: %s was automatically resized.\n"
+		    "  Use `gpart commit %s` to save changes or "
+		    "`gpart undo %s` to revert them.\n", cp->geom->name,
+		    cp->geom->name, cp->geom->name);
+	if (g_part_check_integrity(table, cp) != 0) {
+		g_access(cp, -1, -1, -1);
+		table->gpt_opened = 0;
+		g_part_wither(table->gpt_gp, ENXIO);
+	}
+}
+
 static void
 g_part_orphan(struct g_consumer *cp)
 {
@@ -2075,7 +2219,10 @@ g_part_start(struct bio *bp)
 	struct g_part_table *table;
 	struct g_kerneldump *gkd;
 	struct g_provider *pp;
+	void (*done_func)(struct bio *) = g_std_done;
 	char buf[64];
+
+	biotrack(bp, __func__);
 
 	pp = bp->bio_to;
 	gp = pp->geom;
@@ -2127,6 +2274,10 @@ g_part_start(struct bio *bp)
 		if (g_handleattr_str(bp, "PART::type",
 		    G_PART_TYPE(table, entry, buf, sizeof(buf))))
 			return;
+		if (!strcmp("GEOM::physpath", bp->bio_attribute)) {
+			done_func = g_part_get_physpath_done;
+			break;
+		}
 		if (!strcmp("GEOM::kerneldump", bp->bio_attribute)) {
 			/*
 			 * Check that the partition is suitable for kernel
@@ -2163,7 +2314,7 @@ g_part_start(struct bio *bp)
 		g_io_deliver(bp, ENOMEM);
 		return;
 	}
-	bp2->bio_done = g_std_done;
+	bp2->bio_done = done_func;
 	g_io_request(bp2, cp);
 }
 

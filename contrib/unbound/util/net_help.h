@@ -21,16 +21,16 @@
  * specific prior written permission.
  * 
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
- * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 /**
@@ -157,6 +157,16 @@ void log_name_addr(enum verbosity_value v, const char* str, uint8_t* zone,
 	struct sockaddr_storage* addr, socklen_t addrlen);
 
 /**
+ * Log errno and addr.
+ * @param str: descriptive string printed with it.
+ * @param err: errno string to print, i.e. strerror(errno).
+ * @param addr: the sockaddr to print. Can be ip4 or ip6.
+ * @param addrlen: length of addr.
+ */
+void log_err_addr(const char* str, const char* err,
+	struct sockaddr_storage* addr, socklen_t addrlen);
+
+/**
  * Convert address string, with "@port" appendix, to sockaddr.
  * Uses DNS port by default.
  * @param str: the string
@@ -180,7 +190,7 @@ int ipstrtoaddr(const char* ip, int port, struct sockaddr_storage* addr,
 
 /**
  * Convert ip netblock (ip/netsize) string and port to sockaddr.
- * *SLOW*, does a malloc internally to avoid writing over 'ip' string.
+ * performs a copy internally to avoid writing over 'ip' string.
  * @param ip: ip4 or ip6 address string.
  * @param port: port number, host format.
  * @param addr: where to store sockaddr.
@@ -190,6 +200,29 @@ int ipstrtoaddr(const char* ip, int port, struct sockaddr_storage* addr,
  */
 int netblockstrtoaddr(const char* ip, int port, struct sockaddr_storage* addr,
 	socklen_t* addrlen, int* net);
+
+/**
+ * Convert address string, with "@port" appendix, to sockaddr.
+ * It can also have an "#tls-auth-name" appendix (after the port).
+ * The returned tls-auth-name string is a pointer into the input string.
+ * Uses DNS port by default.
+ * @param str: the string
+ * @param addr: where to store sockaddr.
+ * @param addrlen: length of stored sockaddr is returned.
+ * @param auth_name: returned pointer to tls_auth_name, or NULL if none.
+ * @return 0 on error.
+ */
+int authextstrtoaddr(char* str, struct sockaddr_storage* addr, 
+	socklen_t* addrlen, char** auth_name);
+
+/**
+ * Store port number into sockaddr structure
+ * @param addr: sockaddr structure, ip4 or ip6.
+ * @param addrlen: length of addr.
+ * @param port: port number to put into the addr.
+ */
+void sockaddr_store_port(struct sockaddr_storage* addr, socklen_t addrlen,
+	int port);
 
 /**
  * Print string with neat domain name, type and class.
@@ -334,6 +367,19 @@ void sock_list_merge(struct sock_list** list, struct regional* region,
  * @param str: what failed.
  */
 void log_crypto_err(const char* str);
+
+/**
+ * Set SSL_OP_NOxxx options on SSL context to disable bad crypto
+ * @param ctxt: SSL_CTX*
+ * @return false on failure.
+ */
+int listen_sslctx_setup(void* ctxt);
+
+/**
+ * Further setup of listening SSL context, after keys loaded.
+ * @param ctxt: SSL_CTX*
+ */
+void listen_sslctx_setup_2(void* ctxt);
 
 /** 
  * create SSL listen context

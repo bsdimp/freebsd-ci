@@ -14,7 +14,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -55,42 +55,17 @@
  *	assembly language support routines.
  */
 
-#include "opt_compat.h"
 #include <sys/syscall.h>
 #include <machine/asm.h>
 #include <machine/cpu.h>
 #include <machine/cpuregs.h>
 #include <machine/regnum.h>
 #include <machine/pte.h>
+#include <machine/pcb.h>
 
-#include "assym.s"
+#include "assym.inc"
 
 	.set	noreorder			# Noreorder is default style!
-
-#define	SAVE_U_PCB_REG(reg, offs, base) \
-	REG_S	reg, U_PCB_REGS + (SZREG * offs) (base)
-
-#define	RESTORE_U_PCB_REG(reg, offs, base) \
-	REG_L	reg, U_PCB_REGS + (SZREG * offs) (base)
-
-#define	SAVE_U_PCB_FPREG(reg, offs, base) \
-	FP_S	reg, U_PCB_FPREGS + (SZFPREG * offs) (base)
-
-#define	RESTORE_U_PCB_FPREG(reg, offs, base) \
-	FP_L	reg, U_PCB_FPREGS + (SZFPREG * offs) (base)
-
-#define	SAVE_U_PCB_FPSR(reg, offs, base) \
-	REG_S	reg, U_PCB_FPREGS + (SZFPREG * offs) (base)
-
-#define	RESTORE_U_PCB_FPSR(reg, offs, base) \
-	REG_L	reg, U_PCB_FPREGS + (SZFPREG * offs) (base)
-
-#define	SAVE_U_PCB_CONTEXT(reg, offs, base) \
-	REG_S	reg, U_PCB_CONTEXT + (SZREG * offs) (base)
-
-#define	RESTORE_U_PCB_CONTEXT(reg, offs, base) \
-	REG_L	reg, U_PCB_CONTEXT + (SZREG * offs) (base)
-
 
 /*
  * Setup for and return to user.
@@ -173,33 +148,33 @@ END(fork_trampoline)
  *	savectx(struct pcb *pcbp);
  */
 LEAF(savectx)
-	SAVE_U_PCB_CONTEXT(s0, PREG_S0, a0)
-	SAVE_U_PCB_CONTEXT(s1, PREG_S1, a0)
-	SAVE_U_PCB_CONTEXT(s2, PREG_S2, a0)
-	SAVE_U_PCB_CONTEXT(s3, PREG_S3, a0)
+	SAVE_U_PCB_CONTEXT(s0, PCB_REG_S0, a0)
+	SAVE_U_PCB_CONTEXT(s1, PCB_REG_S1, a0)
+	SAVE_U_PCB_CONTEXT(s2, PCB_REG_S2, a0)
+	SAVE_U_PCB_CONTEXT(s3, PCB_REG_S3, a0)
 	mfc0	v0, MIPS_COP_0_STATUS
-	SAVE_U_PCB_CONTEXT(s4, PREG_S4, a0)
-	SAVE_U_PCB_CONTEXT(s5, PREG_S5, a0)
-	SAVE_U_PCB_CONTEXT(s6, PREG_S6, a0)
-	SAVE_U_PCB_CONTEXT(s7, PREG_S7, a0)
-	SAVE_U_PCB_CONTEXT(sp, PREG_SP, a0)
-	SAVE_U_PCB_CONTEXT(s8, PREG_S8, a0)
-	SAVE_U_PCB_CONTEXT(ra, PREG_RA, a0)
-	SAVE_U_PCB_CONTEXT(v0, PREG_SR, a0)
-	SAVE_U_PCB_CONTEXT(gp, PREG_GP, a0)
+	SAVE_U_PCB_CONTEXT(s4, PCB_REG_S4, a0)
+	SAVE_U_PCB_CONTEXT(s5, PCB_REG_S5, a0)
+	SAVE_U_PCB_CONTEXT(s6, PCB_REG_S6, a0)
+	SAVE_U_PCB_CONTEXT(s7, PCB_REG_S7, a0)
+	SAVE_U_PCB_CONTEXT(sp, PCB_REG_SP, a0)
+	SAVE_U_PCB_CONTEXT(s8, PCB_REG_S8, a0)
+	SAVE_U_PCB_CONTEXT(ra, PCB_REG_RA, a0)
+	SAVE_U_PCB_CONTEXT(v0, PCB_REG_SR, a0)
+	SAVE_U_PCB_CONTEXT(gp, PCB_REG_GP, a0)
 
 	move	v0, ra			/* save 'ra' before we trash it */
 	jal	1f
 	nop
 1:
-	SAVE_U_PCB_CONTEXT(ra, PREG_PC, a0)
+	SAVE_U_PCB_CONTEXT(ra, PCB_REG_PC, a0)
 	move	ra, v0			/* restore 'ra' before returning */
 
 	j	ra
 	move	v0, zero
 END(savectx)
 
-NON_LEAF(cpu_throw, CALLFRAME_SIZ, ra)
+NESTED(cpu_throw, CALLFRAME_SIZ, ra)
 	mfc0	t0, MIPS_COP_0_STATUS		# t0 = saved status register
 	nop
 	nop
@@ -219,7 +194,7 @@ END(cpu_throw)
  *	a2 - mtx
  * Find the highest priority process and resume it.
  */
-NON_LEAF(cpu_switch, CALLFRAME_SIZ, ra)
+NESTED(cpu_switch, CALLFRAME_SIZ, ra)
 	mfc0	t0, MIPS_COP_0_STATUS		# t0 = saved status register
 	nop
 	nop
@@ -229,26 +204,26 @@ NON_LEAF(cpu_switch, CALLFRAME_SIZ, ra)
 	beqz	a0, mips_sw1
 	move	a3, a0
 	PTR_L	a0, TD_PCB(a0)		# load PCB addr of curproc
-	SAVE_U_PCB_CONTEXT(sp, PREG_SP, a0)		# save old sp
+	SAVE_U_PCB_CONTEXT(sp, PCB_REG_SP, a0)		# save old sp
 	PTR_SUBU	sp, sp, CALLFRAME_SIZ
 	REG_S	ra, CALLFRAME_RA(sp)
 	.mask	0x80000000, (CALLFRAME_RA - CALLFRAME_SIZ)
-	SAVE_U_PCB_CONTEXT(s0, PREG_S0, a0)		# do a 'savectx()'
-	SAVE_U_PCB_CONTEXT(s1, PREG_S1, a0)
-	SAVE_U_PCB_CONTEXT(s2, PREG_S2, a0)
-	SAVE_U_PCB_CONTEXT(s3, PREG_S3, a0)
-	SAVE_U_PCB_CONTEXT(s4, PREG_S4, a0)
-	SAVE_U_PCB_CONTEXT(s5, PREG_S5, a0)
-	SAVE_U_PCB_CONTEXT(s6, PREG_S6, a0)
-	SAVE_U_PCB_CONTEXT(s7, PREG_S7, a0)
-	SAVE_U_PCB_CONTEXT(s8, PREG_S8, a0)
-	SAVE_U_PCB_CONTEXT(ra, PREG_RA, a0)		# save return address
-	SAVE_U_PCB_CONTEXT(t0, PREG_SR, a0)		# save status register
-	SAVE_U_PCB_CONTEXT(gp, PREG_GP, a0)
+	SAVE_U_PCB_CONTEXT(s0, PCB_REG_S0, a0)		# do a 'savectx()'
+	SAVE_U_PCB_CONTEXT(s1, PCB_REG_S1, a0)
+	SAVE_U_PCB_CONTEXT(s2, PCB_REG_S2, a0)
+	SAVE_U_PCB_CONTEXT(s3, PCB_REG_S3, a0)
+	SAVE_U_PCB_CONTEXT(s4, PCB_REG_S4, a0)
+	SAVE_U_PCB_CONTEXT(s5, PCB_REG_S5, a0)
+	SAVE_U_PCB_CONTEXT(s6, PCB_REG_S6, a0)
+	SAVE_U_PCB_CONTEXT(s7, PCB_REG_S7, a0)
+	SAVE_U_PCB_CONTEXT(s8, PCB_REG_S8, a0)
+	SAVE_U_PCB_CONTEXT(ra, PCB_REG_RA, a0)		# save return address
+	SAVE_U_PCB_CONTEXT(t0, PCB_REG_SR, a0)		# save status register
+	SAVE_U_PCB_CONTEXT(gp, PCB_REG_GP, a0)
 	jal	getpc
 	nop
 getpc:
-	SAVE_U_PCB_CONTEXT(ra, PREG_PC, a0)		# save return address
+	SAVE_U_PCB_CONTEXT(ra, PCB_REG_PC, a0)		# save return address
 
 #ifdef CPU_CNMIPS
 
@@ -262,7 +237,7 @@ getpc:
 	sw	t2, TD_MDFLAGS(a3)
 
 	and	t2, t0, ~MIPS_SR_COP_2_BIT	# clear COP_2 enable bit
-	SAVE_U_PCB_CONTEXT(t2, PREG_SR, a0)	# save status register
+	SAVE_U_PCB_CONTEXT(t2, PCB_REG_SR, a0)	# save status register
 
 	RESTORE_U_PCB_REG(t0, PS, a0)		# get CPU status register
 	and	t2, t0, ~MIPS_SR_COP_2_BIT	# clear COP_2 enable bit
@@ -374,7 +349,7 @@ entry0set:
  */
 sw2:
 	PTR_L	s0, TD_PCB(s7)
-	RESTORE_U_PCB_CONTEXT(sp, PREG_SP, s0)
+	RESTORE_U_PCB_CONTEXT(sp, PCB_REG_SP, s0)
 	PTR_LA	t1, _C_LABEL(pmap_activate)	# s7 = new proc pointer
 	jalr	t1				# s7 = new proc pointer
 	move	a0, s7				# BDSLOT
@@ -382,18 +357,19 @@ sw2:
  * Restore registers and return.
  */
 	move	a0, s0
-	RESTORE_U_PCB_CONTEXT(gp, PREG_GP, a0)
-	RESTORE_U_PCB_CONTEXT(v0, PREG_SR, a0)	# restore kernel context
-	RESTORE_U_PCB_CONTEXT(ra, PREG_RA, a0)
-	RESTORE_U_PCB_CONTEXT(s0, PREG_S0, a0)
-	RESTORE_U_PCB_CONTEXT(s1, PREG_S1, a0)
-	RESTORE_U_PCB_CONTEXT(s2, PREG_S2, a0)
-	RESTORE_U_PCB_CONTEXT(s3, PREG_S3, a0)
-	RESTORE_U_PCB_CONTEXT(s4, PREG_S4, a0)
-	RESTORE_U_PCB_CONTEXT(s5, PREG_S5, a0)
-	RESTORE_U_PCB_CONTEXT(s6, PREG_S6, a0)
-	RESTORE_U_PCB_CONTEXT(s7, PREG_S7, a0)
-	RESTORE_U_PCB_CONTEXT(s8, PREG_S8, a0)
+	move	a1, s7
+	RESTORE_U_PCB_CONTEXT(gp, PCB_REG_GP, a0)
+	RESTORE_U_PCB_CONTEXT(v0, PCB_REG_SR, a0)	# restore kernel context
+	RESTORE_U_PCB_CONTEXT(ra, PCB_REG_RA, a0)
+	RESTORE_U_PCB_CONTEXT(s0, PCB_REG_S0, a0)
+	RESTORE_U_PCB_CONTEXT(s1, PCB_REG_S1, a0)
+	RESTORE_U_PCB_CONTEXT(s2, PCB_REG_S2, a0)
+	RESTORE_U_PCB_CONTEXT(s3, PCB_REG_S3, a0)
+	RESTORE_U_PCB_CONTEXT(s4, PCB_REG_S4, a0)
+	RESTORE_U_PCB_CONTEXT(s5, PCB_REG_S5, a0)
+	RESTORE_U_PCB_CONTEXT(s6, PCB_REG_S6, a0)
+	RESTORE_U_PCB_CONTEXT(s7, PCB_REG_S7, a0)
+	RESTORE_U_PCB_CONTEXT(s8, PCB_REG_S8, a0)
 
 	mfc0	t0, MIPS_COP_0_STATUS
 	and	t0, t0, MIPS_SR_INT_MASK
@@ -401,6 +377,16 @@ sw2:
 	or	v0, v0, t0
 	mtc0	v0, MIPS_COP_0_STATUS
 	ITLBNOPFIX
+/*
+ * Set the new thread's TLS pointer.
+ *
+ * Note that this code is removed if the CPU doesn't support ULRI by
+ * remove_userlocal_code() in cpu.c.
+ */
+	PTR_L	t0, TD_MDTLS(a1)		# Get TLS pointer
+	PTR_L	t1, TD_MDTLS_TCB_OFFSET(a1)	# Get TLS/TCB offset
+	PTR_ADDU v0, t0, t1
+	MTC0	v0, MIPS_COP_0_USERLOCAL, 2	# write it to ULR for rdhwr
 
 	j	ra
 	nop
@@ -425,9 +411,17 @@ END(cpu_switch)
  *----------------------------------------------------------------------------
  */
 LEAF(MipsSwitchFPState)
+	.set push
+	.set hardfloat
 	mfc0	t1, MIPS_COP_0_STATUS	# Save old SR
-	li	t0, MIPS_SR_COP_1_BIT	# enable the coprocessor
+	HAZARD_DELAY
+#if defined(__mips_n32) || defined(__mips_n64)
+	or	t0, t1, MIPS_SR_COP_1_BIT | MIPS_SR_FR	# enable the coprocessor
+#else
+	or	t0, t1, MIPS_SR_COP_1_BIT 		# enable the coprocessor
+#endif
 	mtc0	t0, MIPS_COP_0_STATUS
+	HAZARD_DELAY
 	ITLBNOPFIX
 
 	beq	a0, zero, 1f		# skip save if NULL pointer
@@ -526,7 +520,46 @@ LEAF(MipsSwitchFPState)
 	ITLBNOPFIX
 	j	ra
 	nop
+	.set pop
 END(MipsSwitchFPState)
+
+/*----------------------------------------------------------------------------
+ *
+ * MipsFPID --
+ *
+ *	Read and return the floating point implementation register.
+ *
+ *	uint32_t
+ *	MipsFPID(void)
+ *
+ * Results:
+ *	Floating point implementation register.
+ *
+ * Side effects:
+ *	None.
+ *
+ *----------------------------------------------------------------------------
+ */
+LEAF(MipsFPID)
+	.set push
+	.set hardfloat
+	mfc0	t1, MIPS_COP_0_STATUS		# Save the status register.
+	HAZARD_DELAY
+#if defined(__mips_n32) || defined(__mips_n64)
+	or	t0, t1, MIPS_SR_COP_1_BIT | MIPS_SR_FR
+#else
+	or	t0, t1, MIPS_SR_COP_1_BIT
+#endif
+	mtc0	t0, MIPS_COP_0_STATUS 		# Enable the coprocessor
+	HAZARD_DELAY
+	ITLBNOPFIX
+	cfc1	v0, MIPS_FPU_ID
+	mtc0	t1, MIPS_COP_0_STATUS		# Restore the status register.
+	ITLBNOPFIX
+	j	ra
+	nop
+	.set pop
+END(MipsFPID)
 
 /*----------------------------------------------------------------------------
  *
@@ -546,10 +579,18 @@ END(MipsSwitchFPState)
  *----------------------------------------------------------------------------
  */
 LEAF(MipsSaveCurFPState)
+	.set push
+	.set hardfloat
 	PTR_L	a0, TD_PCB(a0)			# get pointer to pcb for thread
 	mfc0	t1, MIPS_COP_0_STATUS		# Disable interrupts and
-	li	t0, MIPS_SR_COP_1_BIT		#  enable the coprocessor
+	HAZARD_DELAY
+#if defined(__mips_n32) || defined(__mips_n64)
+	or	t0, t1, MIPS_SR_COP_1_BIT | MIPS_SR_FR		#  enable the coprocessor
+#else
+	or	t0, t1, MIPS_SR_COP_1_BIT 			#  enable the coprocessor
+#endif
 	mtc0	t0, MIPS_COP_0_STATUS
+	HAZARD_DELAY
 	ITLBNOPFIX
 	GET_CPU_PCPU(a1)
 	PTR_S	zero, PC_FPCURTHREAD(a1)	# indicate state has been saved
@@ -604,6 +645,7 @@ LEAF(MipsSaveCurFPState)
 	ITLBNOPFIX
 	j	ra
 	nop
+	.set pop
 END(MipsSaveCurFPState)
 
 /*

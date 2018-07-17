@@ -1,6 +1,8 @@
 /*-
  * Core definitions and data structures shareable across OS platforms.
  *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Spectra Logic Corporation
  * All rights reserved.
  *
@@ -31,9 +33,6 @@
  *
  * $FreeBSD$
  */
-
-/* Initialize support for userspace access to the XenStore. */
-void xs_dev_init(void);
 
 /* Used by the XenStore character device to borrow kernel's store connection. */
 int xs_dev_request_and_reply(struct xsd_sockmsg *msg, void **result);

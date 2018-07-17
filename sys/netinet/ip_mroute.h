@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989 Stephen Deering.
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -14,7 +16,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -206,23 +208,24 @@ struct bw_upcall {
  * The kernel's multicast routing statistics.
  */
 struct mrtstat {
-    u_long	mrts_mfc_lookups;	/* # forw. cache hash table hits   */
-    u_long	mrts_mfc_misses;	/* # forw. cache hash table misses */
-    u_long	mrts_upcalls;		/* # calls to multicast routing daemon */
-    u_long	mrts_no_route;		/* no route for packet's origin    */
-    u_long	mrts_bad_tunnel;	/* malformed tunnel options        */
-    u_long	mrts_cant_tunnel;	/* no room for tunnel options      */
-    u_long	mrts_wrong_if;		/* arrived on wrong interface	   */
-    u_long	mrts_upq_ovflw;		/* upcall Q overflow		   */
-    u_long	mrts_cache_cleanups;	/* # entries with no upcalls	   */
-    u_long	mrts_drop_sel;		/* pkts dropped selectively        */
-    u_long	mrts_q_overflow;	/* pkts dropped - Q overflow       */
-    u_long	mrts_pkt2large;		/* pkts dropped - size > BKT SIZE  */
-    u_long	mrts_upq_sockfull;	/* upcalls dropped - socket full */
+	uint64_t mrts_mfc_lookups;    /* # forw. cache hash table hits   */
+	uint64_t mrts_mfc_misses;     /* # forw. cache hash table misses */
+	uint64_t mrts_upcalls;	      /* # calls to multicast routing daemon */
+	uint64_t mrts_no_route;	      /* no route for packet's origin    */
+	uint64_t mrts_bad_tunnel;     /* malformed tunnel options        */
+	uint64_t mrts_cant_tunnel;    /* no room for tunnel options      */
+	uint64_t mrts_wrong_if;	      /* arrived on wrong interface	 */
+	uint64_t mrts_upq_ovflw;      /* upcall Q overflow		 */
+	uint64_t mrts_cache_cleanups; /* # entries with no upcalls	 */
+	uint64_t mrts_drop_sel;	      /* pkts dropped selectively        */
+	uint64_t mrts_q_overflow;     /* pkts dropped - Q overflow       */
+	uint64_t mrts_pkt2large;      /* pkts dropped - size > BKT SIZE  */
+	uint64_t mrts_upq_sockfull;   /* upcalls dropped - socket full   */
 };
 
 #ifdef _KERNEL
-#define	MRTSTAT_ADD(name, val)	V_mrtstat.name += (val)
+#define	MRTSTAT_ADD(name, val)	\
+    VNET_PCPUSTAT_ADD(struct mrtstat, mrtstat, name, (val))
 #define	MRTSTAT_INC(name)	MRTSTAT_ADD(name, 1)
 #endif
 

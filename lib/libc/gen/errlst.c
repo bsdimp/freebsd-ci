@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1985, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,13 +29,12 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)errlst.c	8.2 (Berkeley) 11/16/93";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
+__SCCSID("@(#)errlst.c	8.2 (Berkeley) 11/16/93");
 __FBSDID("$FreeBSD$");
 
 #include <stdio.h>
+#include "errlst.h"
 
 const char *const sys_errlist[] = {
 	"No error: 0",				/*  0 - ENOERROR */
@@ -152,5 +153,12 @@ const char *const sys_errlist[] = {
 	"Protocol error",			/* 92 - EPROTO */
 	"Capabilities insufficient",		/* 93 - ENOTCAPABLE */
 	"Not permitted in capability mode",	/* 94 - ECAPMODE */
+	"State not recoverable",		/* 95 - ENOTRECOVERABLE */
+	"Previous owner died",			/* 96 - EOWNERDEAD */
 };
 const int sys_nerr = sizeof(sys_errlist) / sizeof(sys_errlist[0]);
+
+#ifdef PIC
+__strong_reference(sys_errlist, __hidden_sys_errlist);
+__strong_reference(sys_nerr, __hidden_sys_nerr);
+#endif

@@ -21,16 +21,16 @@
  * specific prior written permission.
  * 
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
- * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+ * TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ * LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 /**
  * \file
@@ -38,12 +38,13 @@
  */
 
 #include "config.h"
-#include <ldns/ldns.h>
 #include "util/net_help.h"
 #include "util/log.h"
 #include "util/data/dname.h"
 #include "util/module.h"
 #include "util/regional.h"
+#include "sldns/parseutil.h"
+#include "sldns/wire2str.h"
 #include <fcntl.h>
 #ifdef HAVE_OPENSSL_SSL_H
 #include <openssl/ssl.h>
@@ -113,8 +114,9 @@ fd_set_block(int s)
 #elif defined(HAVE_IOCTLSOCKET)
 	unsigned long off = 0;
 	if(ioctlsocket(s, FIONBIO, &off) != 0) {
-		log_err("can't ioctlsocket FIONBIO off: %s", 
-			wsa_strerror(WSAGetLastError()));
+		if(WSAGetLastError() != WSAEINVAL || verbosity >= 4)
+			log_err("can't ioctlsocket FIONBIO off: %s", 
+				wsa_strerror(WSAGetLastError()));
 	}
 #endif	
 	return 1;
@@ -155,11 +157,16 @@ log_addr(enum verbosity_value v, const char* str,
 		case AF_INET6: family="ip6";
 			sinaddr = &((struct sockaddr_in6*)addr)->sin6_addr;
 			break;
-		case AF_UNIX: family="unix"; break;
+		case AF_LOCAL:
+			dest[0]=0;
+			(void)inet_ntop(af, sinaddr, dest,
+				(socklen_t)sizeof(dest));
+			verbose(v, "%s local %s", str, dest);
+			return; /* do not continue and try to get port */
 		default: break;
 	}
 	if(inet_ntop(af, sinaddr, dest, (socklen_t)sizeof(dest)) == 0) {
-		strncpy(dest, "(inet_ntop error)", sizeof(dest));
+		(void)strlcpy(dest, "(inet_ntop error)", sizeof(dest));
 	}
 	dest[sizeof(dest)-1] = 0;
 	port = ntohs(((struct sockaddr_in*)addr)->sin_port);
@@ -180,7 +187,7 @@ extstrtoaddr(const char* str, struct sockaddr_storage* addr,
 		if(s-str >= MAX_ADDR_STRLEN) {
 			return 0;
 		}
-		strncpy(buf, str, MAX_ADDR_STRLEN);
+		(void)strlcpy(buf, str, sizeof(buf));
 		buf[s-str] = 0;
 		port = atoi(s+1);
 		if(port == 0 && strcmp(s+1,"0")!=0) {
@@ -210,7 +217,7 @@ ipstrtoaddr(const char* ip, int port, struct sockaddr_storage* addr,
 		if((s=strchr(ip, '%'))) { /* ip6%interface, rfc 4007 */
 			if(s-ip >= MAX_ADDR_STRLEN)
 				return 0;
-			strncpy(buf, ip, MAX_ADDR_STRLEN);
+			(void)strlcpy(buf, ip, sizeof(buf));
 			buf[s-ip]=0;
 			sa->sin6_scope_id = (uint32_t)atoi(s+1);
 			ip = buf;
@@ -234,7 +241,8 @@ ipstrtoaddr(const char* ip, int port, struct sockaddr_storage* addr,
 int netblockstrtoaddr(const char* str, int port, struct sockaddr_storage* addr,
         socklen_t* addrlen, int* net)
 {
-	char* s = NULL;
+	char buf[64];
+	char* s;
 	*net = (str_is_ip6(str)?128:32);
 	if((s=strchr(str, '/'))) {
 		if(atoi(s+1) > *net) {
@@ -246,22 +254,76 @@ int netblockstrtoaddr(const char* str, int port, struct sockaddr_storage* addr,
 			log_err("cannot parse netblock: '%s'", str);
 			return 0;
 		}
-		if(!(s = strdup(str))) {
-			log_err("out of memory");
-			return 0;
-		}
-		*strchr(s, '/') = '\0';
+		strlcpy(buf, str, sizeof(buf));
+		s = strchr(buf, '/');
+		if(s) *s = 0;
+		s = buf;
 	}
 	if(!ipstrtoaddr(s?s:str, port, addr, addrlen)) {
-		free(s);
 		log_err("cannot parse ip address: '%s'", str);
 		return 0;
 	}
 	if(s) {
-		free(s);
 		addr_mask(addr, *addrlen, *net);
 	}
 	return 1;
+}
+
+int authextstrtoaddr(char* str, struct sockaddr_storage* addr, 
+	socklen_t* addrlen, char** auth_name)
+{
+	char* s;
+	int port = UNBOUND_DNS_PORT;
+	if((s=strchr(str, '@'))) {
+		char buf[MAX_ADDR_STRLEN];
+		size_t len = (size_t)(s-str);
+		char* hash = strchr(s+1, '#');
+		if(hash) {
+			*auth_name = hash+1;
+		} else {
+			*auth_name = NULL;
+		}
+		if(len >= MAX_ADDR_STRLEN) {
+			return 0;
+		}
+		(void)strlcpy(buf, str, sizeof(buf));
+		buf[len] = 0;
+		port = atoi(s+1);
+		if(port == 0) {
+			if(!hash && strcmp(s+1,"0")!=0)
+				return 0;
+			if(hash && strncmp(s+1,"0#",2)!=0)
+				return 0;
+		}
+		return ipstrtoaddr(buf, port, addr, addrlen);
+	}
+	if((s=strchr(str, '#'))) {
+		char buf[MAX_ADDR_STRLEN];
+		size_t len = (size_t)(s-str);
+		if(len >= MAX_ADDR_STRLEN) {
+			return 0;
+		}
+		(void)strlcpy(buf, str, sizeof(buf));
+		buf[len] = 0;
+		port = UNBOUND_DNS_OVER_TLS_PORT;
+		*auth_name = s+1;
+		return ipstrtoaddr(buf, port, addr, addrlen);
+	}
+	*auth_name = NULL;
+	return ipstrtoaddr(str, port, addr, addrlen);
+}
+
+/** store port number into sockaddr structure */
+void
+sockaddr_store_port(struct sockaddr_storage* addr, socklen_t addrlen, int port)
+{
+	if(addr_is_ip6(addr, addrlen)) {
+		struct sockaddr_in6* sa = (struct sockaddr_in6*)addr;
+		sa->sin6_port = (in_port_t)htons((uint16_t)port);
+	} else {
+		struct sockaddr_in* sa = (struct sockaddr_in*)addr;
+		sa->sin_port = (in_port_t)htons((uint16_t)port);
+	}
 }
 
 void
@@ -280,15 +342,15 @@ log_nametypeclass(enum verbosity_value v, const char* str, uint8_t* name,
 	else if(type == LDNS_RR_TYPE_MAILB) ts = "MAILB";
 	else if(type == LDNS_RR_TYPE_MAILA) ts = "MAILA";
 	else if(type == LDNS_RR_TYPE_ANY) ts = "ANY";
-	else if(ldns_rr_descript(type) && ldns_rr_descript(type)->_name)
-		ts = ldns_rr_descript(type)->_name;
+	else if(sldns_rr_descript(type) && sldns_rr_descript(type)->_name)
+		ts = sldns_rr_descript(type)->_name;
 	else {
 		snprintf(t, sizeof(t), "TYPE%d", (int)type);
 		ts = t;
 	}
-	if(ldns_lookup_by_id(ldns_rr_classes, (int)dclass) &&
-		ldns_lookup_by_id(ldns_rr_classes, (int)dclass)->name)
-		cs = ldns_lookup_by_id(ldns_rr_classes, (int)dclass)->name;
+	if(sldns_lookup_by_id(sldns_rr_classes, (int)dclass) &&
+		sldns_lookup_by_id(sldns_rr_classes, (int)dclass)->name)
+		cs = sldns_lookup_by_id(sldns_rr_classes, (int)dclass)->name;
 	else {
 		snprintf(c, sizeof(c), "CLASS%d", (int)dclass);
 		cs = c;
@@ -312,11 +374,11 @@ void log_name_addr(enum verbosity_value v, const char* str, uint8_t* zone,
 		case AF_INET6: family="";
 			sinaddr = &((struct sockaddr_in6*)addr)->sin6_addr;
 			break;
-		case AF_UNIX: family="unix_family "; break;
+		case AF_LOCAL: family="local "; break;
 		default: break;
 	}
 	if(inet_ntop(af, sinaddr, dest, (socklen_t)sizeof(dest)) == 0) {
-		strncpy(dest, "(inet_ntop error)", sizeof(dest));
+		(void)strlcpy(dest, "(inet_ntop error)", sizeof(dest));
 	}
 	dest[sizeof(dest)-1] = 0;
 	port = ntohs(((struct sockaddr_in*)addr)->sin_port);
@@ -326,6 +388,26 @@ void log_name_addr(enum verbosity_value v, const char* str, uint8_t* zone,
 			str, namebuf, family, dest, (int)port, (int)addrlen);
 	else	verbose(v, "%s <%s> %s%s#%d",
 			str, namebuf, family, dest, (int)port);
+}
+
+void log_err_addr(const char* str, const char* err,
+	struct sockaddr_storage* addr, socklen_t addrlen)
+{
+	uint16_t port;
+	char dest[100];
+	int af = (int)((struct sockaddr_in*)addr)->sin_family;
+	void* sinaddr = &((struct sockaddr_in*)addr)->sin_addr;
+	if(af == AF_INET6)
+		sinaddr = &((struct sockaddr_in6*)addr)->sin6_addr;
+	if(inet_ntop(af, sinaddr, dest, (socklen_t)sizeof(dest)) == 0) {
+		(void)strlcpy(dest, "(inet_ntop error)", sizeof(dest));
+	}
+	dest[sizeof(dest)-1] = 0;
+	port = ntohs(((struct sockaddr_in*)addr)->sin_port);
+	if(verbosity >= 4)
+		log_err("%s: %s for %s port %d (len %d)", str, err, dest,
+			(int)port, (int)addrlen);
+	else	log_err("%s: %s for %s", str, err, dest);
 }
 
 int
@@ -584,6 +666,88 @@ log_crypto_err(const char* str)
 #endif /* HAVE_SSL */
 }
 
+int
+listen_sslctx_setup(void* ctxt)
+{
+#ifdef HAVE_SSL
+	SSL_CTX* ctx = (SSL_CTX*)ctxt;
+	/* no SSLv2, SSLv3 because has defects */
+	if((SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2) & SSL_OP_NO_SSLv2)
+		!= SSL_OP_NO_SSLv2){
+		log_crypto_err("could not set SSL_OP_NO_SSLv2");
+		return 0;
+	}
+	if((SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3) & SSL_OP_NO_SSLv3)
+		!= SSL_OP_NO_SSLv3){
+		log_crypto_err("could not set SSL_OP_NO_SSLv3");
+		return 0;
+	}
+#if defined(SSL_OP_NO_TLSv1) && defined(SSL_OP_NO_TLSv1_1)
+	/* if we have tls 1.1 disable 1.0 */
+	if((SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1) & SSL_OP_NO_TLSv1)
+		!= SSL_OP_NO_TLSv1){
+		log_crypto_err("could not set SSL_OP_NO_TLSv1");
+		return 0;
+	}
+#endif
+#if defined(SSL_OP_NO_TLSv1_1) && defined(SSL_OP_NO_TLSv1_2)
+	/* if we have tls 1.2 disable 1.1 */
+	if((SSL_CTX_set_options(ctx, SSL_OP_NO_TLSv1_1) & SSL_OP_NO_TLSv1_1)
+		!= SSL_OP_NO_TLSv1_1){
+		log_crypto_err("could not set SSL_OP_NO_TLSv1_1");
+		return 0;
+	}
+#endif
+#if defined(SHA256_DIGEST_LENGTH) && defined(USE_ECDSA)
+	/* if we have sha256, set the cipher list to have no known vulns */
+	if(!SSL_CTX_set_cipher_list(ctx, "TLS13-CHACHA20-POLY1305-SHA256:TLS13-AES-256-GCM-SHA384:TLS13-AES-128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256"))
+		log_crypto_err("could not set cipher list with SSL_CTX_set_cipher_list");
+#endif
+
+	if((SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE) &
+		SSL_OP_CIPHER_SERVER_PREFERENCE) !=
+		SSL_OP_CIPHER_SERVER_PREFERENCE) {
+		log_crypto_err("could not set SSL_OP_CIPHER_SERVER_PREFERENCE");
+		return 0;
+	}
+
+#ifdef HAVE_SSL_CTX_SET_SECURITY_LEVEL
+	SSL_CTX_set_security_level(ctx, 0);
+#endif
+#else
+	(void)ctxt;
+#endif /* HAVE_SSL */
+	return 1;
+}
+
+void
+listen_sslctx_setup_2(void* ctxt)
+{
+#ifdef HAVE_SSL
+	SSL_CTX* ctx = (SSL_CTX*)ctxt;
+	(void)ctx;
+#if HAVE_DECL_SSL_CTX_SET_ECDH_AUTO
+	if(!SSL_CTX_set_ecdh_auto(ctx,1)) {
+		log_crypto_err("Error in SSL_CTX_ecdh_auto, not enabling ECDHE");
+	}
+#elif defined(USE_ECDSA)
+	if(1) {
+		EC_KEY *ecdh = EC_KEY_new_by_curve_name (NID_X9_62_prime256v1);
+		if (!ecdh) {
+			log_crypto_err("could not find p256, not enabling ECDHE");
+		} else {
+			if (1 != SSL_CTX_set_tmp_ecdh (ctx, ecdh)) {
+				log_crypto_err("Error in SSL_CTX_set_tmp_ecdh, not enabling ECDHE");
+			}
+			EC_KEY_free (ecdh);
+		}
+	}
+#endif
+#else
+	(void)ctxt;
+#endif /* HAVE_SSL */
+}
+
 void* listen_sslctx_create(char* key, char* pem, char* verifypem)
 {
 #ifdef HAVE_SSL
@@ -592,15 +756,13 @@ void* listen_sslctx_create(char* key, char* pem, char* verifypem)
 		log_crypto_err("could not SSL_CTX_new");
 		return NULL;
 	}
-	/* no SSLv2 because has defects */
-	if(!(SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2) & SSL_OP_NO_SSLv2)){
-		log_crypto_err("could not set SSL_OP_NO_SSLv2");
+	if(!listen_sslctx_setup(ctx)) {
 		SSL_CTX_free(ctx);
 		return NULL;
 	}
-	if(!SSL_CTX_use_certificate_file(ctx, pem, SSL_FILETYPE_PEM)) {
+	if(!SSL_CTX_use_certificate_chain_file(ctx, pem)) {
 		log_err("error for cert file: %s", pem);
-		log_crypto_err("error in SSL_CTX use_certificate_file");
+		log_crypto_err("error in SSL_CTX use_certificate_chain_file");
 		SSL_CTX_free(ctx);
 		return NULL;
 	}
@@ -616,7 +778,7 @@ void* listen_sslctx_create(char* key, char* pem, char* verifypem)
 		SSL_CTX_free(ctx);
 		return NULL;
 	}
-
+	listen_sslctx_setup_2(ctx);
 	if(verifypem && verifypem[0]) {
 		if(!SSL_CTX_load_verify_locations(ctx, verifypem, NULL)) {
 			log_crypto_err("Error in SSL_CTX verify locations");
@@ -642,13 +804,20 @@ void* connect_sslctx_create(char* key, char* pem, char* verifypem)
 		log_crypto_err("could not allocate SSL_CTX pointer");
 		return NULL;
 	}
-	if(!(SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2) & SSL_OP_NO_SSLv2)) {
+	if((SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2) & SSL_OP_NO_SSLv2)
+		!= SSL_OP_NO_SSLv2) {
 		log_crypto_err("could not set SSL_OP_NO_SSLv2");
 		SSL_CTX_free(ctx);
 		return NULL;
 	}
+	if((SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv3) & SSL_OP_NO_SSLv3)
+		!= SSL_OP_NO_SSLv3) {
+		log_crypto_err("could not set SSL_OP_NO_SSLv3");
+		SSL_CTX_free(ctx);
+		return NULL;
+	}
 	if(key && key[0]) {
-		if(!SSL_CTX_use_certificate_file(ctx, pem, SSL_FILETYPE_PEM)) {
+		if(!SSL_CTX_use_certificate_chain_file(ctx, pem)) {
 			log_err("error in client certificate %s", pem);
 			log_crypto_err("error in certificate file");
 			SSL_CTX_free(ctx);
@@ -668,7 +837,7 @@ void* connect_sslctx_create(char* key, char* pem, char* verifypem)
 		}
 	}
 	if(verifypem && verifypem[0]) {
-		if(!SSL_CTX_load_verify_locations(ctx, verifypem, NULL) != 1) {
+		if(!SSL_CTX_load_verify_locations(ctx, verifypem, NULL)) {
 			log_crypto_err("error in SSL_CTX verify");
 			SSL_CTX_free(ctx);
 			return NULL;
@@ -726,15 +895,15 @@ void* outgoing_ssl_fd(void* sslctx, int fd)
 #endif
 }
 
-#if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED)
+#if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED) && defined(CRYPTO_LOCK) && OPENSSL_VERSION_NUMBER < 0x10100000L
 /** global lock list for openssl locks */
-static lock_basic_t *ub_openssl_locks = NULL;
+static lock_basic_type *ub_openssl_locks = NULL;
 
 /** callback that gets thread id for openssl */
 static unsigned long
 ub_crypto_id_cb(void)
 {
-	return (unsigned long)ub_thread_self();
+	return (unsigned long)log_thread_get();
 }
 
 static void
@@ -751,10 +920,10 @@ ub_crypto_lock_cb(int mode, int type, const char *ATTR_UNUSED(file),
 
 int ub_openssl_lock_init(void)
 {
-#if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED)
+#if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED) && defined(CRYPTO_LOCK) && OPENSSL_VERSION_NUMBER < 0x10100000L
 	int i;
-	ub_openssl_locks = (lock_basic_t*)malloc(
-		sizeof(lock_basic_t)*CRYPTO_num_locks());
+	ub_openssl_locks = (lock_basic_type*)reallocarray(
+		NULL, (size_t)CRYPTO_num_locks(), sizeof(lock_basic_type));
 	if(!ub_openssl_locks)
 		return 0;
 	for(i=0; i<CRYPTO_num_locks(); i++) {
@@ -768,7 +937,7 @@ int ub_openssl_lock_init(void)
 
 void ub_openssl_lock_delete(void)
 {
-#if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED)
+#if defined(HAVE_SSL) && defined(OPENSSL_THREADS) && !defined(THREADS_DISABLED) && defined(CRYPTO_LOCK) && OPENSSL_VERSION_NUMBER < 0x10100000L
 	int i;
 	if(!ub_openssl_locks)
 		return;

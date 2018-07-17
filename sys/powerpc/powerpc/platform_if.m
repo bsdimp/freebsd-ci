@@ -80,6 +80,10 @@ CODE {
 	{
 		return (VM_MAX_ADDRESS);
 	}
+	static void platform_null_smp_ap_init(platform_t plat)
+	{
+		return;
+	}
 };
 
 /**
@@ -116,9 +120,9 @@ METHOD int attach {
 
 METHOD void mem_regions {
 	platform_t	    _plat;
-	struct mem_region **_memp;
+	struct mem_region  *_memp;
 	int		   *_memsz;
-	struct mem_region **_availp;
+	struct mem_region  *_availp;
 	int		   *_availsz;
 };
 
@@ -185,6 +189,14 @@ METHOD int smp_start_cpu {
 };
 
 /**
+ * @brief Start a CPU
+ *
+ */
+METHOD void smp_ap_init {
+	platform_t	_plat;
+} DEFAULT platform_null_smp_ap_init;
+
+/**
  * @brief Return SMP topology
  */
 METHOD cpu_group_t smp_topo {
@@ -196,5 +208,23 @@ METHOD cpu_group_t smp_topo {
  */
 METHOD void reset {
 	platform_t	_plat;
+};
+
+/**
+ * @brief Suspend the CPU
+ */
+METHOD void sleep {
+	platform_t	_plat;
+};
+
+/**
+ * @brief Attempt to synchronize timebase of current CPU with others.
+ * Entered (approximately) simultaneously on all CPUs, including the BSP.
+ * Passed the timebase value on the BSP as of shortly before the call.
+ */
+METHOD void smp_timebase_sync {
+	platform_t	_plat;
+	u_long		_tb;
+	int		_ap;
 };
 

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2000-2001 by Coleman Kane <cokane@FreeBSD.org>
  * All rights reserved.
  *
@@ -127,7 +129,7 @@ tdfx_probe(device_t dev)
 	case PCI_DEVICE_3DFX_VOODOO1:
 		device_set_desc(dev, "3DFX Voodoo Graphics 3D Accelerator");
 		return BUS_PROBE_DEFAULT;
-	};
+	}
 
 	return ENXIO;
 }
@@ -145,7 +147,6 @@ tdfx_attach(device_t dev) {
 	 * small, whole number.
 	 */
 	struct tdfx_softc *tdfx_info;
-	u_long	val;
 	/* rid value tells bus_alloc_resource where to find the addresses of ports or
 	 * of memory ranges in the PCI config space*/
 	int rid = PCIR_BAR(0);
@@ -153,12 +154,6 @@ tdfx_attach(device_t dev) {
 	/* Increment the card counter (for the ioctl code) */
 	tdfx_count++;
 
- 	/* Enable MemMap on Voodoo */
-	val = pci_read_config(dev, PCIR_COMMAND, 2);
-	val |= (PCIM_CMD_MEMEN);
-	pci_write_config(dev, PCIR_COMMAND, val, 2);
-	val = pci_read_config(dev, PCIR_COMMAND, 2);
-	
 	/* Fill the soft config struct with info about this device*/
 	tdfx_info = device_get_softc(dev);
 	tdfx_info->dev = dev;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -42,17 +44,18 @@
 #include <sys/refcount.h>
 #include <sys/_lock.h>
 #include <sys/_mutex.h>
+#include <vm/vm.h>
 
+struct filedesc;
 struct stat;
 struct thread;
 struct uio;
 struct knote;
 struct vnode;
-struct socket;
-
 
 #endif /* _KERNEL */
 
+#define	DTYPE_NONE	0	/* not yet initialized */
 #define	DTYPE_VNODE	1	/* file */
 #define	DTYPE_SOCKET	2	/* communications endpoint */
 #define	DTYPE_PIPE	3	/* pipe */
@@ -65,11 +68,15 @@ struct socket;
 #define	DTYPE_PTS	10	/* pseudo teletype master device */
 #define	DTYPE_DEV	11	/* Device specific fd type */
 #define	DTYPE_PROCDESC	12	/* process descriptor */
+#define	DTYPE_LINUXEFD	13	/* emulation eventfd type */
+#define	DTYPE_LINUXTFD	14	/* emulation timerfd type */
 
 #ifdef _KERNEL
 
 struct file;
 struct filecaps;
+struct kaiocb;
+struct kinfo_file;
 struct ucred;
 
 #define	FOF_OFFSET	0x01	/* Use the offset in uio argument */
@@ -105,6 +112,17 @@ typedef	int fo_chmod_t(struct file *fp, mode_t mode,
 		    struct ucred *active_cred, struct thread *td);
 typedef	int fo_chown_t(struct file *fp, uid_t uid, gid_t gid,
 		    struct ucred *active_cred, struct thread *td);
+typedef int fo_sendfile_t(struct file *fp, int sockfd, struct uio *hdr_uio,
+		    struct uio *trl_uio, off_t offset, size_t nbytes,
+		    off_t *sent, int flags, struct thread *td);
+typedef int fo_seek_t(struct file *fp, off_t offset, int whence,
+		    struct thread *td);
+typedef int fo_fill_kinfo_t(struct file *fp, struct kinfo_file *kif,
+		    struct filedesc *fdp);
+typedef int fo_mmap_t(struct file *fp, vm_map_t map, vm_offset_t *addr,
+		    vm_size_t size, vm_prot_t prot, vm_prot_t cap_maxprot,
+		    int flags, vm_ooffset_t foff, struct thread *td);
+typedef int fo_aio_queue_t(struct file *fp, struct kaiocb *job);
 typedef	int fo_flags_t;
 
 struct fileops {
@@ -118,6 +136,11 @@ struct fileops {
 	fo_close_t	*fo_close;
 	fo_chmod_t	*fo_chmod;
 	fo_chown_t	*fo_chown;
+	fo_sendfile_t	*fo_sendfile;
+	fo_seek_t	*fo_seek;
+	fo_fill_kinfo_t	*fo_fill_kinfo;
+	fo_mmap_t	*fo_mmap;
+	fo_aio_queue_t	*fo_aio_queue;
 	fo_flags_t	fo_flags;	/* DFLAG_* below */
 };
 
@@ -132,6 +155,7 @@ struct fileops {
  *
  * Below is the list of locks that protects members in struct file.
  *
+ * (a) f_vnode lock required (shared allows both reads and writes)
  * (f) protected with mtx_lock(mtx_pool_find(fp))
  * (d) cdevpriv_mtx
  * none	not locked
@@ -141,8 +165,6 @@ struct fadvise_info {
 	int		fa_advice;	/* (f) FADV_* type. */
 	off_t		fa_start;	/* (f) Region start. */
 	off_t		fa_end;		/* (f) Region end. */
-	off_t		fa_prevstart;	/* (f) Previous NOREUSE start. */
-	off_t		fa_prevend;	/* (f) Previous NOREUSE end. */
 };
 
 struct file {
@@ -157,7 +179,7 @@ struct file {
 	/*
 	 *  DTYPE_VNODE specific fields.
 	 */
-	int		f_seqcount;	/* Count of sequential accesses. */
+	int		f_seqcount;	/* (a) Count of sequential accesses. */
 	off_t		f_nextoff;	/* next expected read/write offset. */
 	union {
 		struct cdev_privdata *fvn_cdevpriv;
@@ -187,18 +209,23 @@ struct file {
  * Userland version of struct file, for sysctl
  */
 struct xfile {
-	size_t	xf_size;	/* size of struct xfile */
+	ksize_t	xf_size;	/* size of struct xfile */
 	pid_t	xf_pid;		/* owning process */
 	uid_t	xf_uid;		/* effective uid of owning process */
 	int	xf_fd;		/* descriptor number */
-	void	*xf_file;	/* address of struct file */
+	int	_xf_int_pad1;
+	kvaddr_t xf_file;	/* address of struct file */
 	short	xf_type;	/* descriptor type */
+	short	_xf_short_pad1;
 	int	xf_count;	/* reference count */
 	int	xf_msgcount;	/* references from message queue */
+	int	_xf_int_pad2;
 	off_t	xf_offset;	/* file offset */
-	void	*xf_data;	/* file descriptor specific data */
-	void	*xf_vnode;	/* vnode pointer */
+	kvaddr_t xf_data;	/* file descriptor specific data */
+	kvaddr_t xf_vnode;	/* vnode pointer */
 	u_int	xf_flag;	/* flags (see fcntl.h) */
+	int	_xf_int_pad3;
+	int64_t	_xf_int64_pad[6];
 };
 
 #ifdef _KERNEL
@@ -210,46 +237,42 @@ extern int maxfiles;		/* kernel limit on number of open files */
 extern int maxfilesperproc;	/* per process limit on number of open files */
 extern volatile int openfiles;	/* actual number of open files */
 
-int fget(struct thread *td, int fd, cap_rights_t rights, struct file **fpp);
-int fget_mmap(struct thread *td, int fd, cap_rights_t rights,
+int fget(struct thread *td, int fd, cap_rights_t *rightsp, struct file **fpp);
+int fget_mmap(struct thread *td, int fd, cap_rights_t *rightsp,
     u_char *maxprotp, struct file **fpp);
-int fget_read(struct thread *td, int fd, cap_rights_t rights,
+int fget_read(struct thread *td, int fd, cap_rights_t *rightsp,
     struct file **fpp);
-int fget_write(struct thread *td, int fd, cap_rights_t rights,
+int fget_write(struct thread *td, int fd, cap_rights_t *rightsp,
     struct file **fpp);
+int fget_fcntl(struct thread *td, int fd, cap_rights_t *rightsp,
+    int needfcntl, struct file **fpp);
 int _fdrop(struct file *fp, struct thread *td);
 
-/*
- * The socket operations are used a couple of places.
- * XXX: This is wrong, they should go through the operations vector for
- * XXX: sockets instead of going directly for the individual functions. /phk
- */
-fo_rdwr_t	soo_read;
-fo_rdwr_t	soo_write;
-fo_truncate_t	soo_truncate;
-fo_ioctl_t	soo_ioctl;
-fo_poll_t	soo_poll;
-fo_kqfilter_t	soo_kqfilter;
-fo_stat_t	soo_stat;
-fo_close_t	soo_close;
-
+fo_rdwr_t	invfo_rdwr;
+fo_truncate_t	invfo_truncate;
+fo_ioctl_t	invfo_ioctl;
+fo_poll_t	invfo_poll;
+fo_kqfilter_t	invfo_kqfilter;
 fo_chmod_t	invfo_chmod;
 fo_chown_t	invfo_chown;
+fo_sendfile_t	invfo_sendfile;
+
+fo_sendfile_t	vn_sendfile;
+fo_seek_t	vn_seek;
+fo_fill_kinfo_t	vn_fill_kinfo;
+int vn_fill_kinfo_vnode(struct vnode *vp, struct kinfo_file *kif);
 
 void finit(struct file *, u_int, short, void *, struct fileops *);
-int fgetvp(struct thread *td, int fd, cap_rights_t rights, struct vnode **vpp);
-int fgetvp_exec(struct thread *td, int fd, cap_rights_t rights,
+int fgetvp(struct thread *td, int fd, cap_rights_t *rightsp,
     struct vnode **vpp);
-int fgetvp_rights(struct thread *td, int fd, cap_rights_t need,
+int fgetvp_exec(struct thread *td, int fd, cap_rights_t *rightsp,
+    struct vnode **vpp);
+int fgetvp_rights(struct thread *td, int fd, cap_rights_t *needrightsp,
     struct filecaps *havecaps, struct vnode **vpp);
-int fgetvp_read(struct thread *td, int fd, cap_rights_t rights,
+int fgetvp_read(struct thread *td, int fd, cap_rights_t *rightsp,
     struct vnode **vpp);
-int fgetvp_write(struct thread *td, int fd, cap_rights_t rights,
+int fgetvp_write(struct thread *td, int fd, cap_rights_t *rightsp,
     struct vnode **vpp);
-
-int fgetsock(struct thread *td, int fd, cap_rights_t rights,
-    struct socket **spp, u_int *fflagp);
-void fputsock(struct socket *sp);
 
 static __inline int
 _fnoop(void)
@@ -273,6 +296,7 @@ static __inline fo_stat_t	fo_stat;
 static __inline fo_close_t	fo_close;
 static __inline fo_chmod_t	fo_chmod;
 static __inline fo_chown_t	fo_chown;
+static __inline fo_sendfile_t	fo_sendfile;
 
 static __inline int
 fo_read(struct file *fp, struct uio *uio, struct ucred *active_cred,
@@ -350,6 +374,49 @@ fo_chown(struct file *fp, uid_t uid, gid_t gid, struct ucred *active_cred,
 {
 
 	return ((*fp->f_ops->fo_chown)(fp, uid, gid, active_cred, td));
+}
+
+static __inline int
+fo_sendfile(struct file *fp, int sockfd, struct uio *hdr_uio,
+    struct uio *trl_uio, off_t offset, size_t nbytes, off_t *sent, int flags,
+    struct thread *td)
+{
+
+	return ((*fp->f_ops->fo_sendfile)(fp, sockfd, hdr_uio, trl_uio, offset,
+	    nbytes, sent, flags, td));
+}
+
+static __inline int
+fo_seek(struct file *fp, off_t offset, int whence, struct thread *td)
+{
+
+	return ((*fp->f_ops->fo_seek)(fp, offset, whence, td));
+}
+
+static __inline int
+fo_fill_kinfo(struct file *fp, struct kinfo_file *kif, struct filedesc *fdp)
+{
+
+	return ((*fp->f_ops->fo_fill_kinfo)(fp, kif, fdp));
+}
+
+static __inline int
+fo_mmap(struct file *fp, vm_map_t map, vm_offset_t *addr, vm_size_t size,
+    vm_prot_t prot, vm_prot_t cap_maxprot, int flags, vm_ooffset_t foff,
+    struct thread *td)
+{
+
+	if (fp->f_ops->fo_mmap == NULL)
+		return (ENODEV);
+	return ((*fp->f_ops->fo_mmap)(fp, map, addr, size, prot, cap_maxprot,
+	    flags, foff, td));
+}
+
+static __inline int
+fo_aio_queue(struct file *fp, struct kaiocb *job)
+{
+
+	return ((*fp->f_ops->fo_aio_queue)(fp, job));
 }
 
 #endif /* _KERNEL */

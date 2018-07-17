@@ -1,12 +1,14 @@
 #	@(#)Makefile	8.1 (Berkeley) 6/5/93
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 MAN=	builtin.1 intro.1
 
-.if ${MK_ATF} != "no"
-ATF=	${.CURDIR}/../../../contrib/atf
+PACKAGE=runtime-manuals
+
+.if ${MK_TESTS} != "no"
+ATF=	${SRCTOP}/contrib/atf
 .PATH:	${ATF}/doc
 MAN+=	atf-test-program.1
 .endif

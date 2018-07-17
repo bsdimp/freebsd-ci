@@ -1,6 +1,8 @@
 /*	$NetBSD: am7990.c,v 1.68 2005/12/11 12:21:25 christos Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD AND BSD-3-Clause
+ *
  * Copyright (c) 1997, 1998 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -16,13 +18,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the NetBSD
- *	Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
  * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
@@ -279,7 +274,7 @@ am7990_rint(struct lance_softc *sc)
 			bix = 0;
 
 		if (m != NULL) {
-			ifp->if_ipackets++;
+			if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 
 #ifdef LANCE_REVC_BUG
 			/*
@@ -303,7 +298,7 @@ am7990_rint(struct lance_softc *sc)
 			(*ifp->if_input)(ifp, m);
 			LE_LOCK(sc);
 		} else
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 	}
 
 	sc->sc_last_rd = bix;
@@ -359,22 +354,22 @@ am7990_tint(struct lance_softc *sc)
 					if_printf(ifp, "lost carrier\n");
 			}
 			if (tmd.tmd3 & LE_T3_LCOL)
-				ifp->if_collisions++;
+				if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 			if (tmd.tmd3 & LE_T3_RTRY) {
 #ifdef LEDEBUG
 				if_printf(ifp, "excessive collisions, tdr %d\n",
 				    tmd.tmd3 & LE_T3_TDR_MASK);
 #endif
-				ifp->if_collisions += 16;
+				if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 16);
 			}
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		} else {
 			if (tmd.tmd1_bits & LE_T1_ONE)
-				ifp->if_collisions++;
+				if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 			else if (tmd.tmd1_bits & LE_T1_MORE)
 				/* Real number is unknown. */
-				ifp->if_collisions += 2;
-			ifp->if_opackets++;
+				if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 2);
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		}
 
 		if (++bix == sc->sc_ntbuf)
@@ -401,7 +396,7 @@ am7990_intr(void *arg)
 	LE_LOCK(sc);
 
 	if (sc->sc_hwintr && (*sc->sc_hwintr)(sc) == -1) {
-		ifp->if_ierrors++;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		lance_init_locked(sc);
 		LE_UNLOCK(sc);
 		return;
@@ -433,19 +428,19 @@ am7990_intr(void *arg)
 #ifdef LEDEBUG
 			if_printf(ifp, "babble\n");
 #endif
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		}
 #if 0
 		if (isr & LE_C0_CERR) {
 			if_printf(ifp, "collision error\n");
-			ifp->if_collisions++;
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 		}
 #endif
 		if (isr & LE_C0_MISS) {
 #ifdef LEDEBUG
 			if_printf(ifp, "missed packet\n");
 #endif
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		}
 		if (isr & LE_C0_MERR) {
 			if_printf(ifp, "memory error\n");
@@ -457,14 +452,14 @@ am7990_intr(void *arg)
 
 	if ((isr & LE_C0_RXON) == 0) {
 		if_printf(ifp, "receiver disabled\n");
-		ifp->if_ierrors++;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		lance_init_locked(sc);
 		LE_UNLOCK(sc);
 		return;
 	}
 	if ((isr & LE_C0_TXON) == 0) {
 		if_printf(ifp, "transmitter disabled\n");
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		lance_init_locked(sc);
 		LE_UNLOCK(sc);
 		return;
@@ -526,7 +521,7 @@ am7990_start_locked(struct lance_softc *sc)
 		}
 
 		IFQ_DRV_DEQUEUE(&ifp->if_snd, m);
-		if (m == 0)
+		if (m == NULL)
 			break;
 
 		/*

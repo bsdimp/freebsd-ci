@@ -1,10 +1,11 @@
 # $FreeBSD$
 
 PROG=	asn1_compile
-NO_MAN=
-LIBROKEN_A=	${.OBJDIR}/../../lib/libroken/libroken.a
-LDADD=	${LIBROKEN_A} ${LIBVERS}
-DPADD=	${LIBROKEN_A} ${LIBVERS}
+MAN=
+LIBROKEN_A=	${.OBJDIR:H:H}/lib/libroken/libroken.a
+LIBADD=	vers
+LDADD=	${LIBROKEN_A}
+DPADD=	${LIBROKEN_A}
 
 SRCS=	\
 	asn1parse.y \

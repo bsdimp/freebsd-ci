@@ -2,6 +2,8 @@
 /* $FreeBSD$ */
 
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997
  *	Jonathan Stone and Jason R. Thorpe.  All rights reserved.
  *
@@ -54,11 +56,13 @@
 
 #include <sys/queue.h>
 
+struct ifnet;
+
 /*
  * Driver callbacks for media status and change requests.
  */
-typedef	int (*ifm_change_cb_t)(struct ifnet *ifp);
-typedef	void (*ifm_stat_cb_t)(struct ifnet *ifp, struct ifmediareq *req);
+typedef	int (*ifm_change_cb_t)(struct ifnet *);
+typedef	void (*ifm_stat_cb_t)(struct ifnet *, struct ifmediareq *req);
 
 /*
  * In-kernel representation of a single supported media type.
@@ -104,6 +108,7 @@ void	ifmedia_set(struct ifmedia *ifm, int mword);
 int	ifmedia_ioctl(struct ifnet *ifp, struct ifreq *ifr,
 	    struct ifmedia *ifm, u_long cmd);
 
+
 /* Compute baudrate for a given media. */
 uint64_t	ifmedia_baudrate(int);
 
@@ -115,7 +120,7 @@ uint64_t	ifmedia_baudrate(int);
  *	----	-------
  *	0-4	Media variant
  *	5-7	Media type
- *	8-15	Type specific options
+ *	8-15	Type specific options (includes added variant bits on Ethernet)
  *	16-18	Mode (for multi-mode devices)
  *	19	RFU
  *	20-27	Shared (global) options
@@ -124,8 +129,18 @@ uint64_t	ifmedia_baudrate(int);
 
 /*
  * Ethernet
+ * In order to use more than 31 subtypes, Ethernet uses some of the option
+ * bits as part of the subtype field.  See the options section below for
+ * relevant definitions
  */
 #define	IFM_ETHER	0x00000020
+#define	IFM_ETHER_SUBTYPE(x) (((x) & IFM_TMASK) | \
+	(((x) & (IFM_ETH_XTYPE >> IFM_ETH_XSHIFT)) << IFM_ETH_XSHIFT))
+#define	IFM_X(x) IFM_ETHER_SUBTYPE(x)	/* internal shorthand */
+#define	IFM_ETHER_SUBTYPE_SET(x) (IFM_ETHER_SUBTYPE(x) | IFM_ETHER)
+#define	IFM_ETHER_SUBTYPE_GET(x) ((x) & (IFM_TMASK|IFM_ETH_XTYPE))
+#define	IFM_ETHER_IS_EXTENDED(x)	((x) & IFM_ETH_XTYPE)
+
 #define	IFM_10_T	3		/* 10BaseT - RJ45 */
 #define	IFM_10_2	4		/* 10Base2 - Thinnet */
 #define	IFM_10_5	5		/* 10Base5 - AUI */
@@ -153,38 +168,53 @@ uint64_t	ifmedia_baudrate(int);
 #define	IFM_40G_CR4	27		/* 40GBase-CR4 */
 #define	IFM_40G_SR4	28		/* 40GBase-SR4 */
 #define	IFM_40G_LR4	29		/* 40GBase-LR4 */
+#define	IFM_1000_KX	30		/* 1000Base-KX backplane */
+#define	IFM_OTHER	31		/* Other: one of the following */
 
-/* note 31 is the max! */
+/* following types are not visible to old binaries using only IFM_TMASK */
+#define	IFM_10G_KX4	IFM_X(32)	/* 10GBase-KX4 backplane */
+#define	IFM_10G_KR	IFM_X(33)	/* 10GBase-KR backplane */
+#define	IFM_10G_CR1	IFM_X(34)	/* 10GBase-CR1 Twinax splitter */
+#define	IFM_20G_KR2	IFM_X(35)	/* 20GBase-KR2 backplane */
+#define	IFM_2500_KX	IFM_X(36)	/* 2500Base-KX backplane */
+#define	IFM_2500_T	IFM_X(37)	/* 2500Base-T - RJ45 (NBaseT) */
+#define	IFM_5000_T	IFM_X(38)	/* 5000Base-T - RJ45 (NBaseT) */
+#define	IFM_50G_PCIE	IFM_X(39)	/* 50G Ethernet over PCIE */
+#define	IFM_25G_PCIE	IFM_X(40)	/* 25G Ethernet over PCIE */
+#define	IFM_1000_SGMII	IFM_X(41)	/* 1G media interface */
+#define	IFM_10G_SFI	IFM_X(42)	/* 10G media interface */
+#define	IFM_40G_XLPPI	IFM_X(43)	/* 40G media interface */
+#define	IFM_1000_CX_SGMII IFM_X(44)	/* 1000Base-CX-SGMII */
+#define	IFM_40G_KR4	IFM_X(45)	/* 40GBase-KR4 */
+#define	IFM_10G_ER	IFM_X(46)	/* 10GBase-ER */
+#define	IFM_100G_CR4	IFM_X(47)	/* 100GBase-CR4 */
+#define	IFM_100G_SR4	IFM_X(48)	/* 100GBase-SR4 */
+#define	IFM_100G_KR4	IFM_X(49)	/* 100GBase-KR4 */
+#define	IFM_100G_LR4	IFM_X(50)	/* 100GBase-LR4 */
+#define	IFM_56G_R4	IFM_X(51)	/* 56GBase-R4 */
+#define	IFM_100_T	IFM_X(52)	/* 100BaseT - RJ45 */
+#define	IFM_25G_CR	IFM_X(53)	/* 25GBase-CR */
+#define	IFM_25G_KR	IFM_X(54)	/* 25GBase-KR */
+#define	IFM_25G_SR	IFM_X(55)	/* 25GBase-SR */
+#define	IFM_50G_CR2	IFM_X(56)	/* 50GBase-CR2 */
+#define	IFM_50G_KR2	IFM_X(57)	/* 50GBase-KR2 */
+#define	IFM_25G_LR	IFM_X(58)	/* 25GBase-LR */
+#define	IFM_10G_AOC	IFM_X(59)	/* 10G active optical cable */
+#define	IFM_25G_ACC	IFM_X(60)	/* 25G active copper cable */
+#define	IFM_25G_AOC	IFM_X(61)	/* 25G active optical cable */
 
+/*
+ * Please update ieee8023ad_lacp.c:lacp_compose_key()
+ * after adding new Ethernet media types.
+ */
+/* Note IFM_X(511) is the max! */
+
+/* Ethernet option values; includes bits used for extended variant field */
 #define	IFM_ETH_MASTER	0x00000100	/* master mode (1000baseT) */
 #define	IFM_ETH_RXPAUSE	0x00000200	/* receive PAUSE frames */
 #define	IFM_ETH_TXPAUSE	0x00000400	/* transmit PAUSE frames */
-
-/*
- * Token ring
- */
-#define	IFM_TOKEN	0x00000040
-#define	IFM_TOK_STP4	3		/* Shielded twisted pair 4m - DB9 */
-#define	IFM_TOK_STP16	4		/* Shielded twisted pair 16m - DB9 */
-#define	IFM_TOK_UTP4	5		/* Unshielded twisted pair 4m - RJ45 */
-#define	IFM_TOK_UTP16	6		/* Unshielded twisted pair 16m - RJ45 */
-#define	IFM_TOK_STP100  7		/* Shielded twisted pair 100m - DB9 */
-#define	IFM_TOK_UTP100  8		/* Unshielded twisted pair 100m - RJ45 */
-#define	IFM_TOK_ETR	0x00000200	/* Early token release */
-#define	IFM_TOK_SRCRT	0x00000400	/* Enable source routing features */
-#define	IFM_TOK_ALLR	0x00000800	/* All routes / Single route bcast */
-#define	IFM_TOK_DTR	0x00002000	/* Dedicated token ring */
-#define	IFM_TOK_CLASSIC	0x00004000	/* Classic token ring */
-#define	IFM_TOK_AUTO	0x00008000	/* Automatic Dedicate/Classic token ring */
-
-/*
- * FDDI
- */
-#define	IFM_FDDI	0x00000060
-#define	IFM_FDDI_SMF	3		/* Single-mode fiber */
-#define	IFM_FDDI_MMF	4		/* Multi-mode fiber */
-#define	IFM_FDDI_UTP	5		/* CDDI / UTP */
-#define	IFM_FDDI_DA	0x00000100	/* Dual attach / single attach */
+#define	IFM_ETH_XTYPE	0x00007800	/* extended media variants */
+#define	IFM_ETH_XSHIFT	6		/* shift XTYPE next to TMASK */
 
 /*
  * IEEE 802.11 Wireless
@@ -214,6 +244,7 @@ uint64_t	ifmedia_baudrate(int);
 #define	IFM_IEEE80211_OFDM27	23	/* OFDM 27Mbps */
 /* NB: not enough bits to express MCS fully */
 #define	IFM_IEEE80211_MCS	24	/* HT MCS rate */
+#define	IFM_IEEE80211_VHT	25	/* VHT MCS rate */
 
 #define	IFM_IEEE80211_ADHOC	0x00000100	/* Operate in Adhoc mode */
 #define	IFM_IEEE80211_HOSTAP	0x00000200	/* Operate in Host AP mode */
@@ -230,6 +261,8 @@ uint64_t	ifmedia_baudrate(int);
 #define	IFM_IEEE80211_FH	0x00040000	/* 2Ghz, GFSK mode */
 #define	IFM_IEEE80211_11NA	0x00050000	/* 5Ghz, HT mode */
 #define	IFM_IEEE80211_11NG	0x00060000	/* 2Ghz, HT mode */
+#define	IFM_IEEE80211_VHT5G	0x00070000	/* 5Ghz, VHT mode */
+#define	IFM_IEEE80211_VHT2G	0x00080000	/* 2Ghz, VHT mode */
 
 /*
  * ATM
@@ -301,7 +334,10 @@ uint64_t	ifmedia_baudrate(int);
  * Macros to extract various bits of information from the media word.
  */
 #define	IFM_TYPE(x)		((x) & IFM_NMASK)
-#define	IFM_SUBTYPE(x)		((x) & IFM_TMASK)
+#define	IFM_SUBTYPE(x)	\
+  (IFM_TYPE(x) == IFM_ETHER ? IFM_ETHER_SUBTYPE_GET(x) : ((x) & IFM_TMASK))
+#define	IFM_TYPE_MATCH(x,y) \
+  (IFM_TYPE(x) == IFM_TYPE(y) && IFM_SUBTYPE(x) == IFM_SUBTYPE(y))
 #define	IFM_TYPE_OPTIONS(x)	((x) & IFM_OMASK)
 #define	IFM_INST(x)		(((x) & IFM_IMASK) >> IFM_ISHIFT)
 #define	IFM_OPTIONS(x)		((x) & (IFM_OMASK | IFM_GMASK))
@@ -331,8 +367,6 @@ struct ifmedia_description {
 
 #define	IFM_TYPE_DESCRIPTIONS {						\
 	{ IFM_ETHER,		"Ethernet" },				\
-	{ IFM_TOKEN,		"Token ring" },				\
-	{ IFM_FDDI,		"FDDI" },				\
 	{ IFM_IEEE80211,	"IEEE 802.11 Wireless Ethernet" },	\
 	{ IFM_ATM,		"ATM" },				\
 	{ 0, NULL },							\
@@ -366,6 +400,38 @@ struct ifmedia_description {
 	{ IFM_40G_CR4,	"40Gbase-CR4" },				\
 	{ IFM_40G_SR4,	"40Gbase-SR4" },				\
 	{ IFM_40G_LR4,	"40Gbase-LR4" },				\
+	{ IFM_1000_KX,	"1000Base-KX" },				\
+	{ IFM_OTHER,	"Other" },					\
+	{ IFM_10G_KX4,	"10GBase-KX4" },				\
+	{ IFM_10G_KR,	"10GBase-KR" },					\
+	{ IFM_10G_CR1,	"10GBase-CR1" },				\
+	{ IFM_20G_KR2,	"20GBase-KR2" },				\
+	{ IFM_2500_KX,	"2500Base-KX" },				\
+	{ IFM_2500_T,	"2500Base-T" },					\
+	{ IFM_5000_T,	"5000Base-T" },					\
+	{ IFM_50G_PCIE,	"PCIExpress-50G" },				\
+	{ IFM_25G_PCIE,	"PCIExpress-25G" },				\
+	{ IFM_1000_SGMII,	"1000Base-SGMII" },			\
+	{ IFM_10G_SFI,	"10GBase-SFI" },				\
+	{ IFM_40G_XLPPI,	"40GBase-XLPPI" },			\
+	{ IFM_1000_CX_SGMII,	"1000Base-CX-SGMII" },			\
+	{ IFM_40G_KR4,	"40GBase-KR4" },				\
+	{ IFM_10G_ER,	"10GBase-ER" },					\
+	{ IFM_100G_CR4,	"100GBase-CR4" },				\
+	{ IFM_100G_SR4,	"100GBase-SR4" },				\
+	{ IFM_100G_KR4,	"100GBase-KR4" },				\
+	{ IFM_100G_LR4, "100GBase-LR4" },				\
+	{ IFM_56G_R4,	"56GBase-R4" },					\
+	{ IFM_100_T,	"100BaseT" },					\
+	{ IFM_25G_CR,	"25GBase-CR" },					\
+	{ IFM_25G_KR,	"25GBase-KR" },					\
+	{ IFM_25G_SR,	"25GBase-SR" },					\
+	{ IFM_50G_CR2,	"50GBase-CR2" },				\
+	{ IFM_50G_KR2,	"50GBase-KR2" },				\
+	{ IFM_25G_LR,	"25GBase-LR" },					\
+	{ IFM_10G_AOC,	"10GBase-AOC" },				\
+	{ IFM_25G_ACC,	"25GBase-ACC" },				\
+	{ IFM_25G_AOC,	"25GBase-AOC" },				\
 	{ 0, NULL },							\
 }
 
@@ -417,55 +483,6 @@ struct ifmedia_description {
 	{ 0, NULL },							\
 }
 
-#define	IFM_SUBTYPE_TOKENRING_DESCRIPTIONS {				\
-	{ IFM_TOK_STP4,	"DB9/4Mbit" },					\
-	{ IFM_TOK_STP16, "DB9/16Mbit" },				\
-	{ IFM_TOK_UTP4,	"UTP/4Mbit" },					\
-	{ IFM_TOK_UTP16, "UTP/16Mbit" },				\
-	{ IFM_TOK_STP100, "STP/100Mbit" },				\
-	{ IFM_TOK_UTP100, "UTP/100Mbit" },				\
-	{ 0, NULL },							\
-}
-
-#define	IFM_SUBTYPE_TOKENRING_ALIASES {					\
-	{ IFM_TOK_STP4,	"4STP" },					\
-	{ IFM_TOK_STP16, "16STP" },					\
-	{ IFM_TOK_UTP4,	"4UTP" },					\
-	{ IFM_TOK_UTP16, "16UTP" },					\
-	{ IFM_TOK_STP100, "100STP" },					\
-	{ IFM_TOK_UTP100, "100UTP" },					\
-	{ 0, NULL },							\
-}
-
-#define	IFM_SUBTYPE_TOKENRING_OPTION_DESCRIPTIONS {			\
-	{ IFM_TOK_ETR,	"EarlyTokenRelease" },				\
-	{ IFM_TOK_SRCRT, "SourceRouting" },				\
-	{ IFM_TOK_ALLR,	"AllRoutes" },					\
-	{ IFM_TOK_DTR,	"Dedicated" },					\
-	{ IFM_TOK_CLASSIC,"Classic" },					\
-	{ IFM_TOK_AUTO,	" " },						\
-	{ 0, NULL },							\
-}
-
-#define	IFM_SUBTYPE_FDDI_DESCRIPTIONS {					\
-	{ IFM_FDDI_SMF, "Single-mode" },				\
-	{ IFM_FDDI_MMF, "Multi-mode" },					\
-	{ IFM_FDDI_UTP, "UTP" },					\
-	{ 0, NULL },							\
-}
-
-#define	IFM_SUBTYPE_FDDI_ALIASES {					\
-	{ IFM_FDDI_SMF,	"SMF" },					\
-	{ IFM_FDDI_MMF,	"MMF" },					\
-	{ IFM_FDDI_UTP,	"CDDI" },					\
-	{ 0, NULL },							\
-}
-
-#define	IFM_SUBTYPE_FDDI_OPTION_DESCRIPTIONS {				\
-	{ IFM_FDDI_DA, "Dual-attach" },					\
-	{ 0, NULL },							\
-}
-
 #define	IFM_SUBTYPE_IEEE80211_DESCRIPTIONS {				\
 	{ IFM_IEEE80211_FH1, "FH/1Mbps" },				\
 	{ IFM_IEEE80211_FH2, "FH/2Mbps" },				\
@@ -489,6 +506,7 @@ struct ifmedia_description {
 	{ IFM_IEEE80211_OFDM4, "OFDM/4.5Mbps" },			\
 	{ IFM_IEEE80211_OFDM27, "OFDM/27Mbps" },			\
 	{ IFM_IEEE80211_MCS, "MCS" },					\
+	{ IFM_IEEE80211_VHT, "VHT" },					\
 	{ 0, NULL },							\
 }
 
@@ -528,6 +546,7 @@ struct ifmedia_description {
 	{ IFM_IEEE80211_OFDM4, "OFDM4.5" },				\
 	{ IFM_IEEE80211_OFDM27, "OFDM27" },				\
 	{ IFM_IEEE80211_MCS, "MCS" },					\
+	{ IFM_IEEE80211_VHT, "VHT" },					\
 	{ 0, NULL },							\
 }
 
@@ -550,6 +569,8 @@ struct ifmedia_description {
 	{ IFM_IEEE80211_FH, "fh" },					\
 	{ IFM_IEEE80211_11NA, "11na" },					\
 	{ IFM_IEEE80211_11NG, "11ng" },					\
+	{ IFM_IEEE80211_VHT5G, "11ac" },				\
+	{ IFM_IEEE80211_VHT2G, "11ac2" },				\
 	{ 0, NULL },							\
 }
 
@@ -667,15 +688,37 @@ struct ifmedia_baudrate {
 	{ IFM_ETHER | IFM_40G_CR4,	IF_Gbps(40ULL) },		\
 	{ IFM_ETHER | IFM_40G_SR4,	IF_Gbps(40ULL) },		\
 	{ IFM_ETHER | IFM_40G_LR4,	IF_Gbps(40ULL) },		\
-									\
-	{ IFM_TOKEN | IFM_TOK_STP4,	IF_Mbps(4) },			\
-	{ IFM_TOKEN | IFM_TOK_STP16,	IF_Mbps(16) },			\
-	{ IFM_TOKEN | IFM_TOK_UTP4,	IF_Mbps(4) },			\
-	{ IFM_TOKEN | IFM_TOK_UTP16,	IF_Mbps(16) },			\
-									\
-	{ IFM_FDDI | IFM_FDDI_SMF,	IF_Mbps(100) },			\
-	{ IFM_FDDI | IFM_FDDI_MMF,	IF_Mbps(100) },			\
-	{ IFM_FDDI | IFM_FDDI_UTP,	IF_Mbps(100) },			\
+	{ IFM_ETHER | IFM_1000_KX,	IF_Mbps(1000) },		\
+	{ IFM_ETHER | IFM_10G_KX4,	IF_Gbps(10ULL) },		\
+	{ IFM_ETHER | IFM_10G_KR,	IF_Gbps(10ULL) },		\
+	{ IFM_ETHER | IFM_10G_CR1,	IF_Gbps(10ULL) },		\
+	{ IFM_ETHER | IFM_20G_KR2,	IF_Gbps(20ULL) },		\
+	{ IFM_ETHER | IFM_2500_KX,	IF_Mbps(2500) },		\
+	{ IFM_ETHER | IFM_2500_T,	IF_Mbps(2500) },		\
+	{ IFM_ETHER | IFM_5000_T,	IF_Mbps(5000) },		\
+	{ IFM_ETHER | IFM_50G_PCIE,	IF_Gbps(50ULL) },		\
+	{ IFM_ETHER | IFM_25G_PCIE,	IF_Gbps(25ULL) },		\
+	{ IFM_ETHER | IFM_1000_SGMII,	IF_Mbps(1000) },		\
+	{ IFM_ETHER | IFM_10G_SFI,	IF_Gbps(10ULL) },		\
+	{ IFM_ETHER | IFM_40G_XLPPI,	IF_Gbps(40ULL) },		\
+	{ IFM_ETHER | IFM_1000_CX_SGMII, IF_Mbps(1000) },		\
+	{ IFM_ETHER | IFM_40G_KR4,	IF_Gbps(40ULL) },		\
+	{ IFM_ETHER | IFM_10G_ER,	IF_Gbps(10ULL) },		\
+	{ IFM_ETHER | IFM_100G_CR4,	IF_Gbps(100ULL) },		\
+	{ IFM_ETHER | IFM_100G_SR4,	IF_Gbps(100ULL) },		\
+	{ IFM_ETHER | IFM_100G_KR4,	IF_Gbps(100ULL) },		\
+	{ IFM_ETHER | IFM_100G_LR4,	IF_Gbps(100ULL) },		\
+	{ IFM_ETHER | IFM_56G_R4,	IF_Gbps(56ULL) },		\
+	{ IFM_ETHER | IFM_100_T,	IF_Mbps(100ULL) },		\
+	{ IFM_ETHER | IFM_25G_CR,	IF_Gbps(25ULL) },		\
+	{ IFM_ETHER | IFM_25G_KR,	IF_Gbps(25ULL) },		\
+	{ IFM_ETHER | IFM_25G_SR,	IF_Gbps(25ULL) },		\
+	{ IFM_ETHER | IFM_50G_CR2,	IF_Gbps(50ULL) },		\
+	{ IFM_ETHER | IFM_50G_KR2,	IF_Gbps(50ULL) },		\
+	{ IFM_ETHER | IFM_25G_LR,	IF_Gbps(25ULL) },		\
+	{ IFM_ETHER | IFM_10G_AOC,	IF_Gbps(10ULL) },		\
+	{ IFM_ETHER | IFM_25G_ACC,	IF_Gbps(25ULL) },		\
+	{ IFM_ETHER | IFM_25G_AOC,	IF_Gbps(25ULL) },		\
 									\
 	{ IFM_IEEE80211 | IFM_IEEE80211_FH1,	IF_Mbps(1) },		\
 	{ IFM_IEEE80211 | IFM_IEEE80211_FH2,	IF_Mbps(2) },		\
@@ -713,10 +756,6 @@ struct ifmedia_status_description {
 #define	IFM_STATUS_DESCRIPTIONS {					\
 	{ IFM_ETHER,		IFM_AVALID,	IFM_ACTIVE,		\
 	    { "no carrier", "active" } },				\
-	{ IFM_FDDI,		IFM_AVALID,	IFM_ACTIVE,		\
-	    { "no ring", "inserted" } },				\
-	{ IFM_TOKEN,		IFM_AVALID,	IFM_ACTIVE,		\
-	    { "no ring", "inserted" } },				\
 	{ IFM_IEEE80211,	IFM_AVALID,	IFM_ACTIVE,		\
 	    { "no network", "active" } },				\
 	{ IFM_ATM,		IFM_AVALID,	IFM_ACTIVE,		\

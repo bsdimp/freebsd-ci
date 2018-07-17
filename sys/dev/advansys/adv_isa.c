@@ -20,6 +20,8 @@
  *   ** This board has been sold by SIIG as the i540 SpeedMaster.
  *  *** This board has been sold by SIIG as the i542 SpeedMaster.
  *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1996, 1997 Justin T. Gibbs.
  * All rights reserved.
  *
@@ -96,7 +98,7 @@ static u_int16_t adv_isa_ioports[] =
 	0x330 	/* Eighth and default selection in BIOS setup */
 };
 
-#define MAX_ISA_IOPORT_INDEX (sizeof(adv_isa_ioports)/sizeof(u_int16_t) - 1)
+#define	MAX_ISA_IOPORT_INDEX (nitems(adv_isa_ioports) - 1)
 
 static	int	adv_isa_probe(device_t dev);
 static  int	adv_isa_attach(device_t dev);
@@ -109,7 +111,7 @@ adv_isa_probe(device_t dev)
 {
 	int	port_index;
 	int	max_port_index;
-	u_long	iobase, iocount, irq;
+	rman_res_t	iobase, iocount, irq;
 	int	user_iobase = 0;
 	int	rid = 0;
 	void	*ih;
@@ -136,7 +138,7 @@ adv_isa_probe(device_t dev)
 		 || (iobase != adv_isa_ioports[port_index])) {
 			if (bootverbose)
 				device_printf(dev,
-				    "Invalid baseport of 0x%lx specified. "
+				    "Invalid baseport of 0x%jx specified. "
 				    "Nearest valid baseport is 0x%x.  Failing "
 				    "probe.\n", iobase,
 				    (port_index <= max_port_index) ?

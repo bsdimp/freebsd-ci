@@ -47,6 +47,9 @@ struct VectorizeConfig {
   /// @brief Vectorize floating-point math intrinsics.
   bool VectorizeMath;
 
+  /// @brief Vectorize bit intrinsics.
+  bool VectorizeBitManipulations;
+
   /// @brief Vectorize the fused-multiply-add intrinsic.
   bool VectorizeFMA;
 
@@ -105,16 +108,16 @@ struct VectorizeConfig {
 
 //===----------------------------------------------------------------------===//
 //
-// BBVectorize - A basic-block vectorization pass.
+// LoopVectorize - Create a loop vectorization pass.
 //
-BasicBlockPass *
-createBBVectorizePass(const VectorizeConfig &C = VectorizeConfig());
+Pass *createLoopVectorizePass(bool NoUnrolling = false,
+                              bool AlwaysVectorize = true);
 
 //===----------------------------------------------------------------------===//
 //
-// LoopVectorize - Create a loop vectorization pass.
+// SLPVectorizer - Create a bottom-up SLP vectorizer pass.
 //
-Pass *createLoopVectorizePass();
+Pass *createSLPVectorizerPass();
 
 //===----------------------------------------------------------------------===//
 /// @brief Vectorize the BasicBlock.
@@ -128,6 +131,13 @@ Pass *createLoopVectorizePass();
 ///
 bool vectorizeBasicBlock(Pass *P, BasicBlock &BB,
                          const VectorizeConfig &C = VectorizeConfig());
+
+//===----------------------------------------------------------------------===//
+//
+// LoadStoreVectorizer - Create vector loads and stores, but leave scalar
+// operations.
+//
+Pass *createLoadStoreVectorizerPass();
 
 } // End llvm namespace
 

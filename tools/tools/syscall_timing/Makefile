@@ -4,6 +4,10 @@
 
 PROG=	syscall_timing
 CFLAGS+=	-static -O
-NO_MAN=
+MAN=
+
+#LIBADD=	pthread
+
+WARNS=	6
 
 .include <bsd.prog.mk>

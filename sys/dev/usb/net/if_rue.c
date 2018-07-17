@@ -25,6 +25,8 @@
  * SUCH DAMAGE.
  */
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause AND BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997, 1998, 1999, 2000
  *	Bill Paul <wpaul@ee.columbia.edu>.  All rights reserved.
  *
@@ -71,6 +73,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/queue.h>
 #include <sys/types.h>
 #include <sys/systm.h>
+#include <sys/socket.h>
 #include <sys/kernel.h>
 #include <sys/bus.h>
 #include <sys/module.h>
@@ -83,6 +86,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/callout.h>
 #include <sys/malloc.h>
 #include <sys/priv.h>
+
+#include <net/if.h>
+#include <net/if_var.h>
 
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
@@ -100,7 +106,7 @@ __FBSDID("$FreeBSD$");
 static int rue_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, rue, CTLFLAG_RW, 0, "USB rue");
-SYSCTL_INT(_hw_usb_rue, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_rue, OID_AUTO, debug, CTLFLAG_RWTUN,
     &rue_debug, 0, "Debug level");
 #endif
 
@@ -210,6 +216,7 @@ MODULE_DEPEND(rue, usb, 1, 1, 1);
 MODULE_DEPEND(rue, ether, 1, 1, 1);
 MODULE_DEPEND(rue, miibus, 1, 1, 1);
 MODULE_VERSION(rue, 1);
+USB_PNP_HOST_INFO(rue_devs);
 
 static const struct usb_ether_methods rue_ue_methods = {
 	.ue_attach_post = rue_attach_post,
@@ -493,7 +500,7 @@ rue_setmulti(struct usb_ether *ue)
 
 	/* now program new ones */
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH (ifma, &ifp->if_multiaddrs, ifma_link)
+	CK_STAILQ_FOREACH (ifma, &ifp->if_multiaddrs, ifma_link)
 	{
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
@@ -644,9 +651,9 @@ rue_intr_callback(struct usb_xfer *xfer, usb_error_t error)
 			pc = usbd_xfer_get_frame(xfer, 0);
 			usbd_copy_out(pc, 0, &pkt, sizeof(pkt));
 
-			ifp->if_ierrors += pkt.rue_rxlost_cnt;
-			ifp->if_ierrors += pkt.rue_crcerr_cnt;
-			ifp->if_collisions += pkt.rue_col_cnt;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, pkt.rue_rxlost_cnt);
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, pkt.rue_crcerr_cnt);
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS, pkt.rue_col_cnt);
 		}
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
@@ -681,17 +688,17 @@ rue_bulk_read_callback(struct usb_xfer *xfer, usb_error_t error)
 	case USB_ST_TRANSFERRED:
 
 		if (actlen < 4) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		pc = usbd_xfer_get_frame(xfer, 0);
 		usbd_copy_out(pc, actlen - 4, &status, sizeof(status));
 		actlen -= 4;
 
-		/* check recieve packet was valid or not */
+		/* check receive packet was valid or not */
 		status = le16toh(status);
 		if ((status & RUE_RXSTAT_VALID) == 0) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			goto tr_setup;
 		}
 		uether_rxbuf(ue, pc, 0, actlen);
@@ -728,7 +735,7 @@ rue_bulk_write_callback(struct usb_xfer *xfer, usb_error_t error)
 	switch (USB_GET_STATE(xfer)) {
 	case USB_ST_TRANSFERRED:
 		DPRINTFN(11, "transfer complete\n");
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 
 		/* FALLTHROUGH */
 	case USB_ST_SETUP:
@@ -778,7 +785,7 @@ tr_setup:
 		DPRINTFN(11, "transfer error, %s\n",
 		    usbd_errstr(error));
 
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 		if (error != USB_ERR_CANCELLED) {
 			/* try to clear stall first */
@@ -866,14 +873,15 @@ rue_ifmedia_upd(struct ifnet *ifp)
 	struct rue_softc *sc = ifp->if_softc;
 	struct mii_data *mii = GET_MII(sc);
 	struct mii_softc *miisc;
+	int error;
 
 	RUE_LOCK_ASSERT(sc, MA_OWNED);
 
         sc->sc_flags &= ~RUE_FLAG_LINK;
 	LIST_FOREACH(miisc, &mii->mii_phys, mii_list)
 		PHY_RESET(miisc);
-	mii_mediachg(mii);
-	return (0);
+	error = mii_mediachg(mii);
+	return (error);
 }
 
 /*

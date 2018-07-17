@@ -1,5 +1,7 @@
 /*	$NetBSD: imx51_tzicreg.h,v 1.1 2010/11/13 07:11:03 bsh Exp $	*/
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause AND BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010  Genetec Corporation.  All rights reserved.
  * Written by Hashimoto Kenichi for Genetec Corporation.
  *
@@ -26,7 +28,7 @@
  */
 
 /*-
- * Copyright (c) 2012 The FreeBSD Foundation
+ * Copyright (c) 2012, 2013 The FreeBSD Foundation
  * All rights reserved.
  *
  * Portions of this software were developed by Oleksandr Rybalko
@@ -57,7 +59,7 @@
  */
 
 #ifndef _IMX51_TZICREG_H_
-#define	_IMX51_TZICRREG_H_
+#define	_IMX51_TZICREG_H_
 
 #include <sys/cdefs.h>
 

@@ -36,7 +36,7 @@ __FBSDID("$FreeBSD$");
 
 static MALLOC_DEFINE(M_KSTAT, "kstat_data", "Kernel statistics");
 
-SYSCTL_NODE(, OID_AUTO, kstat, CTLFLAG_RW, 0, "Kernel statistics");
+SYSCTL_ROOT_NODE(OID_AUTO, kstat, CTLFLAG_RW, 0, "Kernel statistics");
 
 kstat_t *
 kstat_create(char *module, int instance, char *name, char *class, uchar_t type,
@@ -128,4 +128,20 @@ kstat_delete(kstat_t *ksp)
 
 	sysctl_ctx_free(&ksp->ks_sysctl_ctx);
 	free(ksp, M_KSTAT);
+}
+
+void
+kstat_set_string(char *dst, const char *src)
+{
+
+	bzero(dst, KSTAT_STRLEN);
+	(void) strncpy(dst, src, KSTAT_STRLEN - 1);
+}
+
+void
+kstat_named_init(kstat_named_t *knp, const char *name, uchar_t data_type)
+{
+
+	kstat_set_string(knp->name, name);
+	knp->data_type = data_type;
 }

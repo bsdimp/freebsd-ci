@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2001, 2002 Mike Barcroft <mike@FreeBSD.org>
  * Copyright (c) 2001 The NetBSD Foundation, Inc.
  * All rights reserved.
@@ -65,12 +67,14 @@
 
 #if !defined(__cplusplus) || defined(__STDC_LIMIT_MACROS)
 
+#ifndef __INT64_C
 #ifdef __LP64__
 #define	__INT64_C(c)		(c ## L)
 #define	__UINT64_C(c)		(c ## UL)
 #else
 #define	__INT64_C(c)		(c ## LL)
 #define	__UINT64_C(c)		(c ## ULL)
+#endif
 #endif
 
 /*

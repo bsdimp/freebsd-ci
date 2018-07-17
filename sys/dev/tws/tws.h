@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2010, LSI Corp.
  * All rights reserved.
  * Author : Manjunath Ranganathaiah
@@ -67,7 +69,7 @@ extern int tws_queue_depth;
 
 #define TWS_DRIVER_VERSION_STRING "10.80.00.005"
 #define TWS_MAX_NUM_UNITS             65 
-#define TWS_MAX_NUM_LUNS              16
+#define TWS_MAX_NUM_LUNS              32
 #define TWS_MAX_IRQS                  2
 #define TWS_SCSI_INITIATOR_ID         66
 #define TWS_MAX_IO_SIZE               0x20000 /* 128kB */
@@ -137,7 +139,7 @@ enum tws_req_flags {
     TWS_DIR_IN = 0x2,
     TWS_DIR_OUT = 0x4,
     TWS_DIR_NONE = 0x8,
-    TWS_DATA_CCB = 0x16,
+    TWS_DATA_CCB = 0x10,
 };
  
 enum tws_intrs {
@@ -248,7 +250,6 @@ struct tws_softc {
     struct mtx io_lock;                   /* IO  lock */
     struct tws_ioctl_lock ioctl_lock;     /* ioctl lock */ 
     u_int32_t seq_id;                     /* Sequence id */
-    void *chan;                           /* IOCTL req wait channel */
     struct tws_circular_q aen_q;          /* aen q */
     struct tws_circular_q trace_q;        /* trace q */
     struct tws_stats stats;               /* I/O stats */
@@ -269,4 +270,5 @@ struct tws_softc {
     union ccb *scan_ccb;                  /* pointer to a ccb */
     struct tws_request *q_head[TWS_MAX_QS]; /* head pointers to q's */
     struct tws_request *q_tail[TWS_MAX_QS]; /* tail pointers to q's */
+    struct callout stats_timer;
 };

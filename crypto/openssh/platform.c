@@ -1,5 +1,3 @@
-/* $Id: platform.c,v 1.19 2013/03/12 00:31:05 dtucker Exp $ */
-
 /*
  * Copyright (c) 2006 Darren Tucker.  All rights reserved.
  *
@@ -18,13 +16,12 @@
 
 #include "includes.h"
 
-#include <sys/types.h>
-
 #include <stdarg.h>
 #include <unistd.h>
 
 #include "log.h"
 #include "buffer.h"
+#include "misc.h"
 #include "servconf.h"
 #include "key.h"
 #include "hostfile.h"
@@ -51,6 +48,14 @@ platform_pre_fork(void)
 {
 #ifdef USE_SOLARIS_PROCESS_CONTRACTS
 	solaris_contract_pre_fork();
+#endif
+}
+
+void
+platform_pre_restart(void)
+{
+#ifdef LINUX_OOM_ADJUST
+	oom_adjust_restore();
 #endif
 }
 
@@ -98,8 +103,12 @@ platform_setusercontext(struct passwd *pw)
 #endif
 
 #ifdef USE_SOLARIS_PROJECTS
-	/* if solaris projects were detected, set the default now */
-	if (getuid() == 0 || geteuid() == 0)
+	/*
+	 * If solaris projects were detected, set the default now, unless
+	 * we are using PAM in which case it is the responsibility of the
+	 * PAM stack.
+	 */
+	if (!options.use_pam && (getuid() == 0 || geteuid() == 0))
 		solaris_set_default_project(pw);
 #endif
 
@@ -156,12 +165,6 @@ platform_setusercontext_post_groups(struct passwd *pw)
 	aix_usrinfo(pw);
 #endif /* _AIX */
 
-#if !defined(HAVE_LOGIN_CAP) && defined(USE_LIBIAF)
-	if (set_id(pw->pw_name) != 0) {
-		exit(1);
-	}
-# endif /* USE_LIBIAF */
-
 #ifdef HAVE_SETPCRED
 	/*
 	 * If we have a chroot directory, we set all creds except real
@@ -193,20 +196,4 @@ platform_krb5_get_principal_name(const char *pw_name)
 #else
 	return NULL;
 #endif
-}
-
-/*
- * return 1 if the specified uid is a uid that may own a system directory
- * otherwise 0.
- */
-int
-platform_sys_dir_uid(uid_t uid)
-{
-	if (uid == 0)
-		return 1;
-#ifdef PLATFORM_SYS_DIR_UID
-	if (uid == PLATFORM_SYS_DIR_UID)
-		return 1;
-#endif
-	return 0;
 }

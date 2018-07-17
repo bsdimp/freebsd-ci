@@ -1,8 +1,9 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-.PATH:	${.CURDIR}/../hastd
+PACKAGE=hast
+.PATH:	${.CURDIR:H}/hastd
 
 PROG=	hastctl
 SRCS=	activemap.c
@@ -21,7 +22,8 @@ MAN=	hastctl.8
 
 NO_WFORMAT=
 NO_WCAST_ALIGN=
-CFLAGS+=-I${.CURDIR}/../hastd
+NO_WMISSING_VARIABLE_DECLARATIONS=
+CFLAGS+=-I${.CURDIR:H}/hastd
 CFLAGS+=-DHAVE_CAPSICUM
 CFLAGS+=-DINET
 .if ${MK_INET6_SUPPORT} != "no"
@@ -31,13 +33,7 @@ CFLAGS+=-DINET6
 CFLAGS+=-DYY_NO_UNPUT
 CFLAGS+=-DYY_NO_INPUT
 
-DPADD=	${LIBL} ${LIBUTIL}
-LDADD=	-ll -lutil
-.if ${MK_OPENSSL} != "no"
-DPADD+=	${LIBCRYPTO}
-LDADD+=	-lcrypto
-CFLAGS+=-DHAVE_CRYPTO
-.endif
+LIBADD=	md util
 
 YFLAGS+=-v
 

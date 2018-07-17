@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Written by: yen_cw@myson.com.tw
  * Copyright (c) 2002 Myson Technology Inc.
  * All rights reserved.
@@ -46,6 +48,7 @@ __FBSDID("$FreeBSD$");
 #define NBPFILTER	1
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_media.h>
@@ -79,11 +82,6 @@ static int      MY_USEIOSPACE = 1;
 
 
 #include <dev/my/if_myreg.h>
-
-#ifndef lint
-static          const char rcsid[] =
-"$Id: if_my.c,v 1.16 2003/04/15 06:37:25 mdodd Exp $";
-#endif
 
 /*
  * Various supported device vendors/types and their names.
@@ -338,7 +336,7 @@ my_setmulti(struct my_softc * sc)
 
 	/* now program new ones */
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		h = ~ether_crc32_be(LLADDR((struct sockaddr_dl *)
@@ -662,10 +660,8 @@ static void
 my_setmode_mii(struct my_softc * sc, int media)
 {
 	u_int16_t       bmcr;
-	struct ifnet   *ifp;
 
 	MY_LOCK_ASSERT(sc);
-	ifp = sc->my_ifp;
 	/*
 	 * If an autoneg session is in progress, stop it.
 	 */
@@ -757,7 +753,7 @@ my_setcfg(struct my_softc * sc, int bmcr)
 static void
 my_reset(struct my_softc * sc)
 {
-	register int    i;
+	int    i;
 
 	MY_LOCK_ASSERT(sc);
 	MY_SETBIT(sc, MY_BCR, MY_SWR);
@@ -1091,8 +1087,7 @@ my_newbuf(struct my_softc * sc, struct my_chain_onefrag * c)
 		    "no memory for rx list -- packet dropped!\n");
 		return (ENOBUFS);
 	}
-	MCLGET(m_new, M_NOWAIT);
-	if (!(m_new->m_flags & M_EXT)) {
+	if (!(MCLGET(m_new, M_NOWAIT))) {
 		device_printf(sc->my_dev,
 		    "no memory for rx list -- packet dropped!\n");
 		m_freem(m_new);
@@ -1127,7 +1122,7 @@ my_rxeof(struct my_softc * sc)
 		sc->my_cdata.my_rx_head = cur_rx->my_nextdesc;
 
 		if (rxstat & MY_ES) {	/* error summary: give up this rx pkt */
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			cur_rx->my_ptr->my_status = MY_OWNByNIC;
 			continue;
 		}
@@ -1140,7 +1135,7 @@ my_rxeof(struct my_softc * sc)
 			    total_len, 0, ifp, NULL);
 			cur_rx->my_ptr->my_status = MY_OWNByNIC;
 			if (m == NULL) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				continue;
 			}
 		} else {
@@ -1153,14 +1148,14 @@ my_rxeof(struct my_softc * sc)
 			 * little else we can do in this situation.
 			 */
 			if (my_newbuf(sc, cur_rx) == ENOBUFS) {
-				ifp->if_ierrors++;
+				if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 				cur_rx->my_ptr->my_status = MY_OWNByNIC;
 				continue;
 			}
 			m->m_pkthdr.rcvif = ifp;
 			m->m_pkthdr.len = m->m_len = total_len;
 		}
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		eh = mtod(m, struct ether_header *);
 #if NBPFILTER > 0
 		/*
@@ -1218,16 +1213,16 @@ my_txeof(struct my_softc * sc)
 			break;
 		if (!(CSR_READ_4(sc, MY_TCRRCR) & MY_Enhanced)) {
 			if (txstat & MY_TXERR) {
-				ifp->if_oerrors++;
+				if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 				if (txstat & MY_EC) /* excessive collision */
-					ifp->if_collisions++;
+					if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 				if (txstat & MY_LC)	/* late collision */
-					ifp->if_collisions++;
+					if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 			}
-			ifp->if_collisions += (txstat & MY_NCRMASK) >>
-			    MY_NCRShift;
+			if_inc_counter(ifp, IFCOUNTER_COLLISIONS,
+			    (txstat & MY_NCRMASK) >> MY_NCRShift);
 		}
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		m_freem(cur_tx->my_mbuf);
 		cur_tx->my_mbuf = NULL;
 		if (sc->my_cdata.my_tx_head == sc->my_cdata.my_tx_tail) {
@@ -1238,7 +1233,7 @@ my_txeof(struct my_softc * sc)
 		sc->my_cdata.my_tx_head = cur_tx->my_nextdesc;
 	}
 	if (CSR_READ_4(sc, MY_TCRRCR) & MY_Enhanced) {
-		ifp->if_collisions += (CSR_READ_4(sc, MY_TSR) & MY_NCRMask);
+		if_inc_counter(ifp, IFCOUNTER_COLLISIONS, (CSR_READ_4(sc, MY_TSR) & MY_NCRMask));
 	}
 	return;
 }
@@ -1299,7 +1294,7 @@ my_intr(void *arg)
 
 		if ((status & MY_RBU) || (status & MY_RxErr)) {
 			/* rx buffer unavailable or rx error */
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 #ifdef foo
 			my_stop(sc);
 			my_reset(sc);
@@ -1358,8 +1353,7 @@ my_encap(struct my_softc * sc, struct my_chain * c, struct mbuf * m_head)
 		return (1);
 	}
 	if (m_head->m_pkthdr.len > MHLEN) {
-		MCLGET(m_new, M_NOWAIT);
-		if (!(m_new->m_flags & M_EXT)) {
+		if (!(MCLGET(m_new, M_NOWAIT))) {
 			m_freem(m_new);
 			device_printf(sc->my_dev, "no memory for tx list");
 			return (1);
@@ -1707,7 +1701,7 @@ my_watchdog(void *arg)
 		return;
 
 	ifp = sc->my_ifp;
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	if_printf(ifp, "watchdog timeout\n");
 	if (!(my_phy_readreg(sc, PHY_BMSR) & PHY_BMSR_LINKSTAT))
 		if_printf(ifp, "no carrier - transceiver cable problem?\n");
@@ -1725,7 +1719,7 @@ my_watchdog(void *arg)
 static void
 my_stop(struct my_softc * sc)
 {
-	register int    i;
+	int    i;
 	struct ifnet   *ifp;
 
 	MY_LOCK_ASSERT(sc);

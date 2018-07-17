@@ -1,5 +1,7 @@
 %{
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2010 The FreeBSD Foundation
  * Copyright (c) 2011 Pawel Jakub Dawidek <pawel@dawidek.net>
  * All rights reserved.
@@ -75,6 +77,8 @@ static char depth1_provname[PATH_MAX];
 static char depth1_localpath[PATH_MAX];
 static int depth1_metaflush;
 
+extern void yyerror(const char *);
+extern int yylex(void);
 extern void yyrestart(FILE *);
 
 static int isitme(const char *name);

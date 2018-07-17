@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011-2012 Stefan Bethke.
  * Copyright (c) 2012 Adrian Chadd.
  * All rights reserved.
@@ -50,7 +52,7 @@
 #include <dev/iicbus/iicbus.h>
 #include <dev/mii/mii.h>
 #include <dev/mii/miivar.h>
-#include <dev/etherswitch/mdio.h>
+#include <dev/mdio/mdio.h>
 
 #include <dev/etherswitch/etherswitch.h>
 
@@ -71,16 +73,6 @@ static int
 ar7240_hw_setup(struct arswitch_softc *sc)
 {
 
-	/* Enable CPU port; disable mirror port */
-	arswitch_writereg(sc->sc_dev, AR8X16_REG_CPU_PORT,
-	    AR8X16_CPU_PORT_EN | AR8X16_CPU_MIRROR_DIS);
-
-	/*
-	 * Let things settle; probing PHY4 doesn't seem reliable
-	 * without a litle delay.
-	 */
-	DELAY(1000);
-
 	return (0);
 }
 
@@ -90,6 +82,12 @@ ar7240_hw_setup(struct arswitch_softc *sc)
 static int
 ar7240_hw_global_setup(struct arswitch_softc *sc)
 {
+
+	ARSWITCH_LOCK(sc);
+
+	/* Enable CPU port; disable mirror port */
+	arswitch_writereg(sc->sc_dev, AR8X16_REG_CPU_PORT,
+	    AR8X16_CPU_PORT_EN | AR8X16_CPU_MIRROR_DIS);
 
 	/* Setup TAG priority mapping */
 	arswitch_writereg(sc->sc_dev, AR8X16_REG_TAG_PRIO, 0xfa50);
@@ -106,6 +104,8 @@ ar7240_hw_global_setup(struct arswitch_softc *sc)
 	/* Service Tag */
 	arswitch_modifyreg(sc->sc_dev, AR8X16_REG_SERVICE_TAG,
 	    AR8X16_SERVICE_TAG_MASK, 0);
+
+	ARSWITCH_UNLOCK(sc);
 
 	return (0);
 }
@@ -139,4 +139,9 @@ ar7240_attach(struct arswitch_softc *sc)
 
 	sc->hal.arswitch_hw_setup = ar7240_hw_setup;
 	sc->hal.arswitch_hw_global_setup = ar7240_hw_global_setup;
+
+	/* Set the switch vlan capabilities. */
+	sc->info.es_vlan_caps = ETHERSWITCH_VLAN_DOT1Q |
+	    ETHERSWITCH_VLAN_PORT | ETHERSWITCH_VLAN_DOUBLE_TAG;
+	sc->info.es_nvlangroups = AR8X16_MAX_VLANS;
 }

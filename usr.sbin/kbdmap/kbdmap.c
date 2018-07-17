@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002 Jonathan Belson <jon@witchspace.com>
  * All rights reserved.
  *
@@ -29,6 +31,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/queue.h>
+#include <sys/sysctl.h>
 
 #include <assert.h>
 #include <ctype.h>
@@ -47,15 +50,16 @@ static const char *lang_default = DEFAULT_LANG;
 static const char *font;
 static const char *lang;
 static const char *program;
-static const char *keymapdir = DEFAULT_KEYMAP_DIR;
-static const char *fontdir = DEFAULT_FONT_DIR;
+static const char *keymapdir = DEFAULT_VT_KEYMAP_DIR;
+static const char *fontdir = DEFAULT_VT_FONT_DIR;
+static const char *font_default = DEFAULT_VT_FONT;
 static const char *sysconfig = DEFAULT_SYSCONFIG;
-static const char *font_default = DEFAULT_FONT;
 static const char *font_current;
 static const char *dir;
 static const char *menu = "";
 
 static int x11;
+static int using_vt;
 static int show;
 static int verbose;
 static int print;
@@ -143,6 +147,22 @@ add_keymap(const char *desc, int mark, const char *keym)
 
 	/* Add to keymap list */
 	SLIST_INSERT_HEAD(&head, km_new, entries);
+}
+
+/*
+ * Return 0 if syscons is in use (to select legacy defaults).
+ */
+static int
+check_vt(void)
+{
+	size_t len;
+	char term[3];
+
+	len = 3;
+	if (sysctlbyname("kern.vty", &term, &len, NULL, 0) != 0 ||
+	    strcmp(term, "vt") != 0)
+		return 0;
+	return 1;
 }
 
 /*
@@ -239,13 +259,20 @@ get_font(void)
 static void
 vidcontrol(const char *fnt)
 {
-	char *tmp, *p, *q;
+	char *tmp, *p, *q, *cmd;
 	char ch;
 	int i;
 
 	/* syscons test failed */
 	if (x11)
 		return;
+
+	if (using_vt) {
+		asprintf(&cmd, "vidcontrol -f %s", fnt);
+		system(cmd);
+		free(cmd);
+		return;
+	}
 
 	tmp = strdup(fnt);
 
@@ -264,7 +291,6 @@ vidcontrol(const char *fnt)
 		if (sscanf(p, "%dx%d%c", &i, &i, &ch) != 2)
 			fprintf(stderr, "Which font size? %s\n", fnt);
 		else {
-			char *cmd;
 			asprintf(&cmd, "vidcontrol -f %s %s", p, fnt);
 			if (verbose)
 				fprintf(stderr, "%s\n", cmd);
@@ -554,7 +580,7 @@ menu_read(void)
 	char *p;
 	int mark, num_keymaps, items, i;
 	char buffer[256], filename[PATH_MAX];
-	char keym[64], lng[64], desc[64];
+	char keym[64], lng[64], desc[256];
 	char dialect[64], lang_abk[64];
 	struct keymap *km;
 	struct keymap **km_sorted;
@@ -599,7 +625,7 @@ menu_read(void)
 				continue;
 
 			/* Parse input, removing newline */
-			matches = sscanf(p, "%64[^:]:%64[^:]:%64[^:\n]", 
+			matches = sscanf(p, "%64[^:]:%64[^:]:%256[^:\n]", 
 			    keym, lng, desc);
 			if (matches == 3) {
 				if (strcmp(keym, "FONT")
@@ -668,7 +694,7 @@ menu_read(void)
 		fclose(fp);
 
 	} else
-		printf("Could not open file\n");
+		fprintf(stderr, "Could not open %s for reading\n", filename);
 
 	if (show) {
 		qsort(lang_list->sl_str, lang_list->sl_cur, sizeof(char*),
@@ -813,6 +839,13 @@ main(int argc, char **argv)
 		fprintf(stderr, "You are not on a virtual console - "
 				"expect certain strange side-effects\n");
 		sleep(2);
+	}
+
+	using_vt = check_vt();
+	if (using_vt == 0) {
+		keymapdir = DEFAULT_SC_KEYMAP_DIR;
+		fontdir = DEFAULT_SC_FONT_DIR;
+		font_default = DEFAULT_SC_FONT;
 	}
 
 	SLIST_INIT(&head);

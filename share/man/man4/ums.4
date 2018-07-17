@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd November 27, 2006
+.Dd April 24, 2018
 .Dt UMS 4
 .Os
 .Sh NAME
@@ -64,6 +64,17 @@ type device.
 See
 .Xr moused 8
 for an explanation of these mouse types.
+.Sh SYSCTL VARIABLES
+The following variables are available as both
+.Xr sysctl 8
+variables and
+.Xr loader 8
+tunables:
+.Bl -tag -width indent
+.It Va hw.usb.ums.debug
+Debug output level, where 0 is debugging disabled and larger values increase
+debug message verbosity.
+Default is 0.
 .Sh FILES
 .Bl -tag -width /dev/ums0 -compact
 .It Pa /dev/ums0
@@ -99,15 +110,15 @@ as in X change it to:
 The
 .Nm
 driver was written by
-.An Lennart Augustsson Aq augustss@cs.chalmers.se
+.An Lennart Augustsson Aq Mt augustss@cs.chalmers.se
 for
 .Nx
 and was adopted for
 .Fx
 by
-.An MAEKAWA Masahide Aq bishop@rr.iij4u.or.jp .
+.An MAEKAWA Masahide Aq Mt bishop@rr.iij4u.or.jp .
 .Pp
 This manual page was written by
-.An Nick Hibma Aq n_hibma@FreeBSD.org
+.An Nick Hibma Aq Mt n_hibma@FreeBSD.org
 with input from
-.An Kazutaka YOKOTA Aq yokota@zodiac.mech.utsunomiya-u.ac.jp .
+.An Kazutaka YOKOTA Aq Mt yokota@zodiac.mech.utsunomiya-u.ac.jp .

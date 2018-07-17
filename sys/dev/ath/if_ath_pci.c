@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -37,6 +39,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h> 
+#include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
@@ -53,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <net/if.h>
 #include <net/if_media.h>
 #include <net/if_arp.h>
+#include <net/ethernet.h>
 
 #include <net80211/ieee80211_var.h>
 
@@ -77,6 +81,25 @@ struct ath_pci_softc {
 	struct resource		*sc_irq;	/* irq resource */
 	void			*sc_ih;		/* interrupt handler */
 };
+
+#define	PCI_VDEVICE(v, d)			\
+	PCI_DEV(v,d)
+
+#define	PCI_DEVICE_SUB(v, d, sv, sd)		\
+	PCI_DEV(v, d), PCI_SUBDEV(sv, sd)
+
+#define	PCI_VENDOR_ID_ATHEROS		0x168c
+#define	PCI_VENDOR_ID_SAMSUNG		0x144d
+#define	PCI_VENDOR_ID_AZWAVE		0x1a3b
+#define	PCI_VENDOR_ID_FOXCONN		0x105b
+#define	PCI_VENDOR_ID_ATTANSIC		0x1969
+#define	PCI_VENDOR_ID_ASUSTEK		0x1043
+#define	PCI_VENDOR_ID_DELL		0x1028
+#define	PCI_VENDOR_ID_QMI		0x1a32
+#define	PCI_VENDOR_ID_LENOVO		0x17aa
+#define	PCI_VENDOR_ID_HP		0x103c
+
+#include "if_ath_pci_devlist.h"
 
 #define	BS_BAR	0x10
 #define	PCIR_RETRY_TIMEOUT	0x41
@@ -148,8 +171,14 @@ ath_pci_attach(device_t dev)
 	const struct firmware *fw = NULL;
 	const char *buf;
 #endif
+	const struct pci_device_table *pd;
 
 	sc->sc_dev = dev;
+
+	/* Do this lookup anyway; figure out what to do with it later */
+	pd = PCI_MATCH(dev, ath_pci_id_table);
+	if (pd)
+		sc->sc_pci_devinfo = pd->driver_data;
 
 	/*
 	 * Enable bus mastering.
@@ -171,14 +200,19 @@ ath_pci_attach(device_t dev)
 		device_printf(dev, "cannot map register space\n");
 		goto bad;
 	}
-	/* XXX uintptr_t is a bandaid for ia64; to be fixed */
-	sc->sc_st = (HAL_BUS_TAG)(uintptr_t) rman_get_bustag(psc->sc_sr);
+	sc->sc_st = (HAL_BUS_TAG) rman_get_bustag(psc->sc_sr);
 	sc->sc_sh = (HAL_BUS_HANDLE) rman_get_bushandle(psc->sc_sr);
 	/*
 	 * Mark device invalid so any interrupts (shared or otherwise)
 	 * that arrive before the HAL is setup are discarded.
 	 */
 	sc->sc_invalid = 1;
+
+	ATH_LOCK_INIT(sc);
+	ATH_PCU_LOCK_INIT(sc);
+	ATH_RX_LOCK_INIT(sc);
+	ATH_TX_LOCK_INIT(sc);
+	ATH_TXSTATUS_LOCK_INIT(sc);
 
 	/*
 	 * Arrange interrupt line.
@@ -230,7 +264,7 @@ ath_pci_attach(device_t dev)
 		if (fw == NULL) {
 			device_printf(dev, "%s: couldn't find firmware\n",
 			    __func__);
-			goto bad3;
+			goto bad4;
 		}
 
 		device_printf(dev, "%s: EEPROM firmware @ %p\n",
@@ -240,30 +274,20 @@ ath_pci_attach(device_t dev)
 		if (! sc->sc_eepromdata) {
 			device_printf(dev, "%s: can't malloc eepromdata\n",
 			    __func__);
-			goto bad3;
+			goto bad4;
 		}
 		memcpy(sc->sc_eepromdata, fw->data, fw->datasize);
 		firmware_put(fw, 0);
 	}
 #endif /* ATH_EEPROM_FIRMWARE */
 
-	ATH_LOCK_INIT(sc);
-	ATH_PCU_LOCK_INIT(sc);
-	ATH_RX_LOCK_INIT(sc);
-	ATH_TX_LOCK_INIT(sc);
-	ATH_TX_IC_LOCK_INIT(sc);
-	ATH_TXSTATUS_LOCK_INIT(sc);
-
 	error = ath_attach(pci_get_device(dev), sc);
 	if (error == 0)					/* success */
 		return 0;
 
-	ATH_TXSTATUS_LOCK_DESTROY(sc);
-	ATH_PCU_LOCK_DESTROY(sc);
-	ATH_RX_LOCK_DESTROY(sc);
-	ATH_TX_IC_LOCK_DESTROY(sc);
-	ATH_TX_LOCK_DESTROY(sc);
-	ATH_LOCK_DESTROY(sc);
+#ifdef	ATH_EEPROM_FIRMWARE
+bad4:
+#endif
 	bus_dma_tag_destroy(sc->sc_dmat);
 bad3:
 	bus_teardown_intr(dev, psc->sc_irq, psc->sc_ih);
@@ -271,6 +295,13 @@ bad2:
 	bus_release_resource(dev, SYS_RES_IRQ, 0, psc->sc_irq);
 bad1:
 	bus_release_resource(dev, SYS_RES_MEMORY, BS_BAR, psc->sc_sr);
+
+	ATH_TXSTATUS_LOCK_DESTROY(sc);
+	ATH_PCU_LOCK_DESTROY(sc);
+	ATH_RX_LOCK_DESTROY(sc);
+	ATH_TX_LOCK_DESTROY(sc);
+	ATH_LOCK_DESTROY(sc);
+
 bad:
 	return (error);
 }
@@ -304,7 +335,6 @@ ath_pci_detach(device_t dev)
 	ATH_TXSTATUS_LOCK_DESTROY(sc);
 	ATH_PCU_LOCK_DESTROY(sc);
 	ATH_RX_LOCK_DESTROY(sc);
-	ATH_TX_IC_LOCK_DESTROY(sc);
 	ATH_TX_LOCK_DESTROY(sc);
 	ATH_LOCK_DESTROY(sc);
 
@@ -362,7 +392,8 @@ static driver_t ath_pci_driver = {
 	sizeof (struct ath_pci_softc)
 };
 static	devclass_t ath_devclass;
-DRIVER_MODULE(ath_pci, pci, ath_pci_driver, ath_devclass, 0, 0);
-MODULE_VERSION(ath_pci, 1);
-MODULE_DEPEND(ath_pci, wlan, 1, 1, 1);		/* 802.11 media layer */
-MODULE_DEPEND(ath_pci, if_ath, 1, 1, 1);	/* if_ath driver */
+DRIVER_MODULE(if_ath_pci, pci, ath_pci_driver, ath_devclass, 0, 0);
+MODULE_VERSION(if_ath_pci, 1);
+MODULE_DEPEND(if_ath_pci, wlan, 1, 1, 1);		/* 802.11 media layer */
+MODULE_DEPEND(if_ath_pci, ath_main, 1, 1, 1);	/* if_ath driver */
+MODULE_DEPEND(if_ath_pci, ath_hal, 1, 1, 1);	/* ath HAL */

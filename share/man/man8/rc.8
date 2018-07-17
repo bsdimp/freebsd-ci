@@ -12,11 +12,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 3. All advertising materials mentioning features or use of this software
-.\"    must display the following acknowledgement:
-.\"	This product includes software developed by the University of
-.\"	California, Berkeley and its contributors.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -35,7 +31,7 @@
 .\"     @(#)rc.8	8.2 (Berkeley) 12/11/93
 .\" $FreeBSD$
 .\"
-.Dd January 14, 2012
+.Dd April 25, 2017
 .Dt RC 8
 .Os
 .Sh NAME
@@ -91,6 +87,9 @@ The
 .Nm rc.d/
 directories contain scripts which will be automatically
 executed at boot time and shutdown time.
+.Pp
+The sysrc(8) command provides a scripting interface to modify system
+config files.
 .Ss Operation of Nm
 .Bl -enum
 .It
@@ -124,6 +123,15 @@ Load the configuration files.
 Determine if booting in a jail,
 and add
 .Dq Li nojail
+(no jails allowed) or
+.Dq Li nojailvnet
+(only allow vnet-enabled jails) to the list of KEYWORDS to skip in
+.Xr rcorder 8 .
+.It
+If the file
+.Va ${firstboot_sentinel}
+does not exist, add
+.Dq Li firstboot
 to the list of KEYWORDS to skip in
 .Xr rcorder 8 .
 .It
@@ -154,6 +162,11 @@ Stop processing when the script that is the value of the
 .Va $early_late_divider
 has been run.
 .It
+Check again to see if the file
+.Va ${firstboot_sentinel}
+exists (in case it is located on a newly mounted file system)
+and adjust the list of KEYWORDs to skip appropriately.
+.It
 Re-run
 .Xr rcorder 8 ,
 this time including the scripts in the
@@ -162,6 +175,13 @@ directories.
 Ignore everything up to the
 .Va $early_late_divider ,
 then start executing the scripts as described above.
+.It
+If the file
+.Va ${firstboot_sentinel}
+exists, delete it.
+If the file
+.Va ${firstboot_sentinel}-reboot
+also exists (because it was created by a script), then delete it and reboot.
 .El
 .Ss Operation of Nm rc.shutdown
 .Bl -enum
@@ -221,7 +241,7 @@ network configuration.
 .It Pa SERVERS
 Ensure basic services
 exist for services that start early (such as
-.Pa named ) ,
+.Pa nisdomain ) ,
 because they are required by
 .Pa DAEMON
 below.
@@ -306,10 +326,17 @@ If the script starts a process (rather than performing a one-off
 operation), show the status of the process.
 Otherwise it is not necessary to support this argument.
 Defaults to displaying the process ID of the program (if running).
+.It Cm describe
+Print a short description of what the script does.
+.It Cm extracommands
+Print the script's non-standard commands.
 .It Cm poll
 If the script starts a process (rather than performing a one-off
 operation), wait for the command to exit.
 Otherwise it is not necessary to support this argument.
+.It Cm enabled
+Return 0 if the service is enabled and 1 if it is not.
+This command does not print anything.
 .It Cm rcvar
 Display which
 .Xr rc.conf 5
@@ -431,15 +458,6 @@ disables the loading of firewall rules
 will load the rules in the given filename (full path required).
 .El
 .Pp
-The
-.Pa /etc/rc.d/atm*
-scripts are used to configure ATM network interfaces.
-The interfaces are configured in three passes.
-The first pass performs the initial interface configuration.
-The second pass completes the interface configuration and defines PVCs and
-permanent ATMARP entries.
-The third pass starts any ATM daemons.
-.Pp
 Most daemons, including network related daemons, have their own script in
 .Pa /etc/rc.d/ ,
 which can be used to start, stop, and check the status of the service.
@@ -530,10 +548,11 @@ is unnecessary, but is often included.
 .Xr kill 1 ,
 .Xr rc.conf 5 ,
 .Xr init 8 ,
-.Xr rcorder 8 ,
 .Xr rc.subr 8 ,
+.Xr rcorder 8 ,
 .Xr reboot 8 ,
-.Xr savecore 8
+.Xr savecore 8 ,
+.Xr sysrc 8
 .Sh HISTORY
 The
 .Nm

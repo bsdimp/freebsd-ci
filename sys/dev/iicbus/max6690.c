@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Andreas Tobler
  * All rights reserved.
  *
@@ -340,6 +342,10 @@ max6690_sensor_read(struct max6690_sensor *sens)
 	}
 
 	err = max6690_read(sc->sc_dev, sc->sc_addr, reg_int, &integer);
+
+	if (err < 0)
+		return (-1);
+
 	err = max6690_read(sc->sc_dev, sc->sc_addr, reg_ext, &fraction);
 
 	if (err < 0)
@@ -362,7 +368,7 @@ max6690_sensor_sysctl(SYSCTL_HANDLER_ARGS)
 	struct max6690_softc *sc;
 	struct max6690_sensor *sens;
 	int error;
-	unsigned int temp;
+	int temp;
 
 	dev = arg1;
 	sc = device_get_softc(dev);

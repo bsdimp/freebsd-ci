@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Scott Long <scottl@freebsd.org>
  * Copyright (c) 2001 Darrell Anderson <anderson@cs.duke.edu>
  * All rights reserved.
@@ -1317,7 +1319,6 @@ m3_pci_attach(device_t dev)
 {
 	struct sc_info *sc;
 	struct ac97_info *codec = NULL;
-	u_int32_t data;
 	char status[SND_STATUSLEN];
 	struct m3_card_type *card;
 	int i, len, dacn, adcn;
@@ -1351,9 +1352,7 @@ m3_pci_attach(device_t dev)
 
 	adcn = M3_RCHANS;
 
-	data = pci_read_config(dev, PCIR_COMMAND, 2);
-	data |= (PCIM_CMD_PORTEN | PCIM_CMD_MEMEN | PCIM_CMD_BUSMASTEREN);
-	pci_write_config(dev, PCIR_COMMAND, data, 2);
+	pci_enable_busmaster(dev);
 
 	sc->regid = PCIR_BAR(0);
 	sc->regtype = SYS_RES_MEMORY;
@@ -1443,7 +1442,7 @@ m3_pci_attach(device_t dev)
 			goto bad;
 		}
 	}
- 	snprintf(status, SND_STATUSLEN, "at %s 0x%lx irq %ld %s",
+ 	snprintf(status, SND_STATUSLEN, "at %s 0x%jx irq %jd %s",
 	    (sc->regtype == SYS_RES_IOPORT)? "io" : "memory",
 	    rman_get_start(sc->reg), rman_get_start(sc->irq),
 	    PCM_KLDSTRING(snd_maestro3));

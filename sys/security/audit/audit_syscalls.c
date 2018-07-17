@@ -1,6 +1,14 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1999-2009 Apple Inc.
+ * Copyright (c) 2016 Robert N. M. Watson
  * All rights reserved.
+ *
+ * Portions of this software were developed by BAE Systems, the University of
+ * Cambridge Computer Laboratory, and Memorial University under DARPA/AFRL
+ * contract FA8650-15-C-7558 ("CADETS"), as part of the DARPA Transparent
+ * Computing (TC) research program.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -195,10 +203,12 @@ sys_auditon(struct thread *td, struct auditon_args *uap)
 	case A_SETCOND:
 	case A_OLDSETCOND:
 	case A_SETCLASS:
+	case A_SETEVENT:
 	case A_SETPMASK:
 	case A_SETFSIZE:
 	case A_SETKAUDIT:
 	case A_GETCLASS:
+	case A_GETEVENT:
 	case A_GETPINFO:
 	case A_GETPINFO_ADDR:
 	case A_SENDTRIGGER:
@@ -241,7 +251,7 @@ sys_auditon(struct thread *td, struct auditon_args *uap)
 	case A_OLDSETPOLICY:
 	case A_SETPOLICY:
 		if (uap->length == sizeof(udata.au_policy64)) {
-			if (udata.au_policy & (~AUDIT_CNT|AUDIT_AHLT|
+			if (udata.au_policy & ~(AUDIT_CNT|AUDIT_AHLT|
 			    AUDIT_ARGV|AUDIT_ARGE))
 				return (EINVAL);
 			audit_fail_stop = ((udata.au_policy64 & AUDIT_CNT) ==
@@ -299,11 +309,11 @@ sys_auditon(struct thread *td, struct auditon_args *uap)
 	case A_OLDSETQCTRL:
 	case A_SETQCTRL:
 		if (uap->length == sizeof(udata.au_qctrl64)) {
+			/* NB: aq64_minfree is unsigned unlike aq_minfree. */
 			if ((udata.au_qctrl64.aq64_hiwater > AQ_MAXHIGH) ||
 			    (udata.au_qctrl64.aq64_lowater >=
 			    udata.au_qctrl.aq_hiwater) ||
 			    (udata.au_qctrl64.aq64_bufsz > AQ_MAXBUFSZ) ||
-			    (udata.au_qctrl64.aq64_minfree < 0) ||
 			    (udata.au_qctrl64.aq64_minfree > 100))
 				return (EINVAL);
 			audit_qctrl.aq_hiwater =
@@ -404,11 +414,31 @@ sys_auditon(struct thread *td, struct auditon_args *uap)
 		    udata.au_evclass.ec_number);
 		break;
 
+	case A_GETEVENT:
+		if (uap->length != sizeof(udata.au_evname))
+			return (EINVAL);
+		error = au_event_name(udata.au_evname.en_number,
+		    udata.au_evname.en_name);
+		if (error != 0)
+			return (error);
+		break;
+
 	case A_SETCLASS:
 		if (uap->length != sizeof(udata.au_evclass))
 			return (EINVAL);
 		au_evclassmap_insert(udata.au_evclass.ec_number,
 		    udata.au_evclass.ec_class);
+		break;
+
+	case A_SETEVENT:
+		if (uap->length != sizeof(udata.au_evname))
+			return (EINVAL);
+
+		/* Ensure nul termination from userspace. */
+		udata.au_evname.en_name[sizeof(udata.au_evname.en_name) - 1]
+		    = 0;
+		au_evnamemap_insert(udata.au_evname.en_number,
+		    udata.au_evname.en_name);
 		break;
 
 	case A_GETPINFO:
@@ -461,7 +491,7 @@ sys_auditon(struct thread *td, struct auditon_args *uap)
 		    udata.au_aupinfo.ap_mask.am_success;
 		newcred->cr_audit.ai_mask.am_failure =
 		    udata.au_aupinfo.ap_mask.am_failure;
-		td->td_proc->p_ucred = newcred;
+		proc_set_cred(tp, newcred);
 		PROC_UNLOCK(tp);
 		crfree(oldcred);
 		break;
@@ -600,7 +630,7 @@ sys_setauid(struct thread *td, struct setauid_args *uap)
 	if (error)
 		goto fail;
 	newcred->cr_audit.ai_auid = id;
-	td->td_proc->p_ucred = newcred;
+	proc_set_cred(td->td_proc, newcred);
 	PROC_UNLOCK(td->td_proc);
 	crfree(oldcred);
 	return (0);
@@ -671,7 +701,7 @@ sys_setaudit(struct thread *td, struct setaudit_args *uap)
 	newcred->cr_audit.ai_termid.at_addr[0] = ai.ai_termid.machine;
 	newcred->cr_audit.ai_termid.at_port = ai.ai_termid.port;
 	newcred->cr_audit.ai_termid.at_type = AU_IPv4;
-	td->td_proc->p_ucred = newcred;
+	proc_set_cred(td->td_proc, newcred);
 	PROC_UNLOCK(td->td_proc);
 	crfree(oldcred);
 	return (0);
@@ -728,7 +758,7 @@ sys_setaudit_addr(struct thread *td, struct setaudit_addr_args *uap)
 	if (error)
 		goto fail;
 	newcred->cr_audit = aia;
-	td->td_proc->p_ucred = newcred;
+	proc_set_cred(td->td_proc, newcred);
 	PROC_UNLOCK(td->td_proc);
 	crfree(oldcred);
 	return (0);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -94,6 +96,26 @@ musbotg_clocks_off(void *arg)
 #endif
 }
 
+static void
+musbotg_wrapper_interrupt(void *arg)
+{
+
+	/* 
+	 * Nothing to do.
+	 * Main driver takes care about everything 
+	 */
+	musbotg_interrupt(arg, 0, 0, 0);
+}
+
+static void
+musbotg_ep_int_set(struct musbotg_softc *sc, int ep, int on)
+{
+	/* 
+	 * Nothing to do.
+	 * Main driver takes care about everything 
+	 */
+}
+
 static int
 musbotg_probe(device_t dev)
 {
@@ -117,6 +139,7 @@ musbotg_attach(device_t dev)
 	sc->sc_otg.sc_bus.parent = dev;
 	sc->sc_otg.sc_bus.devices = sc->sc_otg.sc_devices;
 	sc->sc_otg.sc_bus.devices_max = MUSB2_MAX_DEVICES;
+	sc->sc_otg.sc_bus.dma_bits = 32;
 
 	/* get all DMA memory */
 	if (usb_bus_mem_alloc_all(&sc->sc_otg.sc_bus,
@@ -147,12 +170,16 @@ musbotg_attach(device_t dev)
 	}
 	device_set_ivars(sc->sc_otg.sc_bus.bdev, &sc->sc_otg.sc_bus);
 
+	sc->sc_otg.sc_id = 0;
+	sc->sc_otg.sc_platform_data = sc;
+	sc->sc_otg.sc_mode = MUSB2_DEVICE_MODE;
+
 #if (__FreeBSD_version >= 700031)
 	err = bus_setup_intr(dev, sc->sc_otg.sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
-	    NULL, (driver_intr_t *)musbotg_interrupt, sc, &sc->sc_otg.sc_intr_hdl);
+	    NULL, (driver_intr_t *)musbotg_wrapper_interrupt, sc, &sc->sc_otg.sc_intr_hdl);
 #else
 	err = bus_setup_intr(dev, sc->sc_otg.sc_irq_res, INTR_TYPE_BIO | INTR_MPSAFE,
-	    (driver_intr_t *)musbotg_interrupt, sc, &sc->sc_otg.sc_intr_hdl);
+	    (driver_intr_t *)musbotg_wrapper_interrupt, sc, &sc->sc_otg.sc_intr_hdl);
 #endif
 	if (err) {
 		sc->sc_otg.sc_intr_hdl = NULL;
@@ -179,14 +206,8 @@ static int
 musbotg_detach(device_t dev)
 {
 	struct musbotg_super_softc *sc = device_get_softc(dev);
-	device_t bdev;
 	int err;
 
-	if (sc->sc_otg.sc_bus.bdev) {
-		bdev = sc->sc_otg.sc_bus.bdev;
-		device_detach(bdev);
-		device_delete_child(dev, bdev);
-	}
 	/* during module unload there are lots of children leftover */
 	device_delete_children(dev);
 

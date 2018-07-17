@@ -82,11 +82,11 @@ static char pathbuf[MAXPATHLEN + 1];
 static const char *allv[] = {
 	"rpcgen", "-s", "udp", "-s", "tcp",
 };
-static int allc = sizeof (allv)/sizeof (allv[0]);
+static int allc = nitems(allv);
 static const char *allnv[] = {
 	"rpcgen", "-s", "netpath",
 };
-static int allnc = sizeof (allnv)/sizeof (allnv[0]);
+static int allnc = nitems(allnv);
 
 /*
  * machinations for handling expanding argument list
@@ -451,7 +451,7 @@ generate_guard(const char *pathname)
 	char *guard, *tmp, *stopat;
 
 	filename = strrchr(pathname, '/');  /* find last component */
-	filename = ((filename == 0) ? pathname : filename+1);
+	filename = ((filename == NULL) ? pathname : filename+1);
 	guard = xstrdup(filename);
 	stopat = strrchr(guard, '.');
 
@@ -484,7 +484,9 @@ generate_guard(const char *pathname)
 			;
 		strcpy(guard, tmp);
 	}
+	tmp = guard;
 	guard = extendfile(guard, "_H_RPCGEN");
+	free(tmp);
 	return (guard);
 }
 
@@ -502,13 +504,14 @@ h_output(const char *infile, const char *define, int extend, const char *outfile
 	const char *guard;
 	list *l;
 	xdrfunc *xdrfuncp;
+	void *tmp = NULL;
 
 	open_input(infile, define);
 	outfilename =  extend ? extendfile(infile, outfile) : outfile;
 	open_output(infile, outfilename);
 	add_warning();
 	if (outfilename || infile){
-		guard = generate_guard(outfilename ? outfilename: infile);
+		guard = tmp = generate_guard(outfilename ? outfilename: infile);
 	} else
 		guard = "STDIN_";
 
@@ -574,6 +577,7 @@ h_output(const char *infile, const char *define, int extend, const char *outfile
 	f_print(fout, "#endif\n");
 
 	f_print(fout, "\n#endif /* !_%s */\n", guard);
+	free(tmp);
 }
 
 /*
@@ -776,6 +780,8 @@ clnt_output(const char *infile, const char *define, int extend, const char *outf
 		free(include);
 	} else
 		f_print(fout, "#include <rpc/rpc.h>\n");
+	f_print(fout, "#include <stdio.h>\n");
+	f_print(fout, "#include <stdlib.h>\n");
 	tell = ftell(fout);
 	while ( (def = get_definition()) ) {
 		has_program += write_sample_clnt(def);
@@ -863,6 +869,10 @@ $(TARGETS_SVC.c:%%.c=%%.o) ");
 	f_print(fout, "all : $(CLIENT) $(SERVER)\n\n");
 	f_print(fout, "$(TARGETS) : $(SOURCES.x) \n");
 	f_print(fout, "\trpcgen $(RPCGENFLAGS) $(SOURCES.x)\n\n");
+	if (allfiles) {
+		f_print(fout, "\trpcgen -Sc $(RPCGENFLAGS) $(SOURCES.x) -o %s\n\n", clientname);
+		f_print(fout, "\trpcgen -Ss $(RPCGENFLAGS) $(SOURCES.x) -o %s\n\n", servername);
+	}
 	f_print(fout, "$(OBJECTS_CLNT) : $(SOURCES_CLNT.c) $(SOURCES_CLNT.h) \
 $(TARGETS_CLNT.c) \n\n");
 
@@ -872,8 +882,8 @@ $(TARGETS_SVC.c) \n\n");
 	f_print(fout, "\t$(CC) -o $(CLIENT) $(OBJECTS_CLNT) \
 $(LDLIBS) \n\n");
 	f_print(fout, "$(SERVER) : $(OBJECTS_SVC) \n");
-	f_print(fout, "\t$(CC) -o $(SERVER) $(OBJECTS_SVC) $(LDLIBS)\n\n ");
-	f_print(fout, "clean:\n\t $(RM) -f core $(TARGETS) $(OBJECTS_CLNT) \
+	f_print(fout, "\t$(CC) -o $(SERVER) $(OBJECTS_SVC) $(LDLIBS)\n\n");
+	f_print(fout, "clean:\n\t rm -f core $(TARGETS) $(OBJECTS_CLNT) \
 $(OBJECTS_SVC) $(CLIENT) $(SERVER)\n\n");
 }
 
@@ -971,7 +981,7 @@ checkfiles(const char *infile, const char *outfile)
 		{
 			warn("%s", infile);
 			crash();
-		};
+		}
 	if (outfile) {
 		if (stat(outfile, &buf) < 0)
 			return;	/* file does not exist */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 2003-2011 Netlogic Microsystems (Netlogic). All rights
  * reserved.
  *
@@ -12,11 +14,11 @@
  *    notice, this list of conditions and the following disclaimer in
  *    the documentation and/or other materials provided with the
  *    distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY Netlogic Microsystems ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL NETLOGIC OR CONTRIBUTORS BE 
+ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL NETLOGIC OR CONTRIBUTORS BE
  * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
  * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
@@ -75,7 +77,10 @@ nlm_get_device_frequency(uint64_t sysbase, int devtype)
 	dfsdiv = ((div_val >> (devtype << 2)) & 0xf) + 1;
 	spf = (pllctrl >> 3 & 0x7f) + 1;
 	spr = (pllctrl >> 1 & 0x03) + 1;
-	extra_div = nlm_is_xlp8xx_ax() ? 1 : 2;
+	if (devtype == DFS_DEVICE_NAE && !nlm_is_xlp8xx_ax())
+		extra_div = 2;
+	else
+		extra_div = 1;
 
 	return ((400 * spf) / (3 * extra_div * spr * dfsdiv));
 }

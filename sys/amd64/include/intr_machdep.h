@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 John Baldwin <jhb@FreeBSD.org>
  * All rights reserved.
  *
@@ -44,12 +46,25 @@
  * allocate IDT vectors.
  *
  * The first 255 IRQs (0 - 254) are reserved for ISA IRQs and PCI intline IRQs.
- * IRQ values beyond 256 are used by MSI.  We leave 255 unused to avoid
- * confusion since 255 is used in PCI to indicate an invalid IRQ.
+ * IRQ values from 256 to 767 are used by MSI.  When running under the Xen
+ * Hypervisor, IRQ values from 768 to 4863 are available for binding to
+ * event channel events.  We leave 255 unused to avoid confusion since 255 is
+ * used in PCI to indicate an invalid IRQ.
  */
 #define	NUM_MSI_INTS	512
 #define	FIRST_MSI_INT	256
-#define	NUM_IO_INTS	(FIRST_MSI_INT + NUM_MSI_INTS)
+#ifdef XENHVM
+#include <xen/xen-os.h>
+#include <xen/interface/event_channel.h>
+#define	NUM_EVTCHN_INTS	NR_EVENT_CHANNELS
+#define	FIRST_EVTCHN_INT \
+    (FIRST_MSI_INT + NUM_MSI_INTS)
+#define	LAST_EVTCHN_INT \
+    (FIRST_EVTCHN_INT + NUM_EVTCHN_INTS - 1)
+#else
+#define	NUM_EVTCHN_INTS	0
+#endif
+#define	NUM_IO_INTS	(FIRST_MSI_INT + NUM_MSI_INTS + NUM_EVTCHN_INTS)
 
 /*
  * Default base address for MSI messages on x86 platforms.
@@ -70,7 +85,7 @@
 
 #ifndef LOCORE
 
-typedef void inthand_t(u_int cs, u_int ef, u_int esp, u_int ss);
+typedef void inthand_t(void);
 
 #define	IDTVEC(name)	__CONCAT(X,name)
 
@@ -90,10 +105,11 @@ struct pic {
 	int (*pic_vector)(struct intsrc *);
 	int (*pic_source_pending)(struct intsrc *);
 	void (*pic_suspend)(struct pic *);
-	void (*pic_resume)(struct pic *);
+	void (*pic_resume)(struct pic *, bool suspend_cancelled);
 	int (*pic_config_intr)(struct intsrc *, enum intr_trigger,
 	    enum intr_polarity);
 	int (*pic_assign_cpu)(struct intsrc *, u_int apic_id);
+	void (*pic_reprogram_pin)(struct intsrc *);
 	TAILQ_ENTRY(pic) pics;
 };
 
@@ -116,21 +132,29 @@ struct intsrc {
 	u_long *is_straycount;
 	u_int is_index;
 	u_int is_handlers;
+	u_int is_domain;
+	u_int is_cpu;
 };
 
 struct trapframe;
 
 /*
  * The following data structure holds per-cpu data, and is placed just
- * above the top of the space used for the NMI stack.
+ * above the top of the space used for the NMI and MC# stacks.
  */
 struct nmi_pcpu {
 	register_t	np_pcpu;
 	register_t	__padding;	/* pad to 16 bytes */
 };
 
+#ifdef SMP
+extern cpuset_t intr_cpus;
+#endif
 extern struct mtx icu_lock;
 extern int elcr_found;
+#ifdef SMP
+extern int msix_disable_migration;
+#endif
 
 #ifndef DEV_ATPIC
 void	atpic_reset(void);
@@ -145,7 +169,7 @@ void	intr_add_cpu(u_int cpu);
 #endif
 int	intr_add_handler(const char *name, int vector, driver_filter_t filter, 
 			 driver_intr_t handler, void *arg, enum intr_type flags, 
-			 void **cookiep);    
+			 void **cookiep, int domain);    
 #ifdef SMP
 int	intr_bind(u_int vector, u_char cpu);
 #endif
@@ -153,13 +177,14 @@ int	intr_config_intr(int vector, enum intr_trigger trig,
     enum intr_polarity pol);
 int	intr_describe(u_int vector, void *ih, const char *descr);
 void	intr_execute_handlers(struct intsrc *isrc, struct trapframe *frame);
-u_int	intr_next_cpu(void);
+u_int	intr_next_cpu(int domain);
 struct intsrc *intr_lookup_source(int vector);
 int	intr_register_pic(struct pic *pic);
 int	intr_register_source(struct intsrc *isrc);
 int	intr_remove_handler(void *cookie);
-void	intr_resume(void);
+void	intr_resume(bool suspend_cancelled);
 void	intr_suspend(void);
+void	intr_reprogram(void);
 void	intrcnt_add(const char *name, u_long **countp);
 void	nexus_add_irq(u_long irq);
 int	msi_alloc(device_t dev, int count, int maxcount, int *irqs);

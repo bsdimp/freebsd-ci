@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2012 The FreeBSD Foundation
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2012, 2013 The FreeBSD Foundation
  * All rights reserved.
  *
  * This software was developed by Oleksandr Rybalko under sponsorship
@@ -35,29 +37,19 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/kernel.h>
 #include <sys/module.h>
-#include <sys/malloc.h>
 #include <sys/rman.h>
 #include <sys/timeet.h>
 #include <sys/timetc.h>
-#include <sys/watchdog.h>
 #include <machine/bus.h>
-#include <machine/cpu.h>
-#include <machine/frame.h>
 #include <machine/intr.h>
+#include <machine/machdep.h> /* For arm_set_delay */
 
-#include <machine/fdt.h>
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
-#include <arm/freescale/imx/imx_gptvar.h>
+#include <arm/freescale/imx/imx_ccmvar.h>
 #include <arm/freescale/imx/imx_gptreg.h>
-
-#include <sys/kdb.h>
-#include <arm/freescale/imx/imx51_ccmvar.h>
-
-#define	MIN_PERIOD		100LLU
 
 #define	WRITE4(_sc, _r, _v)						\
 	    bus_space_write_4((_sc)->sc_iot, (_sc)->sc_ioh, (_r), (_v))
@@ -73,20 +65,35 @@ static int	imx_gpt_timer_start(struct eventtimer *, sbintime_t,
     sbintime_t);
 static int	imx_gpt_timer_stop(struct eventtimer *);
 
+static void imx_gpt_do_delay(int, void *);
+
 static int imx_gpt_intr(void *);
 static int imx_gpt_probe(device_t);
 static int imx_gpt_attach(device_t);
 
 static struct timecounter imx_gpt_timecounter = {
-	.tc_name           = "i.MX GPT Timecounter",
+	.tc_name           = "iMXGPT",
 	.tc_get_timecount  = imx_gpt_get_timecount,
 	.tc_counter_mask   = ~0u,
 	.tc_frequency      = 0,
-	.tc_quality        = 500,
+	.tc_quality        = 1000,
 };
 
-struct imx_gpt_softc *imx_gpt_sc = NULL;
-static volatile int imx_gpt_delay_count = 300;
+struct imx_gpt_softc {
+	device_t 		sc_dev;
+	struct resource *	res[2];
+	bus_space_tag_t 	sc_iot;
+	bus_space_handle_t	sc_ioh;
+	void *			sc_ih;			/* interrupt handler */
+	uint32_t 		sc_period;
+	uint32_t 		sc_clksrc;
+	uint32_t 		clkfreq;
+	uint32_t		ir_reg;
+	struct eventtimer 	et;
+};
+
+/* Try to divide down an available fast clock to this frequency. */
+#define	TARGET_FREQUENCY	1000000000
 
 static struct resource_spec imx_gpt_spec[] = {
 	{ SYS_RES_MEMORY,	0,	RF_ACTIVE },
@@ -94,22 +101,48 @@ static struct resource_spec imx_gpt_spec[] = {
 	{ -1, 0 }
 };
 
+static struct ofw_compat_data compat_data[] = {
+	{"fsl,imx6dl-gpt", 1},
+	{"fsl,imx6q-gpt",  1},
+	{"fsl,imx6ul-gpt", 1},
+	{"fsl,imx53-gpt",  1},
+	{"fsl,imx51-gpt",  1},
+	{"fsl,imx31-gpt",  1},
+	{"fsl,imx27-gpt",  1},
+	{"fsl,imx25-gpt",  1},
+	{NULL,             0}
+};
+
 static int
 imx_gpt_probe(device_t dev)
 {
 
-	if (!ofw_bus_is_compatible(dev, "fsl,imx51-gpt"))
+	if (!ofw_bus_status_okay(dev))
 		return (ENXIO);
 
-	device_set_desc(dev, "Freescale i.MXxxx GPT timer");
-	return (BUS_PROBE_DEFAULT);
+	/*
+	 *  We only support a single unit, because the only thing this driver
+	 *  does with the complex timer hardware is supply the system
+	 *  timecounter and eventtimer.  There is nothing useful we can do with
+	 *  the additional device instances that exist in some chips.
+	 */
+	if (device_get_unit(dev) > 0)
+		return (ENXIO);
+
+	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data != 0) {
+		device_set_desc(dev, "Freescale i.MX GPT timer");
+		return (BUS_PROBE_DEFAULT);
+	}
+
+	return (ENXIO);
 }
 
 static int
 imx_gpt_attach(device_t dev)
 {
 	struct imx_gpt_softc *sc;
-	int err;
+	int ctlreg, err;
+	uint32_t basefreq, prescale, setup_ticks, t1, t2;
 
 	sc = device_get_softc(dev);
 
@@ -119,49 +152,93 @@ imx_gpt_attach(device_t dev)
 	}
 
 	sc->sc_dev = dev;
-	sc->sc_clksrc = GPT_CR_CLKSRC_IPG;
 	sc->sc_iot = rman_get_bustag(sc->res[0]);
 	sc->sc_ioh = rman_get_bushandle(sc->res[0]);
 
+	/*
+	 * For now, just automatically choose a good clock for the hardware
+	 * we're running on.  Eventually we could allow selection from the fdt;
+	 * the code in this driver will cope with any clock frequency.
+	 */
+	sc->sc_clksrc = GPT_CR_CLKSRC_IPG;
+
+	ctlreg = 0;
+
 	switch (sc->sc_clksrc) {
-	case GPT_CR_CLKSRC_NONE:
-		device_printf(dev, "can't run timer without clock source\n");
-		return (EINVAL);
-	case GPT_CR_CLKSRC_EXT:
-		device_printf(dev, "Not implemented. Geve me the way to get "
-		    "external clock source frequency\n");
-		return (EINVAL);
 	case GPT_CR_CLKSRC_32K:
-		sc->clkfreq = 32768;
+		basefreq = 32768;
+		break;
+	case GPT_CR_CLKSRC_IPG:
+		basefreq = imx_ccm_ipg_hz();
 		break;
 	case GPT_CR_CLKSRC_IPG_HIGH:
-		sc->clkfreq = imx51_get_clock(IMX51CLK_IPG_CLK_ROOT) * 2;
+		basefreq = imx_ccm_ipg_hz() * 2;
 		break;
+	case GPT_CR_CLKSRC_24M:
+		ctlreg |= GPT_CR_24MEN;
+		basefreq = 24000000;
+		break;
+	case GPT_CR_CLKSRC_NONE:/* Can't run without a clock. */
+	case GPT_CR_CLKSRC_EXT:	/* No way to get the freq of an ext clock. */
 	default:
-		sc->clkfreq = imx51_get_clock(IMX51CLK_IPG_CLK_ROOT);
+		device_printf(dev, "Unsupported clock source '%d'\n", 
+		    sc->sc_clksrc);
+		return (EINVAL);
 	}
-	device_printf(dev, "Run on %dKHz clock.\n", sc->clkfreq / 1000);
 
-	/* Reset */
-	WRITE4(sc, IMX_GPT_CR, GPT_CR_SWR);
-	/* Enable and setup counters */
-	WRITE4(sc, IMX_GPT_CR,
-	    GPT_CR_CLKSRC_IPG |	/* Use IPG clock */
-	    GPT_CR_FRR |	/* Just count (FreeRunner mode) */
-	    GPT_CR_STOPEN |	/* Run in STOP mode */
-	    GPT_CR_WAITEN |	/* Run in WAIT mode */
-	    GPT_CR_DBGEN);	/* Run in DEBUG mode */
-
-	/* Disable interrupts */
+	/*
+	 * The following setup sequence is from the I.MX6 reference manual,
+	 * "Selecting the clock source".  First, disable the clock and
+	 * interrupts.  This also clears input and output mode bits and in
+	 * general completes several of the early steps in the procedure.
+	 */
+	WRITE4(sc, IMX_GPT_CR, 0);
 	WRITE4(sc, IMX_GPT_IR, 0);
 
-	/* Tick every 10us */
-	/* XXX: must be calculated from clock source frequency */
-	WRITE4(sc, IMX_GPT_PR, 665);
-	/* Use 100 KHz */
-	sc->clkfreq = 100000;
+	/* Choose the clock and the power-saving behaviors. */
+	ctlreg |=
+	    sc->sc_clksrc |	/* Use selected clock */
+	    GPT_CR_FRR |	/* Just count (FreeRunner mode) */
+	    GPT_CR_STOPEN |	/* Run in STOP mode */
+	    GPT_CR_DOZEEN |	/* Run in DOZE mode */
+	    GPT_CR_WAITEN |	/* Run in WAIT mode */
+	    GPT_CR_DBGEN;	/* Run in DEBUG mode */
+	WRITE4(sc, IMX_GPT_CR, ctlreg);
 
-	/* Setup and enable the timer interrupt */
+	/*
+	 * The datasheet says to do the software reset after choosing the clock
+	 * source.  It says nothing about needing to wait for the reset to
+	 * complete, but the register description does document the fact that
+	 * the reset isn't complete until the SWR bit reads 0, so let's be safe.
+	 * The reset also clears all registers except for a few of the bits in
+	 * CR, but we'll rewrite all the CR bits when we start the counter.
+	 */
+	WRITE4(sc, IMX_GPT_CR, ctlreg | GPT_CR_SWR);
+	while (READ4(sc, IMX_GPT_CR) & GPT_CR_SWR)
+		continue;
+
+	/* Set a prescaler value that gets us near the target frequency. */
+	if (basefreq < TARGET_FREQUENCY) {
+		prescale = 0;
+		sc->clkfreq = basefreq;
+	} else {
+		prescale = basefreq / TARGET_FREQUENCY;
+		sc->clkfreq = basefreq / prescale;
+		prescale -= 1; /* 1..n range is 0..n-1 in hardware. */
+	}
+	WRITE4(sc, IMX_GPT_PR, prescale);
+
+	/* Clear the status register. */
+	WRITE4(sc, IMX_GPT_SR, GPT_IR_ALL);
+
+	/* Start the counter. */
+	WRITE4(sc, IMX_GPT_CR, ctlreg | GPT_CR_EN);
+
+	if (bootverbose)
+		device_printf(dev, "Running on %dKHz clock, base freq %uHz CR=0x%08x, PR=0x%08x\n",
+		    sc->clkfreq / 1000, basefreq, READ4(sc, IMX_GPT_CR), READ4(sc, IMX_GPT_PR));
+
+	/* Setup the timer interrupt. */
 	err = bus_setup_intr(dev, sc->res[1], INTR_TYPE_CLK, imx_gpt_intr,
 	    NULL, sc, &sc->sc_ih);
 	if (err != 0) {
@@ -171,35 +248,39 @@ imx_gpt_attach(device_t dev)
 		return (ENXIO);
 	}
 
-	sc->et.et_name = "i.MXxxx GPT Eventtimer";
+	/*
+	 * Measure how many clock ticks it takes to setup a one-shot event (it's
+	 * longer than you might think, due to wait states in accessing gpt
+	 * registers).  Scale up the result by a factor of 1.5 to be safe,
+	 * and use that to set the minimum eventtimer period we can schedule. In
+	 * the real world, the value works out to about 750ns on imx5 hardware.
+	 */
+	t1 = READ4(sc, IMX_GPT_CNT);
+	WRITE4(sc, IMX_GPT_OCR3, 0);
+	t2 = READ4(sc, IMX_GPT_CNT);
+	setup_ticks = ((t2 - t1 + 1) * 3) / 2;
+
+	/* Register as an eventtimer. */
+	sc->et.et_name = "iMXGPT";
 	sc->et.et_flags = ET_FLAGS_ONESHOT | ET_FLAGS_PERIODIC;
-	sc->et.et_quality = 1000;
+	sc->et.et_quality = 800;
 	sc->et.et_frequency = sc->clkfreq;
-	sc->et.et_min_period = (MIN_PERIOD << 32) / sc->et.et_frequency;
-	sc->et.et_max_period = (0xfffffffeLLU << 32) / sc->et.et_frequency;
+	sc->et.et_min_period = ((uint64_t)setup_ticks << 32) / sc->clkfreq;
+	sc->et.et_max_period = ((uint64_t)0xfffffffe  << 32) / sc->clkfreq;
 	sc->et.et_start = imx_gpt_timer_start;
 	sc->et.et_stop = imx_gpt_timer_stop;
 	sc->et.et_priv = sc;
 	et_register(&sc->et);
 
-	/* Disable interrupts */
-	WRITE4(sc, IMX_GPT_IR, 0);
-	/* ACK any panding interrupts */
-	WRITE4(sc, IMX_GPT_SR, (GPT_IR_ROV << 1) - 1);
-
-	if (device_get_unit(dev) == 0)
-	    imx_gpt_sc = sc;
-
+	/* Register as a timecounter. */
 	imx_gpt_timecounter.tc_frequency = sc->clkfreq;
+	imx_gpt_timecounter.tc_priv = sc;
 	tc_init(&imx_gpt_timecounter);
 
-	printf("clock: hz=%d stathz = %d\n", hz, stathz);
-
-	device_printf(sc->sc_dev, "timer clock frequency %d\n", sc->clkfreq);
-
-	imx_gpt_delay_count = imx51_get_clock(IMX51CLK_ARM_ROOT) / 4000000;
-
-	SET4(sc, IMX_GPT_CR, GPT_CR_EN);
+	/* If this is the first unit, store the softc for use in DELAY. */
+	if (device_get_unit(dev) == 0) {
+		arm_set_delay(imx_gpt_do_delay, sc);
+	}
 
 	return (0);
 }
@@ -217,24 +298,22 @@ imx_gpt_timer_start(struct eventtimer *et, sbintime_t first, sbintime_t period)
 		/* Set expected value */
 		WRITE4(sc, IMX_GPT_OCR2, READ4(sc, IMX_GPT_CNT) + sc->sc_period);
 		/* Enable compare register 2 Interrupt */
-		SET4(sc, IMX_GPT_IR, GPT_IR_OF2);
+		sc->ir_reg |= GPT_IR_OF2;
+		WRITE4(sc, IMX_GPT_IR, sc->ir_reg);
+		return (0);
 	} else if (first != 0) {
+		/* Enable compare register 3 interrupt if not already on. */
+		if ((sc->ir_reg & GPT_IR_OF3) == 0) {
+			sc->ir_reg |= GPT_IR_OF3;
+			WRITE4(sc, IMX_GPT_IR, sc->ir_reg);
+		}
 		ticks = ((uint32_t)et->et_frequency * first) >> 32;
-
-		/*
-		 * TODO: setupt second compare reg with time which will save
-		 * us in case correct one lost, f.e. if period to short and
-		 * setup done later than counter reach target value.
-		 */
 		/* Do not disturb, otherwise event will be lost */
 		spinlock_enter();
 		/* Set expected value */
-		WRITE4(sc, IMX_GPT_OCR1, READ4(sc, IMX_GPT_CNT) + ticks);
-		/* Enable compare register 1 Interrupt */
-		SET4(sc, IMX_GPT_IR, GPT_IR_OF1);
+		WRITE4(sc, IMX_GPT_OCR3, READ4(sc, IMX_GPT_CNT) + ticks);
 		/* Now everybody can relax */
 		spinlock_exit();
-
 		return (0);
 	}
 
@@ -248,35 +327,13 @@ imx_gpt_timer_stop(struct eventtimer *et)
 
 	sc = (struct imx_gpt_softc *)et->et_priv;
 
-	/* Disable OF2 Interrupt */
-	CLEAR4(sc, IMX_GPT_IR, GPT_IR_OF2);
-	WRITE4(sc, IMX_GPT_SR, GPT_IR_OF2);
+	/* Disable interrupts and clear any pending status. */
+	sc->ir_reg &= ~(GPT_IR_OF2 | GPT_IR_OF3);
+	WRITE4(sc, IMX_GPT_IR, sc->ir_reg);
+	WRITE4(sc, IMX_GPT_SR, GPT_IR_OF2 | GPT_IR_OF3);
 	sc->sc_period = 0;
 
 	return (0);
-}
-
-int
-imx_gpt_get_timerfreq(struct imx_gpt_softc *sc)
-{
-
-	return (sc->clkfreq);
-}
-
-void
-cpu_initclocks(void)
-{
-
-	if (!imx_gpt_sc) {
-		panic("%s: driver has not been initialized!", __func__);
-	}
-
-	cpu_initclocks_bsp();
-
-	/* Switch to DELAY using counter */
-	imx_gpt_delay_count = 0;
-	device_printf(imx_gpt_sc->sc_dev,
-	    "switch DELAY to use H/W counter\n");
 }
 
 static int
@@ -287,38 +344,42 @@ imx_gpt_intr(void *arg)
 
 	sc = (struct imx_gpt_softc *)arg;
 
-	/* Sometime we not get staus bit when interrupt arrive.  Cache? */
-	while (!(status = READ4(sc, IMX_GPT_SR)))
-		;
+	status = READ4(sc, IMX_GPT_SR);
 
-	if (status & GPT_IR_OF1) {
+	/*
+	* Clear interrupt status before invoking event callbacks.  The callback
+	* often sets up a new one-shot timer event and if the interval is short
+	* enough it can fire before we get out of this function.  If we cleared
+	* at the bottom we'd miss the interrupt and hang until the clock wraps.
+	*/
+	WRITE4(sc, IMX_GPT_SR, status);
+
+	/* Handle one-shot timer events. */
+	if (status & GPT_IR_OF3) {
 		if (sc->et.et_active) {
 			sc->et.et_event_cb(&sc->et, sc->et.et_arg);
 		}
 	}
+
+	/* Handle periodic timer events. */
 	if (status & GPT_IR_OF2) {
-		if (sc->et.et_active) {
+		if (sc->et.et_active)
 			sc->et.et_event_cb(&sc->et, sc->et.et_arg);
-			/* Set expected value */
+		if (sc->sc_period != 0)
 			WRITE4(sc, IMX_GPT_OCR2, READ4(sc, IMX_GPT_CNT) +
 			    sc->sc_period);
-		}
 	}
-
-	/* ACK */
-	WRITE4(sc, IMX_GPT_SR, status);
 
 	return (FILTER_HANDLED);
 }
 
-u_int
+static u_int
 imx_gpt_get_timecount(struct timecounter *tc)
 {
+	struct imx_gpt_softc *sc;
 
-	if (imx_gpt_sc == NULL)
-		return (0);
-
-	return (READ4(imx_gpt_sc, IMX_GPT_CNT));
+	sc = tc->tc_priv;
+	return (READ4(sc, IMX_GPT_CNT));
 }
 
 static device_method_t imx_gpt_methods[] = {
@@ -339,32 +400,26 @@ static devclass_t imx_gpt_devclass;
 EARLY_DRIVER_MODULE(imx_gpt, simplebus, imx_gpt_driver, imx_gpt_devclass, 0,
     0, BUS_PASS_TIMER);
 
-void
-DELAY(int usec)
+static void
+imx_gpt_do_delay(int usec, void *arg)
 {
-	int32_t counts;
-	uint32_t last;
+	struct imx_gpt_softc *sc = arg;
+	uint64_t curcnt, endcnt, startcnt, ticks;
 
 	/*
-	 * Check the timers are setup, if not just use a for loop for the
-	 * meantime.
+	 * Calculate the tick count with 64-bit values so that it works for any
+	 * clock frequency.  Loop until the hardware count reaches start+ticks.
+	 * If the 32-bit hardware count rolls over while we're looping, just
+	 * manually do a carry into the high bits after each read; don't worry
+	 * that doing this on each loop iteration is inefficient -- we're trying
+	 * to waste time here.
 	 */
-	if (imx_gpt_delay_count) {
-		for (; usec > 0; usec--)
-			for (counts = imx_gpt_delay_count; counts > 0;
-			    counts--)
-				/* Prevent optimizing out the loop */
-				cpufunc_nullop();
-		return;
+	ticks = 1 + ((uint64_t)usec * sc->clkfreq) / 1000000;
+	curcnt = startcnt = READ4(sc, IMX_GPT_CNT);
+	endcnt = startcnt + ticks;
+	while (curcnt < endcnt) {
+		curcnt = READ4(sc, IMX_GPT_CNT);
+		if (curcnt < startcnt)
+			curcnt += 1ULL << 32;
 	}
-
-	/* At least 1 count */
-	usec = MAX(1, usec / 100);
-
-	last = READ4(imx_gpt_sc, IMX_GPT_CNT) + usec;
-	while (READ4(imx_gpt_sc, IMX_GPT_CNT) < last) {
-		/* Prevent optimizing out the loop */
-		cpufunc_nullop();
-	}
-	/* TODO: use interrupt on OCR2 */
 }

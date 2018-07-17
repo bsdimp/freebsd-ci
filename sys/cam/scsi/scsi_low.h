@@ -6,6 +6,8 @@
 #define	SCSI_LOW_ALT_QTAG_ALLOCATE
 
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * [NetBSD for NEC PC-98 series]
  *  Copyright (c) 1995, 1996, 1997, 1998, 1999, 2000, 2001
  *	NetBSD/pc98 porting staff. All rights reserved.
@@ -44,10 +46,6 @@
 #ifndef	_SCSI_LOW_H_
 #define	_SCSI_LOW_H_
 
-/*================================================
- * Scsi low OSDEP 
- * (All os depend structures should be here!)
- ================================================*/
 /******** includes *******************************/
 
 #include <sys/bus.h>
@@ -59,57 +57,68 @@
 #include <cam/cam_debug.h>
 
 #include <cam/scsi/scsi_dvcfg.h>
-#include <i386/isa/ccbque.h>
+/************ ccbque.h ***************************/
+
+/*	$NetBSD$	*/
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * [NetBSD for NEC PC98 series]
+ *  Copyright (c) 1994, 1995, 1996 NetBSD/pc98 porting staff.
+ *  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions
+ *  are met:
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT,
+ * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
+ * ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ * $FreeBSD$
+ */
+/*
+ * Common command control queue funcs.
+ * Written by N. Honda.
+ */
+
+#define	CCB_MWANTED 0x01
+
+/* (I)  structure and prototype */
+#define GENERIC_CCB_ASSERT(DEV, CCBTYPE)				\
+TAILQ_HEAD(CCBTYPE##tab, CCBTYPE);					\
+struct CCBTYPE##que {							\
+	struct CCBTYPE##tab CCBTYPE##tab;				\
+	int count;							\
+	int maxccb;							\
+	u_int flags;							\
+};									\
+									\
+void DEV##_init_ccbque(int);						\
+struct CCBTYPE *DEV##_get_ccb(void);					\
+void DEV##_free_ccb(struct CCBTYPE *);
 
 /******** functions macro ************************/
 
 #undef	MSG_IDENTIFY
 
-/******** os depend interface structures **********/
-typedef	struct scsi_sense_data scsi_low_osdep_sense_data_t;
-
-struct scsi_low_osdep_interface {
-	device_t si_dev;
-
-	struct cam_sim *sim;
-	struct cam_path *path;
-
-	int si_poll_count;
-
-	struct callout_handle engage_ch;
-	struct callout_handle timeout_ch;
-#ifdef	SCSI_LOW_POWFUNC
-	struct callout_handle recover_ch;
-#endif
-};
-
-/******** os depend interface functions *************/
-struct slccb;
-struct scsi_low_softc;
-#define	SCSI_LOW_TIMEOUT_STOP		0
-#define	SCSI_LOW_TIMEOUT_START		1
-#define	SCSI_LOW_TIMEOUT_CH_IO		0
-#define	SCSI_LOW_TIMEOUT_CH_ENGAGE	1
-#define	SCSI_LOW_TIMEOUT_CH_RECOVER	2
-
-struct scsi_low_osdep_funcs {
-	int (*scsi_low_osdep_attach) \
-			(struct scsi_low_softc *);
-	int (*scsi_low_osdep_world_start) \
-			(struct scsi_low_softc *);
-	int (*scsi_low_osdep_dettach) \
-			(struct scsi_low_softc *);
-	int (*scsi_low_osdep_ccb_setup) \
-			(struct scsi_low_softc *, struct slccb *);
-	int (*scsi_low_osdep_done) \
-			(struct scsi_low_softc *, struct slccb *);
-	void (*scsi_low_osdep_timeout) \
-			(struct scsi_low_softc *, int, int);
-};
-
 /*================================================
  * Generic Scsi Low header file 
- * (All os depend structures should be above!)
  ================================================*/
 /*************************************************
  * Scsi low definitions
@@ -193,7 +202,7 @@ struct slccb {
 	 *****************************************/
 	struct sc_p ccb_scp;		/* given */
 	struct sc_p ccb_sscp;		/* saved scsi data pointer */
-	int ccb_datalen;		/* transfered data counter */
+	int ccb_datalen;		/* transferred data counter */
 
 	/*****************************************
 	 * Msgout 
@@ -212,7 +221,7 @@ struct slccb {
 #define	CCB_STARTQ	0x0010
 #define	CCB_POLLED	0x0100	/* polling ccb */
 #define	CCB_NORETRY	0x0200	/* do NOT retry */
-#define	CCB_AUTOSENSE	0x0400	/* do a sence after CA */
+#define	CCB_AUTOSENSE	0x0400	/* do a sense after CA */
 #define	CCB_URGENT	0x0800	/* an urgent ccb */
 #define	CCB_NOSDONE	0x1000	/* do not call an os done routine */
 #define	CCB_SCSIIO	0x2000	/* a normal scsi io coming from upper layer */
@@ -229,7 +238,7 @@ struct slccb {
 	 * Sense data buffer
 	 *****************************************/
 	u_int8_t ccb_scsi_cmd[12];
-	scsi_low_osdep_sense_data_t ccb_sense;
+	struct scsi_sense_data ccb_sense;
 };
 
 /*************************************************
@@ -486,10 +495,19 @@ struct scsi_low_funcs {
 };
 
 struct scsi_low_softc {
-	/* os depend structure */
-	struct scsi_low_osdep_interface sl_si;
-#define	sl_dev	sl_si.si_dev
-	struct scsi_low_osdep_funcs *sl_osdep_fp;
+	device_t sl_dev;
+
+	struct cam_sim *sl_sim;
+	struct cam_path *sl_path;
+
+	int sl_poll_count;
+
+	struct mtx sl_lock;
+	struct callout sl_engage_timer;
+	struct callout sl_timeout_timer;
+#ifdef	SCSI_LOW_POWFUNC
+	struct callout sl_recover_timer;
+#endif
 				
 	/* our chain */
 	LIST_ENTRY(scsi_low_softc) sl_chain;
@@ -596,6 +614,10 @@ struct scsi_low_softc {
 	int sl_targsize;
 };
 
+#define	SCSI_LOW_LOCK(sl)		mtx_lock(&(sl)->sl_lock)
+#define	SCSI_LOW_UNLOCK(sl)		mtx_unlock(&(sl)->sl_lock)
+#define	SCSI_LOW_ASSERT_LOCKED(sl)	mtx_assert(&(sl)->sl_lock, MA_OWNED)
+
 /*************************************************
  * SCSI LOW service functions
  *************************************************/
@@ -603,7 +625,7 @@ struct scsi_low_softc {
  * Scsi low attachment function.
  */
 int scsi_low_attach(struct scsi_low_softc *, int, int, int, int, int);
-int scsi_low_dettach(struct scsi_low_softc *);
+int scsi_low_detach(struct scsi_low_softc *);
 
 /* 
  * Scsi low interface activate or deactivate functions

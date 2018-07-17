@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -101,11 +103,11 @@ extern int EastLongitude;
 					 * program wrong.
 					 */
 
-/* 
+/*
  * All the astronomical calculations are carried out for the meridian 120
  * degrees east of Greenwich.
  */
-#define UTCOFFSET_CNY		8.0		
+#define UTCOFFSET_CNY		8.0
 
 extern int	debug;		/* show parsing of the input */
 extern int	year1, year2;
@@ -165,7 +167,8 @@ void	dodebug(char *type);
 /* io.c */
 void	cal(void);
 void	closecal(FILE *);
-FILE	*opencal(void);
+FILE	*opencalin(void);
+FILE	*opencalout(void);
 
 /* ostern.c / paskha.c */
 int	paskha(int);
@@ -174,7 +177,7 @@ int	j2g(int);
 
 /* dates.c */
 extern int cumdaytab[][14];
-extern int mondaytab[][14];
+extern int monthdaytab[][14];
 extern int debug_remember;
 void	generatedates(struct tm *tp1, struct tm *tp2);
 void	dumpdates(void);

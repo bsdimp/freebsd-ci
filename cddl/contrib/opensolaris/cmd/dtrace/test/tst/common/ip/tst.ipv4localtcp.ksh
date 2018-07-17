@@ -1,4 +1,4 @@
-#!/usr/bin/ksh
+#!/usr/bin/env ksh
 #
 # CDDL HEADER START
 #
@@ -32,8 +32,7 @@
 # 1. A change to the ip stack breaking expected probe behavior,
 #    which is the reason we are testing.
 # 2. The lo0 interface missing or not up.
-# 3. The local ssh service is not online.
-# 4. An unlikely race causes the unlocked global send/receive
+# 3. An unlikely race causes the unlocked global send/receive
 #    variables to be corrupted.
 #
 # This test performs a TCP connection and checks that at least the
@@ -58,11 +57,24 @@ fi
 
 dtrace=$1
 local=127.0.0.1
-tcpport=22
 DIR=/var/tmp/dtest.$$
+
+tcpport=1024
+bound=5000
+while [ $tcpport -lt $bound ]; do
+	nc -z $local $tcpport >/dev/null || break
+	tcpport=$(($tcpport + 1))
+done
+if [ $tcpport -eq $bound ]; then
+	echo "couldn't find an available TCP port"
+	exit 1
+fi
 
 mkdir $DIR
 cd $DIR
+
+# nc will exit when the connection is closed.
+nc -l $local $tcpport &
 
 cat > test.pl <<-EOPERL
 	use IO::Socket;
@@ -73,9 +85,10 @@ cat > test.pl <<-EOPERL
 	    Timeout => 3);
 	die "Could not connect to host $local port $tcpport" unless \$s;
 	close \$s;
+	sleep(2);
 EOPERL
 
-$dtrace -c '/usr/bin/perl test.pl' -qs /dev/stdin <<EODTRACE
+$dtrace -c 'perl test.pl' -qs /dev/stdin <<EODTRACE
 BEGIN
 {
 	ipsend = tcpsend = ipreceive = tcpreceive = 0;

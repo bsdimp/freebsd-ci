@@ -24,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd April 10, 2010
+.Dd March 26, 2018
 .Dt WPA_SUPPLICANT.CONF 5
 .Os
 .Sh NAME
@@ -556,6 +556,21 @@ network={
 	wep_key1="FreeBSDr0cks!"
 }
 .Ed
+.Pp
+Minimal eduroam configuration.
+.Bd -literal
+ctrl_interface=/var/run/wpa_supplicant
+ctrl_interface_group=wheel
+network={
+        ssid="eduroam"
+        scan_ssid=1
+        key_mgmt=WPA-EAP
+        eap=TTLS
+        identity="user@example.org"
+        password="foobar"
+        phase2="auth=MSCHAPV2"
+}
+.Ed
 .Sh SEE ALSO
 .Xr wpa_cli 8 ,
 .Xr wpa_passphrase 8 ,
@@ -575,4 +590,4 @@ and
 files in the
 .Nm wpa_supplicant
 distribution provided by
-.An Jouni Malinen Aq j@w1.fi .
+.An Jouni Malinen Aq Mt j@w1.fi .

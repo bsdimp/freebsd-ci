@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Adrian Chadd <adrian@FreeBSD.org>
  * All rights reserved.
  *
@@ -58,7 +60,7 @@ uart_cpu_getdev(int devtype, struct uart_devinfo *di)
 {
 	uint64_t freq;
 
-	freq = ar71xx_refclk();
+	freq = ar71xx_uart_freq();
 
 	di->ops = uart_getops(&uart_ar933x_class);
 	di->bas.chan = 0;

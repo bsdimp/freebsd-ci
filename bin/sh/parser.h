@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -68,16 +70,16 @@
 
 /*
  * NEOF is returned by parsecmd when it encounters an end of file.  It
- * must be distinct from NULL, so we use the address of a variable that
- * happens to be handy.
+ * must be distinct from NULL.
  */
-extern int tokpushback;
-#define NEOF ((union node *)&tokpushback)
+#define NEOF ((union node *)-1)
 extern int whichprompt;		/* 1 == PS1, 2 == PS2 */
 extern const char *const parsekwd[];
 
 
 union node *parsecmd(int);
+union node *parsewordexp(void);
+void forcealias(void);
 void fixredir(union node *, const char *, int);
 int goodname(const char *);
 int isassignment(const char *);

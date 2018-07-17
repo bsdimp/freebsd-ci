@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -51,10 +53,7 @@ __FBSDID("$FreeBSD$");
 #define	POS_ERR	(-(fpos_t)1)
 
 int
-fseek(fp, offset, whence)
-	FILE *fp;
-	long offset;
-	int whence;
+fseek(FILE *fp, long offset, int whence)
 {
 	int ret;
 	int serrno = errno;
@@ -63,19 +62,16 @@ fseek(fp, offset, whence)
 	if (!__sdidinit)
 		__sinit();
 
-	FLOCKFILE(fp);
+	FLOCKFILE_CANCELSAFE(fp);
 	ret = _fseeko(fp, (off_t)offset, whence, 1);
-	FUNLOCKFILE(fp);
+	FUNLOCKFILE_CANCELSAFE();
 	if (ret == 0)
 		errno = serrno;
 	return (ret);
 }
 
 int
-fseeko(fp, offset, whence)
-	FILE *fp;
-	off_t offset;
-	int whence;
+fseeko(FILE *fp, off_t offset, int whence)
 {
 	int ret;
 	int serrno = errno;
@@ -84,9 +80,9 @@ fseeko(fp, offset, whence)
 	if (!__sdidinit)
 		__sinit();
 
-	FLOCKFILE(fp);
+	FLOCKFILE_CANCELSAFE(fp);
 	ret = _fseeko(fp, offset, whence, 0);
-	FUNLOCKFILE(fp);
+	FUNLOCKFILE_CANCELSAFE();
 	if (ret == 0)
 		errno = serrno;
 	return (ret);
@@ -97,11 +93,7 @@ fseeko(fp, offset, whence)
  * `Whence' must be one of the three SEEK_* macros.
  */
 int
-_fseeko(fp, offset, whence, ltest)
-	FILE *fp;
-	off_t offset;
-	int whence;
-	int ltest;
+_fseeko(FILE *fp, off_t offset, int whence, int ltest)
 {
 	fpos_t (*seekfn)(void *, fpos_t, int);
 	fpos_t target, curoff, ret;

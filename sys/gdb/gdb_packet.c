@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 Marcel Moolenaar
  * All rights reserved.
  *
@@ -31,6 +33,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/ctype.h>
 #include <sys/kdb.h>
+#include <sys/libkern.h>
 #include <sys/ttydefaults.h>
 
 #include <machine/gdb_machdep.h>
@@ -144,6 +147,7 @@ gdb_rx_mem(unsigned char *addr, size_t size)
 {
 	unsigned char *p;
 	void *prev;
+	void *wctx;
 	jmp_buf jb;
 	size_t cnt;
 	int ret;
@@ -152,6 +156,7 @@ gdb_rx_mem(unsigned char *addr, size_t size)
 	if (size * 2 != gdb_rxsz)
 		return (-1);
 
+	wctx = gdb_begin_write();
 	prev = kdb_jmpbuf(jb);
 	ret = setjmp(jb);
 	if (ret == 0) {
@@ -167,6 +172,7 @@ gdb_rx_mem(unsigned char *addr, size_t size)
 		kdb_cpu_sync_icache(addr, size);
 	}
 	(void)kdb_jmpbuf(prev);
+	gdb_end_write(wctx);
 	return ((ret == 0) ? 1 : 0);
 }
 
@@ -319,4 +325,47 @@ gdb_tx_reg(int regnum)
 		}
 	} else
 		gdb_tx_mem(regp, regsz);
+}
+
+/* Read binary data up until the end of the packet or until we have datalen decoded bytes */
+int
+gdb_rx_bindata(unsigned char *data, size_t datalen, size_t *amt)
+{
+	int c;
+
+	*amt = 0;
+
+	while (*amt < datalen) {
+		c = gdb_rx_char();
+		/* End of packet? */
+		if (c == -1)
+			break;
+		/* Escaped character up next */
+		if (c == '}') {
+			/* Truncated packet? Bail out */
+			if ((c = gdb_rx_char()) == -1)
+				return (1);
+			c ^= 0x20;
+		}
+		*(data++) = c & 0xff;
+		(*amt)++;
+	}
+
+	return (0);
+}
+
+int
+gdb_search_mem(const unsigned char *addr, size_t size, const unsigned char *pat, size_t patlen, const unsigned char **found)
+{
+	void *prev;
+	jmp_buf jb;
+	int ret;
+
+	prev = kdb_jmpbuf(jb);
+	ret = setjmp(jb);
+	if (ret == 0)
+		*found = memmem(addr, size, pat, patlen);
+
+	(void)kdb_jmpbuf(prev);
+	return ((ret == 0) ? 1 : 0);
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 John Baldwin <jhb@FreeBSD.org>
  * All rights reserved.
  *
@@ -10,9 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the author nor the names of any co-contributors
- *    may be used to endorse or promote products derived from this software
- *    without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -54,11 +53,7 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/ic/i8259.h>
 #include <x86/isa/icu.h>
-#ifdef PC98
-#include <pc98/cbus/cbus.h>
-#else
-#include <x86/isa/isa.h>
-#endif
+#include <isa/isareg.h>
 #include <isa/isavar.h>
 
 #ifdef __amd64__
@@ -85,6 +80,16 @@ inthand_t
 	IDTVEC(atpic_intr9), IDTVEC(atpic_intr10), IDTVEC(atpic_intr11),
 	IDTVEC(atpic_intr12), IDTVEC(atpic_intr13), IDTVEC(atpic_intr14),
 	IDTVEC(atpic_intr15);
+/* XXXKIB i386 uses stubs until pti comes */
+inthand_t
+	IDTVEC(atpic_intr0_pti), IDTVEC(atpic_intr1_pti),
+	IDTVEC(atpic_intr2_pti), IDTVEC(atpic_intr3_pti),
+	IDTVEC(atpic_intr4_pti), IDTVEC(atpic_intr5_pti),
+	IDTVEC(atpic_intr6_pti), IDTVEC(atpic_intr7_pti),
+	IDTVEC(atpic_intr8_pti), IDTVEC(atpic_intr9_pti),
+	IDTVEC(atpic_intr10_pti), IDTVEC(atpic_intr11_pti),
+	IDTVEC(atpic_intr12_pti), IDTVEC(atpic_intr13_pti),
+	IDTVEC(atpic_intr14_pti), IDTVEC(atpic_intr15_pti);
 
 #define	IRQ(ap, ai)	((ap)->at_irqbase + (ai)->at_irq)
 
@@ -97,7 +102,7 @@ inthand_t
 
 #define	INTSRC(irq)							\
 	{ { &atpics[(irq) / 8].at_pic }, IDTVEC(atpic_intr ## irq ),	\
-	    (irq) % 8 }
+	    IDTVEC(atpic_intr ## irq ## _pti), (irq) % 8 }
 
 struct atpic {
 	struct pic at_pic;
@@ -109,7 +114,7 @@ struct atpic {
 
 struct atpic_intsrc {
 	struct intsrc at_intsrc;
-	inthand_t *at_intr;
+	inthand_t *at_intr, *at_intr_pti;
 	int	at_irq;			/* Relative to PIC base. */
 	enum intr_trigger at_trigger;
 	u_long	at_count;
@@ -123,7 +128,7 @@ static void atpic_eoi_slave(struct intsrc *isrc);
 static void atpic_enable_intr(struct intsrc *isrc);
 static void atpic_disable_intr(struct intsrc *isrc);
 static int atpic_vector(struct intsrc *isrc);
-static void atpic_resume(struct pic *pic);
+static void atpic_resume(struct pic *pic, bool suspend_cancelled);
 static int atpic_source_pending(struct intsrc *isrc);
 static int atpic_config_intr(struct intsrc *isrc, enum intr_trigger trig,
     enum intr_polarity pol);
@@ -154,7 +159,7 @@ static struct atpic_intsrc atintrs[] = {
 	INTSRC(15),
 };
 
-CTASSERT(sizeof(atintrs) / sizeof(atintrs[0]) == NUM_ISA_IRQS);
+CTASSERT(nitems(atintrs) == NUM_ISA_IRQS);
 
 static __inline void
 _atpic_eoi_master(struct intsrc *isrc)
@@ -276,15 +281,13 @@ atpic_source_pending(struct intsrc *isrc)
 }
 
 static void
-atpic_resume(struct pic *pic)
+atpic_resume(struct pic *pic, bool suspend_cancelled)
 {
 	struct atpic *ap = (struct atpic *)pic;
 
 	i8259_init(ap, ap == &atpics[SLAVE]);
-#ifndef PC98
 	if (ap == &atpics[SLAVE] && elcr_found)
 		elcr_resume();
-#endif
 }
 
 static int
@@ -313,17 +316,6 @@ atpic_config_intr(struct intsrc *isrc, enum intr_trigger trig,
 	if (ai->at_trigger == trig)
 		return (0);
 
-#ifdef PC98
-	if ((vector == 0 || vector == 1 || vector == 7 || vector == 8) &&
-	    trig == INTR_TRIGGER_LEVEL) {
-		if (bootverbose)
-			printf(
-		"atpic: Ignoring invalid level/low configuration for IRQ%u\n",
-			    vector);
-		return (EINVAL);
-	}
-	return (ENXIO);
-#else
 	/*
 	 * Certain IRQs can never be level/lo, so don't try to set them
 	 * that way if asked.  At least some ELCR registers ignore setting
@@ -352,7 +344,6 @@ atpic_config_intr(struct intsrc *isrc, enum intr_trigger trig,
 	ai->at_trigger = trig;
 	spinlock_exit();
 	return (0);
-#endif /* PC98 */
 }
 
 static int
@@ -373,13 +364,7 @@ i8259_init(struct atpic *pic, int slave)
 
 	/* Reset the PIC and program with next four bytes. */
 	spinlock_enter();
-#ifdef DEV_MCA
-	/* MCA uses level triggered interrupts. */
-	if (MCA_system)
-		outb(pic->at_ioaddr, ICW1_RESET | ICW1_IC4 | ICW1_LTIM);
-	else
-#endif
-		outb(pic->at_ioaddr, ICW1_RESET | ICW1_IC4);
+	outb(pic->at_ioaddr, ICW1_RESET | ICW1_IC4);
 	imr_addr = pic->at_ioaddr + ICU_IMR_OFFSET;
 
 	/* Start vector. */
@@ -407,11 +392,10 @@ i8259_init(struct atpic *pic, int slave)
 	/* Reset is finished, default to IRR on read. */
 	outb(pic->at_ioaddr, OCW3_SEL | OCW3_RR);
 
-#ifndef PC98
 	/* OCW2_L1 sets priority order to 3-7, 0-2 (com2 first). */
 	if (!slave)
 		outb(pic->at_ioaddr, OCW2_R | OCW2_SL | OCW2_L1);
-#endif
+
 	spinlock_exit();
 }
 
@@ -434,31 +418,10 @@ atpic_startup(void)
 		ai->at_intsrc.is_count = &ai->at_count;
 		ai->at_intsrc.is_straycount = &ai->at_straycount;
 		setidt(((struct atpic *)ai->at_intsrc.is_pic)->at_intbase +
-		    ai->at_irq, ai->at_intr, SDT_ATPIC, SEL_KPL, GSEL_ATPIC);
+		    ai->at_irq, pti ? ai->at_intr_pti : ai->at_intr, SDT_ATPIC,
+		    SEL_KPL, GSEL_ATPIC);
 	}
 
-#ifdef DEV_MCA
-	/* For MCA systems, all interrupts are level triggered. */
-	if (MCA_system)
-		for (i = 0, ai = atintrs; i < NUM_ISA_IRQS; i++, ai++)
-			ai->at_trigger = INTR_TRIGGER_LEVEL;
-	else
-#endif
-
-#ifdef PC98
-	for (i = 0, ai = atintrs; i < NUM_ISA_IRQS; i++, ai++)
-		switch (i) {
-		case 0:
-		case 1:
-		case 7:
-		case 8:
-			ai->at_trigger = INTR_TRIGGER_EDGE;
-			break;
-		default:
-			ai->at_trigger = INTR_TRIGGER_LEVEL;
-			break;
-		}
-#else
 	/*
 	 * Look for an ELCR.  If we find one, update the trigger modes.
 	 * If we don't find one, assume that IRQs 0, 1, 2, and 13 are
@@ -488,7 +451,6 @@ atpic_startup(void)
 				break;
 			}
 	}
-#endif /* PC98 */
 }
 
 static void
@@ -527,7 +489,7 @@ atpic_init(void *dummy __unused)
 		intr_register_source(&ai->at_intsrc);
 	}
 }
-SYSINIT(atpic_init, SI_SUB_INTR, SI_ORDER_SECOND + 1, atpic_init, NULL);
+SYSINIT(atpic_init, SI_SUB_INTR, SI_ORDER_FOURTH, atpic_init, NULL);
 
 void
 atpic_handle_intr(u_int vector, struct trapframe *frame)
@@ -603,6 +565,21 @@ atpic_attach(device_t dev)
 	return (0);
 }
 
+/*
+ * Return a bitmap of the current interrupt requests.  This is 8259-specific
+ * and is only suitable for use at probe time.
+ */
+intrmask_t
+isa_irq_pending(void)
+{
+	u_char irr1;
+	u_char irr2;
+
+	irr1 = inb(IO_ICU1);
+	irr2 = inb(IO_ICU2);
+	return ((irr2 << 8) | irr1);
+}
+
 static device_method_t atpic_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_probe,		atpic_probe),
@@ -623,22 +600,6 @@ static driver_t atpic_driver = {
 static devclass_t atpic_devclass;
 
 DRIVER_MODULE(atpic, isa, atpic_driver, atpic_devclass, 0, 0);
-#ifndef PC98
 DRIVER_MODULE(atpic, acpi, atpic_driver, atpic_devclass, 0, 0);
-#endif
-
-/*
- * Return a bitmap of the current interrupt requests.  This is 8259-specific
- * and is only suitable for use at probe time.
- */
-intrmask_t
-isa_irq_pending(void)
-{
-	u_char irr1;
-	u_char irr2;
-
-	irr1 = inb(IO_ICU1);
-	irr2 = inb(IO_ICU2);
-	return ((irr2 << 8) | irr1);
-}
+ISA_PNP_INFO(atpic_ids);
 #endif /* DEV_ISA */

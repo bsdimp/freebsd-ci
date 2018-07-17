@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000-2004 Poul-Henning Kamp <phk@FreeBSD.org>
  * Copyright (c) 2012 The FreeBSD Foundation
  * All rights reserved.
@@ -47,6 +49,7 @@
 #include <inttypes.h>
 #include <libgeom.h>
 #include <libutil.h>
+#include <paths.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,9 +62,9 @@ static int nflag;
 
 static void usage(void);
 static void md_set_file(const char *);
-static int md_find(char *, const char *);
-static int md_query(char *name);
-static int md_list(char *units, int opt);
+static int md_find(const char *, const char *);
+static int md_query(const char *, const int, const char *);
+static int md_list(const char *, int, const char *);
 static char *geom_config_get(struct gconf *g, const char *name);
 static void md_prthumanval(char *length);
 
@@ -78,17 +81,17 @@ usage(void)
 
 	fprintf(stderr,
 "usage: mdconfig -a -t type [-n] [-o [no]option] ... [-f file]\n"
-"                [-s size] [-S sectorsize] [-u unit]\n"
+"                [-s size] [-S sectorsize] [-u unit] [-L label]\n"
 "                [-x sectors/track] [-y heads/cylinder]\n"
 "       mdconfig -d -u unit [-o [no]force]\n"
 "       mdconfig -r -u unit -s size [-o [no]force]\n"
-"       mdconfig -l [-v] [-n] [-u unit]\n"
+"       mdconfig -l [-v] [-n] [-f file] [-u unit]\n"
 "       mdconfig file\n");
 	fprintf(stderr, "\t\ttype = {malloc, vnode, swap}\n");
 	fprintf(stderr, "\t\toption = {cluster, compress, reserve}\n");
 	fprintf(stderr, "\t\tsize = %%d (512 byte blocks), %%db (B),\n");
-	fprintf(stderr, "\t\t       %%dk (kB), %%dm (MB), %%dg (GB) or\n");
-	fprintf(stderr, "\t\t       %%dt (TB)\n");
+	fprintf(stderr, "\t\t       %%dk (kB), %%dm (MB), %%dg (GB), \n");
+	fprintf(stderr, "\t\t       %%dt (TB), or %%dp (PB)\n");
 	exit(1);
 }
 
@@ -101,15 +104,17 @@ main(int argc, char **argv)
 
 	bzero(&mdio, sizeof(mdio));
 	mdio.md_file = malloc(PATH_MAX);
-	if (mdio.md_file == NULL)
+	mdio.md_label = malloc(PATH_MAX);
+	if (mdio.md_file == NULL || mdio.md_label == NULL)
 		err(1, "could not allocate memory");
 	vflag = 0;
 	bzero(mdio.md_file, PATH_MAX);
+	bzero(mdio.md_label, PATH_MAX);
 
 	if (argc == 1)
 		usage();
 
-	while ((ch = getopt(argc, argv, "ab:df:lno:rs:S:t:u:vx:y:")) != -1) {
+	while ((ch = getopt(argc, argv, "ab:df:lno:rs:S:t:u:vx:y:L:")) != -1) {
 		switch (ch) {
 		case 'a':
 			if (action != UNSET && action != ATTACH)
@@ -154,13 +159,18 @@ main(int argc, char **argv)
 			} else if (!strcmp(optarg, "swap")) {
 				mdio.md_type = MD_SWAP;
 				mdio.md_options |= MD_CLUSTER | MD_AUTOUNIT | MD_COMPRESS;
+			} else if (!strcmp(optarg, "null")) {
+				mdio.md_type = MD_NULL;
+				mdio.md_options |= MD_CLUSTER | MD_AUTOUNIT | MD_COMPRESS;
 			} else
 				errx(1, "unknown type: %s", optarg);
 			break;
 		case 'f':
 			if (fflag != NULL)
 				errx(1, "-f can be passed only once");
-			fflag = optarg;
+			fflag = realpath(optarg, NULL);
+			if (fflag == NULL)
+				err(1, "realpath");
 			break;
 		case 'o':
 			if (!strcmp(optarg, "async"))
@@ -187,6 +197,10 @@ main(int argc, char **argv)
 				mdio.md_options |= MD_RESERVE;
 			else if (!strcmp(optarg, "noreserve"))
 				mdio.md_options &= ~MD_RESERVE;
+			else if (!strcmp(optarg, "verify"))
+				mdio.md_options |= MD_VERIFY;
+			else if (!strcmp(optarg, "noverify"))
+				mdio.md_options &= ~MD_VERIFY;
 			else
 				errx(1, "unknown option: %s", optarg);
 			break;
@@ -211,12 +225,15 @@ main(int argc, char **argv)
 			else if (*p == 't' || *p == 'T') {
 				mdio.md_mediasize <<= 30;
 				mdio.md_mediasize <<= 10;
+			} else if (*p == 'p' || *p == 'P') {
+				mdio.md_mediasize <<= 30;
+				mdio.md_mediasize <<= 20;
 			} else
 				errx(1, "unknown suffix on -s argument");
 			break;
 		case 'u':
-			if (!strncmp(optarg, "/dev/", 5))
-				optarg += 5;
+			if (!strncmp(optarg, _PATH_DEV, sizeof(_PATH_DEV) - 1))
+				optarg += sizeof(_PATH_DEV) - 1;
 			if (!strncmp(optarg, MD_NAME, sizeof(MD_NAME) - 1))
 				optarg += sizeof(MD_NAME) - 1;
 			uflag = optarg;
@@ -229,6 +246,9 @@ main(int argc, char **argv)
 			break;
 		case 'y':
 			mdio.md_fwheads = strtoul(optarg, &p, 0);
+			break;
+		case 'L':
+			strlcpy(mdio.md_label, optarg, PATH_MAX);
 			break;
 		default:
 			usage();
@@ -284,9 +304,10 @@ main(int argc, char **argv)
 			}
 		}
 
-		if ((mdio.md_type == MD_MALLOC || mdio.md_type == MD_SWAP) &&
-		    sflag == NULL)
-			errx(1, "must specify -s for -t malloc or -t swap");
+		if ((mdio.md_type == MD_MALLOC || mdio.md_type == MD_SWAP ||
+		    mdio.md_type == MD_NULL) && sflag == NULL)
+			errx(1, "must specify -s for -t malloc, -t swap, "
+			    "or -t null");
 		if (mdio.md_type == MD_VNODE && mdio.md_file[0] == '\0')
 			errx(1, "must specify -f for -t vnode");
 	} else {
@@ -298,8 +319,8 @@ main(int argc, char **argv)
 			errx(1, "-x can only be used with -a");
 		if (mdio.md_fwheads != 0)
 			errx(1, "-y can only be used with -a");
-		if (fflag != NULL)
-			errx(1, "-f can only be used with -a");
+		if (fflag != NULL && action != LIST)
+			errx(1, "-f can only be used with -a and -l");
 		if (tflag != NULL)
 			errx(1, "-t can only be used with -a");
 		if (argc > 0)
@@ -333,14 +354,14 @@ main(int argc, char **argv)
 	if (!kld_isloaded("g_md") && kld_load("geom_md") == -1)
 		err(1, "failed to load geom_md module");
 
-	fd = open("/dev/" MDCTL_NAME, O_RDWR, 0);
+	fd = open(_PATH_DEV MDCTL_NAME, O_RDWR, 0);
 	if (fd < 0)
-		err(1, "open(/dev/%s)", MDCTL_NAME);
+		err(1, "open(%s%s)", _PATH_DEV, MDCTL_NAME);
 
 	if (action == ATTACH) {
 		i = ioctl(fd, MDIOCATTACH, &mdio);
 		if (i < 0)
-			err(1, "ioctl(/dev/%s)", MDCTL_NAME);
+			err(1, "ioctl(%s%s)", _PATH_DEV, MDCTL_NAME);
 		if (mdio.md_options & MD_AUTOUNIT)
 			printf("%s%d\n", nflag ? "" : MD_NAME, mdio.md_unit);
 	} else if (action == DETACH) {
@@ -348,22 +369,22 @@ main(int argc, char **argv)
 			errx(1, "-d requires -u");
 		i = ioctl(fd, MDIOCDETACH, &mdio);
 		if (i < 0)
-			err(1, "ioctl(/dev/%s)", MDCTL_NAME);
+			err(1, "ioctl(%s%s)", _PATH_DEV, MDCTL_NAME);
 	} else if (action == RESIZE) {
 		if (mdio.md_options & MD_AUTOUNIT)
 			errx(1, "-r requires -u");
 		i = ioctl(fd, MDIOCRESIZE, &mdio);
 		if (i < 0)
-			err(1, "ioctl(/dev/%s)", MDCTL_NAME);
+			err(1, "ioctl(%s%s)", _PATH_DEV, MDCTL_NAME);
 	} else if (action == LIST) {
 		if (mdio.md_options & MD_AUTOUNIT) {
 			/*
 			 * Listing all devices. This is why we pass NULL
 			 * together with OPT_LIST.
 			 */
-			md_list(NULL, OPT_LIST | vflag);
+			return (md_list(NULL, OPT_LIST | vflag, fflag));
 		} else
-			return (md_query(uflag));
+			return (md_query(uflag, vflag, fflag));
 	} else
 		usage();
 	close(fd);
@@ -397,7 +418,7 @@ md_set_file(const char *fn)
  * between list and query mode.
  */
 static int
-md_list(char *units, int opt)
+md_list(const char *units, int opt, const char *fflag)
 {
 	struct gmesh gm;
 	struct gprovider *pp;
@@ -407,8 +428,9 @@ md_list(char *units, int opt)
 	struct ggeom *gg;
 	struct gclass *gcl;
 	void *sq;
-	int retcode, found;
-	char *type, *file, *length;
+	int retcode, ffound, ufound;
+	char *length;
+	const char *type, *file, *label;
 
 	type = file = length = NULL;
 
@@ -422,7 +444,7 @@ md_list(char *units, int opt)
 	if (sq == NULL)
 		return (-1);
 
-	found = 0;
+	ffound = ufound = 0;
 	while ((gsp = geom_stats_snapshot_next(sq)) != NULL) {
 		gid = geom_lookupid(&gm, gsp->id);
 		if (gid == NULL)
@@ -438,26 +460,39 @@ md_list(char *units, int opt)
 				if (retcode != 1)
 					continue;
 				else
-					found = 1;
+					ufound = 1;
 			}
 			gc = &pp->lg_config;
-			if (nflag && strncmp(pp->lg_name, "md", 2) == 0)
+			type = geom_config_get(gc, "type");
+			if (type != NULL && (strcmp(type, "vnode") == 0 ||
+			    strcmp(type, "preload") == 0)) {
+				file = geom_config_get(gc, "file");
+				if (fflag != NULL &&
+				    strcmp(fflag, file) != 0)
+					continue;
+				else
+					ffound = 1;
+			} else if (fflag != NULL)
+					continue;
+			if (nflag && strncmp(pp->lg_name, MD_NAME, 2) == 0)
 				printf("%s", pp->lg_name + 2);
 			else
 				printf("%s", pp->lg_name);
 
-			if (opt & OPT_VERBOSE || opt & OPT_UNIT) {
-				type = geom_config_get(gc, "type");
-				if (strcmp(type, "vnode") == 0)
-					file = geom_config_get(gc, "file");
+			if (opt & OPT_VERBOSE ||
+			    ((opt & OPT_UNIT) && fflag == NULL)) {
 				length = geom_config_get(gc, "length");
 				printf("\t%s\t", type);
 				if (length != NULL)
 					md_prthumanval(length);
-				if (file != NULL) {
-					printf("\t%s", file);
-					file = NULL;
-				}
+				if (file == NULL)
+					file = "-";
+				printf("\t%s", file);
+				file = NULL;
+				label = geom_config_get(gc, "label");
+				if (label == NULL)
+					label = "";
+				printf("\t%s", label);
 			}
 			opt |= OPT_DONE;
 			if ((opt & OPT_LIST) && !(opt & OPT_VERBOSE))
@@ -470,10 +505,18 @@ md_list(char *units, int opt)
 		printf("\n");
 	/* XXX: Check if it's enough to clean everything. */
 	geom_stats_snapshot_free(sq);
-	if ((opt & OPT_UNIT) && found)
-		return (0);
-	else
-		return (-1);
+	if (opt & OPT_UNIT) {
+		if (((fflag == NULL) && ufound) ||
+		    ((fflag == NULL) && (units != NULL) && ufound) ||
+		    ((fflag != NULL) && ffound) ||
+		    ((fflag != NULL) && (units != NULL) && ufound && ffound))
+			return (0);
+	} else if (opt & OPT_LIST) {
+		if ((fflag == NULL) ||
+		    ((fflag != NULL) && ffound))
+			return (0);
+	}
+	return (-1);
 }
 
 /*
@@ -497,10 +540,10 @@ geom_config_get(struct gconf *g, const char *name)
  * otherwise.
  */
 static int
-md_find(char *list, const char *name)
+md_find(const char *list, const char *name)
 {
 	int ret;
-	char num[16];
+	char num[PATH_MAX];
 	char *ptr, *p, *u;
 
 	ret = 0;
@@ -508,10 +551,10 @@ md_find(char *list, const char *name)
 	if (ptr == NULL)
 		return (-1);
 	for (p = ptr; (u = strsep(&p, ",")) != NULL;) {
-		if (strncmp(u, "/dev/", 5) == 0)
-			u += 5;
+		if (strncmp(u, _PATH_DEV, sizeof(_PATH_DEV) - 1) == 0)
+			u += sizeof(_PATH_DEV) - 1;
 		/* Just in case user specified number instead of full name */
-		snprintf(num, sizeof(num), "md%s", u);
+		snprintf(num, sizeof(num), "%s%s", MD_NAME, u);
 		if (strcmp(u, name) == 0 || strcmp(num, name) == 0) {
 			ret = 1;
 			break;
@@ -538,8 +581,8 @@ md_prthumanval(char *length)
 }
 
 static int
-md_query(char *name)
+md_query(const char *name, const int opt, const char *fflag)
 {
 
-	return (md_list(name, OPT_UNIT));
+	return (md_list(name, opt | OPT_UNIT, fflag));
 }

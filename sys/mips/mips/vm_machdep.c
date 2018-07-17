@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986 The Regents of the University of California.
  * Copyright (c) 1989, 1990 William Jolitz
  * Copyright (c) 1994 John Dyson
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -41,7 +43,6 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
 #include "opt_ddb.h"
 
 #include <sys/param.h>
@@ -57,12 +58,15 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/unistd.h>
 
-#include <machine/asm.h>
+#include <machine/abi.h>
 #include <machine/cache.h>
 #include <machine/clock.h>
 #include <machine/cpu.h>
+#include <machine/cpufunc.h>
+#include <machine/cpuinfo.h>
 #include <machine/md_var.h>
 #include <machine/pcb.h>
+#include <machine/tls.h>
 
 #include <vm/vm.h>
 #include <vm/vm_extern.h>
@@ -77,27 +81,6 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/user.h>
 #include <sys/mbuf.h>
-#include <sys/sf_buf.h>
-
-#ifndef NSFBUFS
-#define	NSFBUFS		(512 + maxusers * 16)
-#endif
-
-#ifndef __mips_n64
-static void	sf_buf_init(void *arg);
-SYSINIT(sock_sf, SI_SUB_MBUF, SI_ORDER_ANY, sf_buf_init, NULL);
-
-/*
- * Expanded sf_freelist head.  Really an SLIST_HEAD() in disguise, with the
- * sf_freelist head with the sf_lock mutex.
- */
-static struct {
-	SLIST_HEAD(, sf_buf) sf_head;
-	struct mtx sf_lock;
-} sf_freelist;
-
-static u_int	sf_buf_alloc_want;
-#endif
 
 /*
  * Finish a fork operation, with process p2 nearly set up.
@@ -105,10 +88,9 @@ static u_int	sf_buf_alloc_want;
  * ready to run and return to user mode.
  */
 void
-cpu_fork(register struct thread *td1,register struct proc *p2,
-    struct thread *td2,int flags)
+cpu_fork(struct thread *td1, struct proc *p2, struct thread *td2,int flags)
 {
-	register struct proc *p1;
+	struct proc *p1;
 	struct pcb *pcb2;
 
 	p1 = td1->td_proc;
@@ -161,6 +143,7 @@ cpu_fork(register struct thread *td1,register struct proc *p2,
 	 */
 
 	td2->td_md.md_tls = td1->td_md.md_tls;
+	td2->td_md.md_tls_tcb_offset = td1->td_md.md_tls_tcb_offset;
 	td2->td_md.md_saved_intr = MIPS_SR_INT_IE;
 	td2->td_md.md_spinlock_count = 1;
 #ifdef CPU_CNMIPS
@@ -204,7 +187,7 @@ cpu_fork(register struct thread *td1,register struct proc *p2,
  * This is needed to make kernel threads stay in kernel mode.
  */
 void
-cpu_set_fork_handler(struct thread *td, void (*func) __P((void *)), void *arg)
+cpu_fork_kthread_handler(struct thread *td, void (*func)(void *), void *arg)
 {
 	/*
 	 * Note that the trap frame follows the args, so the function
@@ -362,14 +345,14 @@ cpu_set_syscall_retval(struct thread *td, int error)
 }
 
 /*
- * Initialize machine state (pcb and trap frame) for a new thread about to
- * upcall. Put enough state in the new thread's PCB to get it to go back
- * userret(), where we can intercept it again to set the return (upcall)
- * Address and stack, along with those from upcalls that are from other sources
- * such as those generated in thread_userret() itself.
+ * Initialize machine state, mostly pcb and trap frame for a new
+ * thread, about to return to userspace.  Put enough state in the new
+ * thread's PCB to get it to go back to the fork_return(), which
+ * finalizes the thread state and handles peculiarities of the first
+ * return to userspace for the new thread.
  */
 void
-cpu_set_upcall(struct thread *td, struct thread *td0)
+cpu_copy_thread(struct thread *td, struct thread *td0)
 {
 	struct pcb *pcb2;
 
@@ -413,7 +396,7 @@ cpu_set_upcall(struct thread *td, struct thread *td0)
 	 * that are needed.
 	 */
 
-	/* SMP Setup to release sched_lock in fork_exit(). */
+	/* Setup to release spin count in in fork_exit(). */
 	td->td_md.md_spinlock_count = 1;
 	td->td_md.md_saved_intr = MIPS_SR_INT_IE;
 #if 0
@@ -425,23 +408,17 @@ cpu_set_upcall(struct thread *td, struct thread *td0)
 }
 
 /*
- * Set that machine state for performing an upcall that has to
- * be done in thread_userret() so that those upcalls generated
- * in thread_userret() itself can be done as well.
+ * Set that machine state for performing an upcall that starts
+ * the entry function with the given argument.
  */
 void
-cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
+cpu_set_upcall(struct thread *td, void (*entry)(void *), void *arg,
     stack_t *stack)
 {
 	struct trapframe *tf;
 	register_t sp;
 
-	/*
-	* At the point where a function is called, sp must be 8
-	* byte aligned[for compatibility with 64-bit CPUs]
-	* in ``See MIPS Run'' by D. Sweetman, p. 269
-	* align stack */
-	sp = ((register_t)(intptr_t)(stack->ss_sp + stack->ss_size) & ~0x7) -
+	sp = (((intptr_t)stack->ss_sp + stack->ss_size) & ~(STACK_ALIGN - 1)) -
 	    CALLFRAME_SIZ;
 
 	/*
@@ -487,90 +464,6 @@ cpu_set_upcall_kse(struct thread *td, void (*entry)(void *), void *arg,
 #define	ZIDLE_HI(v)	((v) * 4 / 5)
 
 /*
- * Allocate a pool of sf_bufs (sendfile(2) or "super-fast" if you prefer. :-))
- */
-#ifndef __mips_n64
-static void
-sf_buf_init(void *arg)
-{
-	struct sf_buf *sf_bufs;
-	vm_offset_t sf_base;
-	int i;
-
-	nsfbufs = NSFBUFS;
-	TUNABLE_INT_FETCH("kern.ipc.nsfbufs", &nsfbufs);
-
-	mtx_init(&sf_freelist.sf_lock, "sf_bufs list lock", NULL, MTX_DEF);
-	SLIST_INIT(&sf_freelist.sf_head);
-	sf_base = kmem_alloc_nofault(kernel_map, nsfbufs * PAGE_SIZE);
-	sf_bufs = malloc(nsfbufs * sizeof(struct sf_buf), M_TEMP,
-	    M_NOWAIT | M_ZERO);
-	for (i = 0; i < nsfbufs; i++) {
-		sf_bufs[i].kva = sf_base + i * PAGE_SIZE;
-		SLIST_INSERT_HEAD(&sf_freelist.sf_head, &sf_bufs[i], free_list);
-	}
-	sf_buf_alloc_want = 0;
-}
-#endif
-
-/*
- * Get an sf_buf from the freelist.  Will block if none are available.
- */
-struct sf_buf *
-sf_buf_alloc(struct vm_page *m, int flags)
-{
-#ifndef __mips_n64
-	struct sf_buf *sf;
-	int error;
-
-	mtx_lock(&sf_freelist.sf_lock);
-	while ((sf = SLIST_FIRST(&sf_freelist.sf_head)) == NULL) {
-		if (flags & SFB_NOWAIT)
-			break;
-		sf_buf_alloc_want++;
-		mbstat.sf_allocwait++;
-		error = msleep(&sf_freelist, &sf_freelist.sf_lock,
-		    (flags & SFB_CATCH) ? PCATCH | PVM : PVM, "sfbufa", 0);
-		sf_buf_alloc_want--;
-
-		/*
-		 * If we got a signal, don't risk going back to sleep.
-		 */
-		if (error)
-			break;
-	}
-	if (sf != NULL) {
-		SLIST_REMOVE_HEAD(&sf_freelist.sf_head, free_list);
-		sf->m = m;
-		nsfbufsused++;
-		nsfbufspeak = imax(nsfbufspeak, nsfbufsused);
-		pmap_qenter(sf->kva, &sf->m, 1);
-	}
-	mtx_unlock(&sf_freelist.sf_lock);
-	return (sf);
-#else
-	return ((struct sf_buf *)m);
-#endif
-}
-
-/*
- * Release resources back to the system.
- */
-void
-sf_buf_free(struct sf_buf *sf)
-{
-#ifndef __mips_n64
-	pmap_qremove(sf->kva, 1);
-	mtx_lock(&sf_freelist.sf_lock);
-	SLIST_INSERT_HEAD(&sf_freelist.sf_head, sf, free_list);
-	nsfbufsused--;
-	if (sf_buf_alloc_want > 0)
-		wakeup(&sf_freelist);
-	mtx_unlock(&sf_freelist.sf_lock);
-#endif
-}
-
-/*
  * Software interrupt handler for queued VM system processing.
  */
 void
@@ -585,7 +478,17 @@ int
 cpu_set_user_tls(struct thread *td, void *tls_base)
 {
 
+#if defined(__mips_n64) && defined(COMPAT_FREEBSD32)
+	if (td->td_proc && SV_PROC_FLAG(td->td_proc, SV_ILP32))
+		td->td_md.md_tls_tcb_offset = TLS_TP_OFFSET + TLS_TCB_SIZE32;
+	else
+#endif
+	td->td_md.md_tls_tcb_offset = TLS_TP_OFFSET + TLS_TCB_SIZE;
 	td->td_md.md_tls = (char*)tls_base;
+	if (td == curthread && cpuinfo.userlocal_reg == true) {
+		mips_wr_userlocal((unsigned long)tls_base +
+		    td->td_md.md_tls_tcb_offset);
+	}
 
 	return (0);
 }
@@ -613,6 +516,16 @@ dump_trapframe(struct trapframe *trapframe)
 	DB_PRINT_REG(trapframe, a1);
 	DB_PRINT_REG(trapframe, a2);
 	DB_PRINT_REG(trapframe, a3);
+#if defined(__mips_n32) || defined(__mips_n64)
+	DB_PRINT_REG(trapframe, a4);
+	DB_PRINT_REG(trapframe, a5);
+	DB_PRINT_REG(trapframe, a6);
+	DB_PRINT_REG(trapframe, a7);
+	DB_PRINT_REG(trapframe, t0);
+	DB_PRINT_REG(trapframe, t1);
+	DB_PRINT_REG(trapframe, t2);
+	DB_PRINT_REG(trapframe, t3);
+#else
 	DB_PRINT_REG(trapframe, t0);
 	DB_PRINT_REG(trapframe, t1);
 	DB_PRINT_REG(trapframe, t2);
@@ -621,6 +534,7 @@ dump_trapframe(struct trapframe *trapframe)
 	DB_PRINT_REG(trapframe, t5);
 	DB_PRINT_REG(trapframe, t6);
 	DB_PRINT_REG(trapframe, t7);
+#endif
 	DB_PRINT_REG(trapframe, s0);
 	DB_PRINT_REG(trapframe, s1);
 	DB_PRINT_REG(trapframe, s2);
@@ -653,7 +567,7 @@ DB_SHOW_COMMAND(pcb, ddb_dump_pcb)
 
 	/* Determine which thread to examine. */
 	if (have_addr)
-		td = db_lookup_thread(addr, TRUE);
+		td = db_lookup_thread(addr, true);
 	else
 		td = curthread;
 	

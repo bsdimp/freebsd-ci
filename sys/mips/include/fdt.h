@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -33,17 +35,6 @@
 #define _MACHINE_FDT_H_
 
 #include <machine/bus.h>
-#include <machine/intr_machdep.h>
-
-/* Max interrupt number */
-#if defined(CPU_RMI) || defined(CPU_NLM)
-#define FDT_INTR_MAX	XLR_MAX_INTR
-#else
-#define FDT_INTR_MAX	(NHARD_IRQS + NSOFT_IRQS)
-#endif
-
-/* Map phandle/intpin pair to global IRQ number */ 
-#define	FDT_MAP_IRQ(node, pin)	(pin)
 
 /*
  * Bus space tag. XXX endianess info needs to be derived from the blob.
@@ -51,7 +42,7 @@
 #if defined(CPU_RMI) || defined(CPU_NLM)
 #define fdtbus_bs_tag	rmi_uart_bus_space
 #else
-#define fdtbus_bs_tag	mips_bus_space_fdt
+#define fdtbus_bs_tag	mips_bus_space_generic
 #endif
 
 #endif /* _MACHINE_FDT_H_ */

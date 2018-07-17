@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2010 Edwin Groothuis <edwin@FreeBSD.org>.
  * All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -22,7 +24,7 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- * 
+ *
  */
 
 #include <sys/cdefs.h>
@@ -31,7 +33,7 @@ __FBSDID("$FreeBSD$");
 /*
  * This code is created to match the formulas available at:
  * Formula and examples obtained from "How to Calculate alt/az: SAAO" at
- * http://www.saao.ac.za/public-info/sun-moon-stars/sun-index/how-to-calculate-altaz/
+ * http://old.saao.ac.za/public-info/sun-moon-stars/sun-index/how-to-calculate-altaz/
  */
 
 #include <stdio.h>
@@ -373,7 +375,7 @@ calculatesunlongitude30(int year, int degreeGMToffset, int *ichinesemonths)
 	int firstmonth330 = -1;
 
 	cumdays = cumdaytab[isleap(year)];
-	monthdays = mondaytab[isleap(year)];
+	monthdays = monthdaytab[isleap(year)];
 	pichinesemonths = ichinesemonths;
 
 	h = 0;

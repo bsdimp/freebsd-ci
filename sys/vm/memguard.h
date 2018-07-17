@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005,
  *     Bosko Milekic <bmilekic@FreeBSD.org>.  All rights reserved.
  *
@@ -33,10 +35,11 @@
 
 struct malloc_type;
 struct vm_map;
+struct vmem;
 
 #ifdef DEBUG_MEMGUARD
 unsigned long	memguard_fudge(unsigned long, const struct vm_map *);
-void	memguard_init(struct vm_map *);
+void	memguard_init(struct vmem *);
 void 	*memguard_alloc(unsigned long, int);
 void	*memguard_realloc(void *, unsigned long, struct malloc_type *, int);
 void	memguard_free(void *);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright 2003 by Peter Grehan. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,11 +36,14 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/kernel.h>
+#include <sys/proc.h>
+#include <sys/rman.h>
 
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_pci.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+#include <dev/ofw/ofwpci.h>
 
 #include <dev/pci/pcivar.h>
 #include <dev/pci/pcireg.h>
@@ -49,17 +54,12 @@ __FBSDID("$FreeBSD$");
 #include <machine/pio.h>
 #include <machine/resource.h>
 
-#include <sys/rman.h>
-
-#include <powerpc/ofw/ofw_pci.h>
 #include <powerpc/powermac/gracklevar.h>
 
 #include <vm/vm.h>
 #include <vm/pmap.h>
 
 #include "pcib_if.h"
-
-int      badaddr(void *, size_t);  /* XXX */
 
 /*
  * Device interface.
@@ -81,6 +81,7 @@ static void		grackle_write_config(device_t, u_int, u_int, u_int,
 static int		grackle_enable_config(struct grackle_softc *, u_int,
 			    u_int, u_int, u_int);
 static void		grackle_disable_config(struct grackle_softc *);
+static int		badaddr(void *, size_t);
 
 /*
  * Driver methods.
@@ -100,7 +101,7 @@ static device_method_t	grackle_methods[] = {
 static devclass_t	grackle_devclass;
 DEFINE_CLASS_1(pcib, grackle_driver, grackle_methods,
     sizeof(struct grackle_softc), ofw_pci_driver);
-DRIVER_MODULE(grackle, nexus, grackle_driver, grackle_devclass, 0, 0);
+DRIVER_MODULE(grackle, ofwbus, grackle_driver, grackle_devclass, 0, 0);
 
 static int
 grackle_probe(device_t dev)
@@ -236,6 +237,51 @@ grackle_disable_config(struct grackle_softc *sc)
 	 * accesses from causing config cycles
 	 */
 	out32rb(sc->sc_addr, 0);
+}
+
+static int
+badaddr(void *addr, size_t size)
+{
+	struct thread	*td;
+	jmp_buf		env, *oldfaultbuf;
+	int		x;
+
+	/* Get rid of any stale machine checks that have been waiting.  */
+	__asm __volatile ("sync; isync");
+
+	td = curthread;
+
+	oldfaultbuf = td->td_pcb->pcb_onfault;
+	td->td_pcb->pcb_onfault = &env;
+	if (setjmp(env)) {
+		td->td_pcb->pcb_onfault = oldfaultbuf;
+		__asm __volatile ("sync");
+		return 1;
+	}
+
+	__asm __volatile ("sync");
+
+	switch (size) {
+	case 1:
+		x = *(volatile int8_t *)addr;
+		break;
+	case 2:
+		x = *(volatile int16_t *)addr;
+		break;
+	case 4:
+		x = *(volatile int32_t *)addr;
+		break;
+	default:
+		panic("badaddr: invalid size (%zd)", size);
+	}
+
+	/* Make sure we took the machine check, if we caused one. */
+	__asm __volatile ("sync; isync");
+
+	td->td_pcb->pcb_onfault = oldfaultbuf;
+	__asm __volatile ("sync");	/* To be sure. */
+
+	return (0);
 }
 
 /*

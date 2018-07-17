@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991 The Regents of the University of California.
  * All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -102,6 +104,8 @@ struct powerpc_intr {
 	cpuset_t cpu;
 	enum intr_trigger trig;
 	enum intr_polarity pol;
+	int	fwcode;
+	int	ipi;
 };
 
 struct pic {
@@ -124,6 +128,11 @@ static u_int nirqs = 16;	/* Allocated IRQS (ISA pre-allocated). */
 static u_int nirqs = 0;		/* Allocated IRQs. */
 #endif
 static u_int stray_count;
+
+u_long intrcnt[INTR_VECTORS];
+char intrnames[INTR_VECTORS * (MAXCOMLEN + 1)];
+size_t sintrcnt = sizeof(intrcnt);
+size_t sintrnames = sizeof(intrnames);
 
 device_t root_pic;
 
@@ -148,7 +157,7 @@ smp_intr_init(void *dummy __unused)
 
 	for (vector = 0; vector < nvectors; vector++) {
 		i = powerpc_intrs[vector];
-		if (i != NULL && i->pic == root_pic)
+		if (i != NULL && i->event != NULL && i->pic == root_pic)
 			PIC_BIND(i->pic, i->intline, i->cpu);
 	}
 }
@@ -169,6 +178,8 @@ intrcnt_add(const char *name, u_long **countp)
 	int idx;
 
 	idx = atomic_fetchadd_int(&intrcnt_index, 1);
+	KASSERT(idx < INTR_VECTORS, ("intrcnt_add: Interrupt counter index "
+	    "reached INTR_VECTORS"));
 	*countp = &intrcnt[idx];
 	intrcnt_setname(name, idx);
 }
@@ -176,7 +187,7 @@ intrcnt_add(const char *name, u_long **countp)
 static struct powerpc_intr *
 intr_lookup(u_int irq)
 {
-	char intrname[8];
+	char intrname[16];
 	struct powerpc_intr *i, *iscan;
 	int vector;
 
@@ -202,6 +213,8 @@ intr_lookup(u_int irq)
 	i->irq = irq;
 	i->pic = NULL;
 	i->vector = -1;
+	i->fwcode = 0;
+	i->ipi = 0;
 
 #ifdef SMP
 	i->cpu = all_cpus;
@@ -289,7 +302,7 @@ powerpc_intr_post_ithread(void *arg)
 }
 
 static int
-powerpc_assign_intr_cpu(void *arg, u_char cpu)
+powerpc_assign_intr_cpu(void *arg, int cpu)
 {
 #ifdef SMP
 	struct powerpc_intr *i = arg;
@@ -308,7 +321,7 @@ powerpc_assign_intr_cpu(void *arg, u_char cpu)
 #endif
 }
 
-void
+u_int
 powerpc_register_pic(device_t dev, uint32_t node, u_int irqs, u_int ipis,
     u_int atpic)
 {
@@ -343,7 +356,12 @@ powerpc_register_pic(device_t dev, uint32_t node, u_int irqs, u_int ipis,
 		npics++;
 	}
 
+	KASSERT(npics < MAX_PICS,
+	    ("Number of PICs exceeds maximum (%d)", MAX_PICS));
+
 	mtx_unlock(&intr_table_lock);
+
+	return (p->base);
 }
 
 u_int
@@ -373,8 +391,11 @@ powerpc_get_irq(uint32_t node, u_int pin)
 	piclist[idx].irqs = 124;
 	piclist[idx].ipis = 4;
 	piclist[idx].base = nirqs;
-	nirqs += 128;
+	nirqs += (1 << 25);
 	npics++;
+
+	KASSERT(npics < MAX_PICS,
+	    ("Number of PICs exceeds maximum (%d)", MAX_PICS));
 
 	mtx_unlock(&intr_table_lock);
 
@@ -414,6 +435,15 @@ powerpc_enable_intr(void)
 				printf("unable to setup IPI handler\n");
 				return (error);
 			}
+
+			/*
+			 * Some subterfuge: disable late EOI and mark this
+			 * as an IPI to the dispatch layer.
+			 */
+			i = intr_lookup(MAP_IRQ(piclist[n].node,
+			    piclist[n].irqs));
+			i->event->ie_post_filter = NULL;
+			i->ipi = 1;
 		}
 	}
 #endif
@@ -427,6 +457,9 @@ powerpc_enable_intr(void)
 		if (error)
 			continue;
 
+		if (i->trig == INTR_TRIGGER_INVALID)
+			PIC_TRANSLATE_CODE(i->pic, i->intline, i->fwcode,
+			    &i->trig, &i->pol);
 		if (i->trig != INTR_TRIGGER_CONFORM ||
 		    i->pol != INTR_POLARITY_CONFORM)
 			PIC_CONFIG(i->pic, i->intline, i->trig, i->pol);
@@ -469,15 +502,21 @@ powerpc_setup_intr(const char *name, u_int irq, driver_filter_t filter,
 	if (!cold) {
 		error = powerpc_map_irq(i);
 
-		if (!error && (i->trig != INTR_TRIGGER_CONFORM ||
-		    i->pol != INTR_POLARITY_CONFORM))
-			PIC_CONFIG(i->pic, i->intline, i->trig, i->pol);
+		if (!error) {
+			if (i->trig == INTR_TRIGGER_INVALID)
+				PIC_TRANSLATE_CODE(i->pic, i->intline,
+				    i->fwcode, &i->trig, &i->pol);
+	
+			if (i->trig != INTR_TRIGGER_CONFORM ||
+			    i->pol != INTR_POLARITY_CONFORM)
+				PIC_CONFIG(i->pic, i->intline, i->trig, i->pol);
 
-		if (!error && i->pic == root_pic)
-			PIC_BIND(i->pic, i->intline, i->cpu);
+			if (i->pic == root_pic)
+				PIC_BIND(i->pic, i->intline, i->cpu);
 
-		if (!error && enable)
-			PIC_ENABLE(i->pic, i->intline, i->vector);
+			if (enable)
+				PIC_ENABLE(i->pic, i->intline, i->vector);
+		}
 	}
 	return (error);
 }
@@ -502,6 +541,28 @@ powerpc_bind_intr(u_int irq, u_char cpu)
 	return (intr_event_bind(i->event, cpu));
 }
 #endif
+
+int
+powerpc_fw_config_intr(int irq, int sense_code)
+{
+	struct powerpc_intr *i;
+
+	i = intr_lookup(irq);
+	if (i == NULL)
+		return (ENOMEM);
+
+	i->trig = INTR_TRIGGER_INVALID;
+	i->pol = INTR_POLARITY_CONFORM;
+	i->fwcode = sense_code;
+
+	if (!cold && i->pic != NULL) {
+		PIC_TRANSLATE_CODE(i->pic, i->intline, i->fwcode, &i->trig,
+		    &i->pol);
+		PIC_CONFIG(i->pic, i->intline, i->trig, i->pol);
+	}
+
+	return (0);
+}
 
 int
 powerpc_config_intr(int irq, enum intr_trigger trig, enum intr_polarity pol)
@@ -536,6 +597,13 @@ powerpc_dispatch_intr(u_int vector, struct trapframe *tf)
 	ie = i->event;
 	KASSERT(ie != NULL, ("%s: interrupt without an event", __func__));
 
+	/*
+	 * IPIs are magical and need to be EOI'ed before filtering.
+	 * This prevents races in IPI handling.
+	 */
+	if (i->ipi)
+		PIC_EOI(i->pic, i->intline);
+
 	if (intr_event_handle(ie, tf) != 0) {
 		goto stray;
 	}
@@ -552,4 +620,28 @@ stray:
 	}
 	if (i != NULL)
 		PIC_MASK(i->pic, i->intline);
+}
+
+void
+powerpc_intr_mask(u_int irq)
+{
+	struct powerpc_intr *i;
+
+	i = intr_lookup(irq);
+	if (i == NULL || i->pic == NULL)
+		return;
+
+	PIC_MASK(i->pic, i->intline);
+}
+
+void
+powerpc_intr_unmask(u_int irq)
+{
+	struct powerpc_intr *i;
+
+	i = intr_lookup(irq);
+	if (i == NULL || i->pic == NULL)
+		return;
+
+	PIC_UNMASK(i->pic, i->intline);
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -157,6 +159,7 @@ main(int argc, char *argv[])
 	struct winsize win;
 	int ch, fts_options, notused;
 	char *p;
+	const char *errstr = NULL;
 #ifdef COLORLS
 	char termcapbuf[1024];	/* termcap definition buffer */
 	char tcapbuf[512];	/* capability buffer */
@@ -169,7 +172,7 @@ main(int argc, char *argv[])
 	if (isatty(STDOUT_FILENO)) {
 		termwidth = 80;
 		if ((p = getenv("COLUMNS")) != NULL && *p != '\0')
-			termwidth = atoi(p);
+			termwidth = strtonum(p, 0, INT_MAX, &errstr);
 		else if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &win) != -1 &&
 		    win.ws_col > 0)
 			termwidth = win.ws_col;
@@ -179,8 +182,11 @@ main(int argc, char *argv[])
 		/* retrieve environment variable, in case of explicit -C */
 		p = getenv("COLUMNS");
 		if (p)
-			termwidth = atoi(p);
+			termwidth = strtonum(p, 0, INT_MAX, &errstr);
 	}
+
+	if (errstr)
+		termwidth = 80;
 
 	fts_options = FTS_PHYSICAL;
 	if (getenv("LS_SAMESORT"))
@@ -226,6 +232,9 @@ main(int argc, char *argv[])
 			f_accesstime = 0;
 			f_statustime = 0;
 			break;
+		case 'f':
+			f_nosort = 1;
+		       /* FALLTHROUGH */
 		case 'a':
 			fts_options |= FTS_SEEDOT;
 			/* FALLTHROUGH */
@@ -299,9 +308,6 @@ main(int argc, char *argv[])
 		case 'd':
 			f_listdir = 1;
 			f_recursive = 0;
-			break;
-		case 'f':
-			f_nosort = 1;
 			break;
 		case 'g':	/* Compatibility with 4.3BSD. */
 			break;
@@ -413,9 +419,14 @@ main(int argc, char *argv[])
 
 	/*
 	 * If not -F, -P, -d or -l options, follow any symbolic links listed on
-	 * the command line.
+	 * the command line, unless in color mode in which case we need to
+	 * distinguish file type for a symbolic link itself and its target.
 	 */
-	if (!f_nofollow && !f_longform && !f_listdir && (!f_type || f_slash))
+	if (!f_nofollow && !f_longform && !f_listdir && (!f_type || f_slash)
+#ifdef COLORLS
+	    && !f_color
+#endif
+	    )
 		fts_options |= FTS_COMFOLLOW;
 
 	/*

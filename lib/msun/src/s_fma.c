@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2011 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
  *
@@ -117,7 +119,7 @@ add_and_denormalize(double a, double b, int scale)
 	if (sum.lo != 0) {
 		EXTRACT_WORD64(hibits, sum.hi);
 		bits_lost = -((int)(hibits >> 52) & 0x7ff) - scale + 1;
-		if (bits_lost != 1 ^ (int)(hibits & 1)) {
+		if ((bits_lost != 1) ^ (int)(hibits & 1)) {
 			/* hibits += (int)copysign(1.0, sum.hi * sum.lo) */
 			EXTRACT_WORD64(lobits, sum.lo);
 			hibits += 1 - (((hibits ^ lobits) >> 62) & 2);
@@ -238,6 +240,8 @@ fma(double x, double y, double z)
 		zs = copysign(DBL_MIN, zs);
 
 	fesetround(FE_TONEAREST);
+	/* work around clang bug 8100 */
+	volatile double vxs = xs;
 
 	/*
 	 * Basic approach for round-to-nearest:
@@ -247,7 +251,7 @@ fma(double x, double y, double z)
 	 *     adj = xy.lo + r.lo		(inexact; low bit is sticky)
 	 *     result = r.hi + adj		(correctly rounded)
 	 */
-	xy = dd_mul(xs, ys);
+	xy = dd_mul(vxs, ys);
 	r = dd_add(xy.hi, zs);
 
 	spread = ex + ey;
@@ -268,7 +272,9 @@ fma(double x, double y, double z)
 		 * rounding modes.
 		 */
 		fesetround(oround);
-		adj = r.lo + xy.lo;
+		/* work around clang bug 8100 */
+		volatile double vrlo = r.lo;
+		adj = vrlo + xy.lo;
 		return (ldexp(r.hi + adj, spread));
 	}
 

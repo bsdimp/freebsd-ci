@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 M. Warner Losh <imp@village.org> 
  * All rights reserved.
  *
@@ -27,9 +29,6 @@
 
 #ifndef _IF_CSVAR_H
 #define _IF_CSVAR_H
-
-#include <net/if_arp.h>
-#include <net/if_media.h>
 
 /*
  * cs_softc: per line info and status

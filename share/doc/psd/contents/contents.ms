@@ -9,11 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 3. All advertising materials mentioning features or use of this software
-.\"    must display the following acknowledgement:
-.\"	This product includes software developed by the University of
-.\"	California, Berkeley and its contributors.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -147,17 +143,6 @@ How to debug programs using the assembly-language level \fIadb\fP debugger.
 .QP
 Indispensable tool for making sure large programs are properly
 compiled with minimal effort. 
-.sp
-.IP
-.tl 'An Introduction to the Revision Control System''PSD:13'
-.if \n(.U \{\
-.br
-.>> <a href="13.rcs/paper.html">13.rcs/paper.html</a>
-.\}
-.QP
-RCS is a user-contributed tool for working together with other people
-without stepping on each other's toes.
-An alternative to \fIsccs\fR for controlling software changes.
 .sp
 .IP
 .tl 'An Introduction to the Source Code Control System''PSD:14'

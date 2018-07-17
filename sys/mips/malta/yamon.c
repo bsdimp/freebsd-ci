@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006-2008 Bruce M. Simpson
  * All rights reserved.
  *
@@ -56,6 +58,7 @@ yamon_getcpufreq(void)
 	uint32_t freq;
 	int ret;
 
+	freq = 0;
 	ret = YAMON_SYSCON_READ(SYSCON_BOARD_CPU_CLOCK_FREQ_ID, &freq,
 	    sizeof(freq));
 	if (ret != 0)

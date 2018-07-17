@@ -19,99 +19,16 @@
 #ifndef LLVM_CLANG_TOOLING_REFACTORING_H
 #define LLVM_CLANG_TOOLING_REFACTORING_H
 
-#include "clang/Basic/SourceLocation.h"
+#include "clang/Tooling/Core/Replacement.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/ADT/StringRef.h"
-#include <set>
+#include <map>
 #include <string>
 
 namespace clang {
 
 class Rewriter;
-class SourceLocation;
 
 namespace tooling {
-
-/// \brief A text replacement.
-///
-/// Represents a SourceManager independent replacement of a range of text in a
-/// specific file.
-class Replacement {
-public:
-  /// \brief Creates an invalid (not applicable) replacement.
-  Replacement();
-
-  /// \brief Creates a replacement of the range [Offset, Offset+Length) in
-  /// FilePath with ReplacementText.
-  ///
-  /// \param FilePath A source file accessible via a SourceManager.
-  /// \param Offset The byte offset of the start of the range in the file.
-  /// \param Length The length of the range in bytes.
-  Replacement(StringRef FilePath, unsigned Offset,
-              unsigned Length, StringRef ReplacementText);
-
-  /// \brief Creates a Replacement of the range [Start, Start+Length) with
-  /// ReplacementText.
-  Replacement(SourceManager &Sources, SourceLocation Start, unsigned Length,
-              StringRef ReplacementText);
-
-  /// \brief Creates a Replacement of the given range with ReplacementText.
-  Replacement(SourceManager &Sources, const CharSourceRange &Range,
-              StringRef ReplacementText);
-
-  /// \brief Creates a Replacement of the node with ReplacementText.
-  template <typename Node>
-  Replacement(SourceManager &Sources, const Node &NodeToReplace,
-              StringRef ReplacementText);
-
-  /// \brief Returns whether this replacement can be applied to a file.
-  ///
-  /// Only replacements that are in a valid file can be applied.
-  bool isApplicable() const;
-
-  /// \brief Accessors.
-  /// @{
-  StringRef getFilePath() const { return FilePath; }
-  unsigned getOffset() const { return Offset; }
-  unsigned getLength() const { return Length; }
-  StringRef getReplacementText() const { return ReplacementText; }
-  /// @}
-
-  /// \brief Applies the replacement on the Rewriter.
-  bool apply(Rewriter &Rewrite) const;
-
-  /// \brief Returns a human readable string representation.
-  std::string toString() const;
-
-  /// \brief Comparator to be able to use Replacement in std::set for uniquing.
-  class Less {
-  public:
-    bool operator()(const Replacement &R1, const Replacement &R2) const;
-  };
-
- private:
-  void setFromSourceLocation(SourceManager &Sources, SourceLocation Start,
-                             unsigned Length, StringRef ReplacementText);
-  void setFromSourceRange(SourceManager &Sources, const CharSourceRange &Range,
-                          StringRef ReplacementText);
-
-  std::string FilePath;
-  unsigned Offset;
-  unsigned Length;
-  std::string ReplacementText;
-};
-
-/// \brief A set of Replacements.
-/// FIXME: Change to a vector and deduplicate in the RefactoringTool.
-typedef std::set<Replacement, Replacement::Less> Replacements;
-
-/// \brief Apply all replacements in \p Replaces to the Rewriter \p Rewrite.
-///
-/// Replacement applications happen independently of the success of
-/// other applications.
-///
-/// \returns true if all replacements apply. false otherwise.
-bool applyAllReplacements(Replacements &Replaces, Rewriter &Rewrite);
 
 /// \brief A tool to run refactorings.
 ///
@@ -122,11 +39,13 @@ class RefactoringTool : public ClangTool {
 public:
   /// \see ClangTool::ClangTool.
   RefactoringTool(const CompilationDatabase &Compilations,
-                  ArrayRef<std::string> SourcePaths);
+                  ArrayRef<std::string> SourcePaths,
+                  std::shared_ptr<PCHContainerOperations> PCHContainerOps =
+                      std::make_shared<PCHContainerOperations>());
 
-  /// \brief Returns the set of replacements to which replacements should
-  /// be added during the run of the tool.
-  Replacements &getReplacements();
+  /// \brief Returns the file path to replacements map to which replacements
+  /// should be added during the run of the tool.
+  std::map<std::string, Replacements> &getReplacements();
 
   /// \brief Call run(), apply all generated replacements, and immediately save
   /// the results to disk.
@@ -135,6 +54,9 @@ public:
   int runAndSave(FrontendActionFactory *ActionFactory);
 
   /// \brief Apply all stored replacements to the given Rewriter.
+  ///
+  /// FileToReplaces will be deduplicated with `groupReplacementsByFile` before
+  /// application.
   ///
   /// Replacement applications happen independently of the success of other
   /// applications.
@@ -147,18 +69,32 @@ private:
   int saveRewrittenFiles(Rewriter &Rewrite);
 
 private:
-  Replacements Replace;
+  std::map<std::string, Replacements> FileToReplaces;
 };
 
-template <typename Node>
-Replacement::Replacement(SourceManager &Sources, const Node &NodeToReplace,
-                         StringRef ReplacementText) {
-  const CharSourceRange Range =
-      CharSourceRange::getTokenRange(NodeToReplace->getSourceRange());
-  setFromSourceRange(Sources, Range, ReplacementText);
-}
+/// \brief Groups \p Replaces by the file path and applies each group of
+/// Replacements on the related file in \p Rewriter. In addition to applying
+/// given Replacements, this function also formats the changed code.
+///
+/// \pre Replacements must be conflict-free.
+///
+/// FileToReplaces will be deduplicated with `groupReplacementsByFile` before
+/// application.
+///
+/// Replacement applications happen independently of the success of other
+/// applications.
+///
+/// \param[in] FileToReplaces Replacements (grouped by files) to apply.
+/// \param[in] Rewrite The `Rewritter` to apply replacements on.
+/// \param[in] Style The style name used for reformatting. See ```getStyle``` in
+/// "include/clang/Format/Format.h" for all possible style forms.
+///
+/// \returns true if all replacements applied and formatted. false otherwise.
+bool formatAndApplyAllReplacements(
+    const std::map<std::string, Replacements> &FileToReplaces,
+    Rewriter &Rewrite, StringRef Style = "file");
 
 } // end namespace tooling
 } // end namespace clang
 
-#endif // end namespace LLVM_CLANG_TOOLING_REFACTORING_H
+#endif // LLVM_CLANG_TOOLING_REFACTORING_H

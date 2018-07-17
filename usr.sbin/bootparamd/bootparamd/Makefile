@@ -1,7 +1,7 @@
 #	from: @(#)Makefile	5.8 (Berkeley) 7/28/90
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 PROG=	bootparamd
 MAN=	bootparams.5 bootparamd.8
@@ -15,7 +15,7 @@ CFLAGS+= -DYP
 
 CLEANFILES= ${GENSRCS}
 
-RPCSRC=	${DESTDIR}/usr/include/rpcsvc/bootparam_prot.x
+RPCSRC=	${SYSROOT:U${DESTDIR}}/usr/include/rpcsvc/bootparam_prot.x
 
 bootparam_prot_svc.c: ${RPCSRC}
 	RPCGEN_CPP=${CPP:Q} rpcgen -C -m -o ${.TARGET} ${RPCSRC}

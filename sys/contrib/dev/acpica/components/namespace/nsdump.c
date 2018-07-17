@@ -4,9 +4,118 @@
  *
  *****************************************************************************/
 
-/*
- * Copyright (C) 2000 - 2013, Intel Corp.
+/******************************************************************************
+ *
+ * 1. Copyright Notice
+ *
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
+ *
+ * 2. License
+ *
+ * 2.1. This is your license from Intel Corp. under its intellectual property
+ * rights. You may have additional license terms from the party that provided
+ * you this software, covering your right to use that party's intellectual
+ * property rights.
+ *
+ * 2.2. Intel grants, free of charge, to any person ("Licensee") obtaining a
+ * copy of the source code appearing in this file ("Covered Code") an
+ * irrevocable, perpetual, worldwide license under Intel's copyrights in the
+ * base code distributed originally by Intel ("Original Intel Code") to copy,
+
+ * make derivatives, distribute, use and display any portion of the Covered
+ * Code in any form, with the right to sublicense such rights; and
+ *
+ * 2.3. Intel grants Licensee a non-exclusive and non-transferable patent
+ * license (with the right to sublicense), under only those claims of Intel
+ * patents that are infringed by the Original Intel Code, to make, use, sell,
+ * offer to sell, and import the Covered Code and derivative works thereof
+ * solely to the minimum extent necessary to exercise the above copyright
+ * license, and in no event shall the patent license extend to any additions
+ * to or modifications of the Original Intel Code. No other license or right
+ * is granted directly or by implication, estoppel or otherwise;
+ *
+ * The above copyright and patent license is granted only if the following
+ * conditions are met:
+ *
+ * 3. Conditions
+ *
+ * 3.1. Redistribution of Source with Rights to Further Distribute Source.
+ * Redistribution of source code of any substantial portion of the Covered
+ * Code or modification with rights to further distribute source must include
+ * the above Copyright Notice, the above License, this list of Conditions,
+ * and the following Disclaimer and Export Compliance provision. In addition,
+ * Licensee must cause all Covered Code to which Licensee contributes to
+ * contain a file documenting the changes Licensee made to create that Covered
+ * Code and the date of any change. Licensee must include in that file the
+ * documentation of any changes made by any predecessor Licensee. Licensee
+ * must include a prominent statement that the modification is derived,
+ * directly or indirectly, from Original Intel Code.
+ *
+ * 3.2. Redistribution of Source with no Rights to Further Distribute Source.
+ * Redistribution of source code of any substantial portion of the Covered
+ * Code or modification without rights to further distribute source must
+ * include the following Disclaimer and Export Compliance provision in the
+ * documentation and/or other materials provided with distribution. In
+ * addition, Licensee may not authorize further sublicense of source of any
+ * portion of the Covered Code, and must include terms to the effect that the
+ * license from Licensee to its licensee is limited to the intellectual
+ * property embodied in the software Licensee provides to its licensee, and
+ * not to intellectual property embodied in modifications its licensee may
+ * make.
+ *
+ * 3.3. Redistribution of Executable. Redistribution in executable form of any
+ * substantial portion of the Covered Code or modification must reproduce the
+ * above Copyright Notice, and the following Disclaimer and Export Compliance
+ * provision in the documentation and/or other materials provided with the
+ * distribution.
+ *
+ * 3.4. Intel retains all right, title, and interest in and to the Original
+ * Intel Code.
+ *
+ * 3.5. Neither the name Intel nor any other trademark owned or controlled by
+ * Intel shall be used in advertising or otherwise to promote the sale, use or
+ * other dealings in products derived from or relating to the Covered Code
+ * without prior written authorization from Intel.
+ *
+ * 4. Disclaimer and Export Compliance
+ *
+ * 4.1. INTEL MAKES NO WARRANTY OF ANY KIND REGARDING ANY SOFTWARE PROVIDED
+ * HERE. ANY SOFTWARE ORIGINATING FROM INTEL OR DERIVED FROM INTEL SOFTWARE
+ * IS PROVIDED "AS IS," AND INTEL WILL NOT PROVIDE ANY SUPPORT, ASSISTANCE,
+ * INSTALLATION, TRAINING OR OTHER SERVICES. INTEL WILL NOT PROVIDE ANY
+ * UPDATES, ENHANCEMENTS OR EXTENSIONS. INTEL SPECIFICALLY DISCLAIMS ANY
+ * IMPLIED WARRANTIES OF MERCHANTABILITY, NONINFRINGEMENT AND FITNESS FOR A
+ * PARTICULAR PURPOSE.
+ *
+ * 4.2. IN NO EVENT SHALL INTEL HAVE ANY LIABILITY TO LICENSEE, ITS LICENSEES
+ * OR ANY OTHER THIRD PARTY, FOR ANY LOST PROFITS, LOST DATA, LOSS OF USE OR
+ * COSTS OF PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES, OR FOR ANY INDIRECT,
+ * SPECIAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THIS AGREEMENT, UNDER ANY
+ * CAUSE OF ACTION OR THEORY OF LIABILITY, AND IRRESPECTIVE OF WHETHER INTEL
+ * HAS ADVANCE NOTICE OF THE POSSIBILITY OF SUCH DAMAGES. THESE LIMITATIONS
+ * SHALL APPLY NOTWITHSTANDING THE FAILURE OF THE ESSENTIAL PURPOSE OF ANY
+ * LIMITED REMEDY.
+ *
+ * 4.3. Licensee shall not export, either directly or indirectly, any of this
+ * software or system incorporating such software without first obtaining any
+ * required license or other approval from the U. S. Department of Commerce or
+ * any other agency or department of the United States Government. In the
+ * event Licensee exports any such software from the United States or
+ * re-exports any such software from a foreign destination, Licensee shall
+ * ensure that the distribution and export/re-export of the software is in
+ * compliance with all laws, regulations, orders, or other restrictions of the
+ * U.S. Export Administration Regulations. Licensee agrees that neither it nor
+ * any of its subsidiaries will export/re-export any technical data, process,
+ * software, or service, directly or indirectly, to any country for which the
+ * United States government or any agency thereof requires an export license,
+ * other governmental approval, or letter of assurance, without first obtaining
+ * such license, approval or letter.
+ *
+ *****************************************************************************
+ *
+ * Alternatively, you may choose to be licensed under the terms of the
+ * following license:
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,25 +132,23 @@
  *    of any contributors may be used to endorse or promote products derived
  *    from this software without specific prior written permission.
  *
- * Alternatively, this software may be distributed under the terms of the
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Alternatively, you may choose to be licensed under the terms of the
  * GNU General Public License ("GPL") version 2 as published by the Free
  * Software Foundation.
  *
- * NO WARRANTY
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGES.
- */
-
-#define __NSDUMP_C__
+ *****************************************************************************/
 
 #include <contrib/dev/acpica/include/acpi.h>
 #include <contrib/dev/acpica/include/accommon.h>
@@ -69,6 +176,22 @@ AcpiNsDumpOneDevice (
 
 
 #if defined(ACPI_DEBUG_OUTPUT) || defined(ACPI_DEBUGGER)
+
+static ACPI_STATUS
+AcpiNsDumpOneObjectPath (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  Level,
+    void                    *Context,
+    void                    **ReturnValue);
+
+static ACPI_STATUS
+AcpiNsGetMaxDepth (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  Level,
+    void                    *Context,
+    void                    **ReturnValue);
+
+
 /*******************************************************************************
  *
  * FUNCTION:    AcpiNsPrintPathname
@@ -85,7 +208,7 @@ AcpiNsDumpOneDevice (
 void
 AcpiNsPrintPathname (
     UINT32                  NumSegments,
-    char                    *Pathname)
+    const char              *Pathname)
 {
     UINT32                  i;
 
@@ -108,7 +231,7 @@ AcpiNsPrintPathname (
     {
         for (i = 0; i < 4; i++)
         {
-            ACPI_IS_PRINT (Pathname[i]) ?
+            isprint ((int) Pathname[i]) ?
                 AcpiOsPrintf ("%c", Pathname[i]) :
                 AcpiOsPrintf ("?");
         }
@@ -124,6 +247,9 @@ AcpiNsPrintPathname (
     AcpiOsPrintf ("]\n");
 }
 
+
+#ifdef ACPI_OBSOLETE_FUNCTIONS
+/* Not used at this time, perhaps later */
 
 /*******************************************************************************
  *
@@ -144,7 +270,7 @@ AcpiNsPrintPathname (
 void
 AcpiNsDumpPathname (
     ACPI_HANDLE             Handle,
-    char                    *Msg,
+    const char              *Msg,
     UINT32                  Level,
     UINT32                  Component)
 {
@@ -165,6 +291,7 @@ AcpiNsDumpPathname (
     AcpiOsPrintf ("\n");
     return_VOID;
 }
+#endif
 
 
 /*******************************************************************************
@@ -225,6 +352,7 @@ AcpiNsDumpOneObject (
     }
 
     Type = ThisNode->Type;
+    Info->Count++;
 
     /* Check if the owner matches */
 
@@ -244,7 +372,8 @@ AcpiNsDumpOneObject (
 
         if (Type > ACPI_TYPE_LOCAL_MAX)
         {
-            ACPI_WARNING ((AE_INFO, "Invalid ACPI Object Type 0x%08X", Type));
+            ACPI_WARNING ((AE_INFO,
+                "Invalid ACPI Object Type 0x%08X", Type));
         }
 
         AcpiOsPrintf ("%4.4s", AcpiUtGetNodeName (ThisNode));
@@ -253,7 +382,7 @@ AcpiNsDumpOneObject (
     /* Now we can print out the pertinent information */
 
     AcpiOsPrintf (" %-12s %p %2.2X ",
-            AcpiUtGetTypeName (Type), ThisNode, ThisNode->OwnerId);
+        AcpiUtGetTypeName (Type), ThisNode, ThisNode->OwnerId);
 
     DbgLevel = AcpiDbgLevel;
     AcpiDbgLevel = 0;
@@ -282,10 +411,12 @@ AcpiNsDumpOneObject (
             case ACPI_TYPE_BUFFER:
             case ACPI_TYPE_STRING:
             case ACPI_TYPE_METHOD:
+
                 AcpiOsPrintf ("<No attached object>");
                 break;
 
             default:
+
                 break;
             }
 
@@ -297,17 +428,15 @@ AcpiNsDumpOneObject (
         {
         case ACPI_TYPE_PROCESSOR:
 
-            AcpiOsPrintf ("ID %02X Len %02X Addr %p\n",
+            AcpiOsPrintf ("ID %02X Len %02X Addr %8.8X%8.8X\n",
                 ObjDesc->Processor.ProcId, ObjDesc->Processor.Length,
-                ACPI_CAST_PTR (void, ObjDesc->Processor.Address));
+                ACPI_FORMAT_UINT64 (ObjDesc->Processor.Address));
             break;
-
 
         case ACPI_TYPE_DEVICE:
 
             AcpiOsPrintf ("Notify Object: %p\n", ObjDesc);
             break;
-
 
         case ACPI_TYPE_METHOD:
 
@@ -316,13 +445,11 @@ AcpiNsDumpOneObject (
                 ObjDesc->Method.AmlLength, ObjDesc->Method.AmlStart);
             break;
 
-
         case ACPI_TYPE_INTEGER:
 
             AcpiOsPrintf ("= %8.8X%8.8X\n",
                 ACPI_FORMAT_UINT64 (ObjDesc->Integer.Value));
             break;
-
 
         case ACPI_TYPE_PACKAGE:
 
@@ -337,13 +464,12 @@ AcpiNsDumpOneObject (
             }
             break;
 
-
         case ACPI_TYPE_BUFFER:
 
             if (ObjDesc->Common.Flags & AOPOBJ_DATA_VALID)
             {
                 AcpiOsPrintf ("Len %.2X",
-                            ObjDesc->Buffer.Length);
+                    ObjDesc->Buffer.Length);
 
                 /* Dump some of the buffer */
 
@@ -363,14 +489,12 @@ AcpiNsDumpOneObject (
             }
             break;
 
-
         case ACPI_TYPE_STRING:
 
             AcpiOsPrintf ("Len %.2X ", ObjDesc->String.Length);
-            AcpiUtPrintString (ObjDesc->String.Pointer, 32);
+            AcpiUtPrintString (ObjDesc->String.Pointer, 80);
             AcpiOsPrintf ("\n");
             break;
-
 
         case ACPI_TYPE_REGION:
 
@@ -379,7 +503,7 @@ AcpiNsDumpOneObject (
             if (ObjDesc->Region.Flags & AOPOBJ_DATA_VALID)
             {
                 AcpiOsPrintf (" Addr %8.8X%8.8X Len %.4X\n",
-                    ACPI_FORMAT_NATIVE_UINT (ObjDesc->Region.Address),
+                    ACPI_FORMAT_UINT64 (ObjDesc->Region.Address),
                     ObjDesc->Region.Length);
             }
             else
@@ -388,12 +512,10 @@ AcpiNsDumpOneObject (
             }
             break;
 
-
         case ACPI_TYPE_LOCAL_REFERENCE:
 
             AcpiOsPrintf ("[%s]\n", AcpiUtGetReferenceName (ObjDesc));
             break;
-
 
         case ACPI_TYPE_BUFFER_FIELD:
 
@@ -406,14 +528,12 @@ AcpiNsDumpOneObject (
             }
             break;
 
-
         case ACPI_TYPE_LOCAL_REGION_FIELD:
 
             AcpiOsPrintf ("Rgn [%4.4s]",
                 AcpiUtGetNodeName (
                     ObjDesc->CommonField.RegionObj->Region.Node));
             break;
-
 
         case ACPI_TYPE_LOCAL_BANK_FIELD:
 
@@ -424,7 +544,6 @@ AcpiNsDumpOneObject (
                     ObjDesc->BankField.BankObj->CommonField.Node));
             break;
 
-
         case ACPI_TYPE_LOCAL_INDEX_FIELD:
 
             AcpiOsPrintf ("Idx [%4.4s] Dat [%4.4s]",
@@ -433,7 +552,6 @@ AcpiNsDumpOneObject (
                 AcpiUtGetNodeName (
                     ObjDesc->IndexField.DataObj->CommonField.Node));
             break;
-
 
         case ACPI_TYPE_LOCAL_ALIAS:
         case ACPI_TYPE_LOCAL_METHOD_ALIAS:
@@ -465,10 +583,10 @@ AcpiNsDumpOneObject (
             break;
 
         default:
+
             break;
         }
         break;
-
 
     case ACPI_DISPLAY_OBJECTS:
 
@@ -518,7 +636,6 @@ AcpiNsDumpOneObject (
         }
         break;
 
-
     default:
         AcpiOsPrintf ("\n");
         break;
@@ -533,9 +650,9 @@ AcpiNsDumpOneObject (
 
     /* If there is an attached object, display it */
 
-    DbgLevel     = AcpiDbgLevel;
+    DbgLevel = AcpiDbgLevel;
     AcpiDbgLevel = 0;
-    ObjDesc      = AcpiNsGetAttachedObject (ThisNode);
+    ObjDesc = AcpiNsGetAttachedObject (ThisNode);
     AcpiDbgLevel = DbgLevel;
 
     /* Dump attached objects */
@@ -562,14 +679,18 @@ AcpiNsDumpOneObject (
 
             if (ObjType > ACPI_TYPE_LOCAL_MAX)
             {
-                AcpiOsPrintf ("(Pointer to ACPI Object type %.2X [UNKNOWN])\n",
+                AcpiOsPrintf (
+                    "(Pointer to ACPI Object type %.2X [UNKNOWN])\n",
                     ObjType);
+
                 BytesToDump = 32;
             }
             else
             {
-                AcpiOsPrintf ("(Pointer to ACPI Object type %.2X [%s])\n",
+                AcpiOsPrintf (
+                    "(Pointer to ACPI Object type %.2X [%s])\n",
                     ObjType, AcpiUtGetTypeName (ObjType));
+
                 BytesToDump = sizeof (ACPI_OPERAND_OBJECT);
             }
 
@@ -599,36 +720,44 @@ AcpiNsDumpOneObject (
              */
             BytesToDump = ObjDesc->String.Length;
             ObjDesc = (void *) ObjDesc->String.Pointer;
-            AcpiOsPrintf ( "(Buffer/String pointer %p length %X)\n",
+
+            AcpiOsPrintf ("(Buffer/String pointer %p length %X)\n",
                 ObjDesc, BytesToDump);
             ACPI_DUMP_BUFFER (ObjDesc, BytesToDump);
             goto Cleanup;
 
         case ACPI_TYPE_BUFFER_FIELD:
+
             ObjDesc = (ACPI_OPERAND_OBJECT *) ObjDesc->BufferField.BufferObj;
             break;
 
         case ACPI_TYPE_PACKAGE:
+
             ObjDesc = (void *) ObjDesc->Package.Elements;
             break;
 
         case ACPI_TYPE_METHOD:
+
             ObjDesc = (void *) ObjDesc->Method.AmlStart;
             break;
 
         case ACPI_TYPE_LOCAL_REGION_FIELD:
+
             ObjDesc = (void *) ObjDesc->Field.RegionObj;
             break;
 
         case ACPI_TYPE_LOCAL_BANK_FIELD:
+
             ObjDesc = (void *) ObjDesc->BankField.RegionObj;
             break;
 
         case ACPI_TYPE_LOCAL_INDEX_FIELD:
+
             ObjDesc = (void *) ObjDesc->IndexField.IndexObj;
             break;
 
         default:
+
             goto Cleanup;
         }
 
@@ -688,13 +817,158 @@ AcpiNsDumpObjects (
         return;
     }
 
+    Info.Count = 0;
     Info.DebugLevel = ACPI_LV_TABLES;
     Info.OwnerId = OwnerId;
     Info.DisplayType = DisplayType;
 
     (void) AcpiNsWalkNamespace (Type, StartHandle, MaxDepth,
-                ACPI_NS_WALK_NO_UNLOCK | ACPI_NS_WALK_TEMP_NODES,
-                AcpiNsDumpOneObject, NULL, (void *) &Info, NULL);
+        ACPI_NS_WALK_NO_UNLOCK | ACPI_NS_WALK_TEMP_NODES,
+        AcpiNsDumpOneObject, NULL, (void *) &Info, NULL);
+
+    AcpiOsPrintf ("\nNamespace node count: %u\n\n", Info.Count);
+    (void) AcpiUtReleaseMutex (ACPI_MTX_NAMESPACE);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiNsDumpOneObjectPath, AcpiNsGetMaxDepth
+ *
+ * PARAMETERS:  ObjHandle           - Node to be dumped
+ *              Level               - Nesting level of the handle
+ *              Context             - Passed into WalkNamespace
+ *              ReturnValue         - Not used
+ *
+ * RETURN:      Status
+ *
+ * DESCRIPTION: Dump the full pathname to a namespace object. AcpNsGetMaxDepth
+ *              computes the maximum nesting depth in the namespace tree, in
+ *              order to simplify formatting in AcpiNsDumpOneObjectPath.
+ *              These procedures are UserFunctions called by AcpiNsWalkNamespace.
+ *
+ ******************************************************************************/
+
+static ACPI_STATUS
+AcpiNsDumpOneObjectPath (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  Level,
+    void                    *Context,
+    void                    **ReturnValue)
+{
+    UINT32                  MaxLevel = *((UINT32 *) Context);
+    char                    *Pathname;
+    ACPI_NAMESPACE_NODE     *Node;
+    int                     PathIndent;
+
+
+    if (!ObjHandle)
+    {
+        return (AE_OK);
+    }
+
+    Node = AcpiNsValidateHandle (ObjHandle);
+    if (!Node)
+    {
+        /* Ignore bad node during namespace walk */
+
+        return (AE_OK);
+    }
+
+    Pathname = AcpiNsGetNormalizedPathname (Node, TRUE);
+
+    PathIndent = 1;
+    if (Level <= MaxLevel)
+    {
+        PathIndent = MaxLevel - Level + 1;
+    }
+
+    AcpiOsPrintf ("%2d%*s%-12s%*s",
+        Level, Level, " ", AcpiUtGetTypeName (Node->Type),
+        PathIndent, " ");
+
+    AcpiOsPrintf ("%s\n", &Pathname[1]);
+    ACPI_FREE (Pathname);
+    return (AE_OK);
+}
+
+
+static ACPI_STATUS
+AcpiNsGetMaxDepth (
+    ACPI_HANDLE             ObjHandle,
+    UINT32                  Level,
+    void                    *Context,
+    void                    **ReturnValue)
+{
+    UINT32                  *MaxLevel = (UINT32 *) Context;
+
+
+    if (Level > *MaxLevel)
+    {
+        *MaxLevel = Level;
+    }
+    return (AE_OK);
+}
+
+
+/*******************************************************************************
+ *
+ * FUNCTION:    AcpiNsDumpObjectPaths
+ *
+ * PARAMETERS:  Type                - Object type to be dumped
+ *              DisplayType         - 0 or ACPI_DISPLAY_SUMMARY
+ *              MaxDepth            - Maximum depth of dump. Use ACPI_UINT32_MAX
+ *                                    for an effectively unlimited depth.
+ *              OwnerId             - Dump only objects owned by this ID. Use
+ *                                    ACPI_UINT32_MAX to match all owners.
+ *              StartHandle         - Where in namespace to start/end search
+ *
+ * RETURN:      None
+ *
+ * DESCRIPTION: Dump full object pathnames within the loaded namespace. Uses
+ *              AcpiNsWalkNamespace in conjunction with AcpiNsDumpOneObjectPath.
+ *
+ ******************************************************************************/
+
+void
+AcpiNsDumpObjectPaths (
+    ACPI_OBJECT_TYPE        Type,
+    UINT8                   DisplayType,
+    UINT32                  MaxDepth,
+    ACPI_OWNER_ID           OwnerId,
+    ACPI_HANDLE             StartHandle)
+{
+    ACPI_STATUS             Status;
+    UINT32                  MaxLevel = 0;
+
+
+    ACPI_FUNCTION_ENTRY ();
+
+
+    /*
+     * Just lock the entire namespace for the duration of the dump.
+     * We don't want any changes to the namespace during this time,
+     * especially the temporary nodes since we are going to display
+     * them also.
+     */
+    Status = AcpiUtAcquireMutex (ACPI_MTX_NAMESPACE);
+    if (ACPI_FAILURE (Status))
+    {
+        AcpiOsPrintf ("Could not acquire namespace mutex\n");
+        return;
+    }
+
+    /* Get the max depth of the namespace tree, for formatting later */
+
+    (void) AcpiNsWalkNamespace (Type, StartHandle, MaxDepth,
+        ACPI_NS_WALK_NO_UNLOCK | ACPI_NS_WALK_TEMP_NODES,
+        AcpiNsGetMaxDepth, NULL, (void *) &MaxLevel, NULL);
+
+    /* Now dump the entire namespace */
+
+    (void) AcpiNsWalkNamespace (Type, StartHandle, MaxDepth,
+        ACPI_NS_WALK_NO_UNLOCK | ACPI_NS_WALK_TEMP_NODES,
+        AcpiNsDumpOneObjectPath, NULL, (void *) &MaxLevel, NULL);
 
     (void) AcpiUtReleaseMutex (ACPI_MTX_NAMESPACE);
 }
@@ -765,7 +1039,8 @@ AcpiNsDumpTables (
          * If the name space has not been initialized,
          * there is nothing to dump.
          */
-        ACPI_DEBUG_PRINT ((ACPI_DB_TABLES, "namespace not initialized!\n"));
+        ACPI_DEBUG_PRINT ((ACPI_DB_TABLES,
+            "namespace not initialized!\n"));
         return_VOID;
     }
 
@@ -778,7 +1053,7 @@ AcpiNsDumpTables (
     }
 
     AcpiNsDumpObjects (ACPI_TYPE_ANY, ACPI_DISPLAY_OBJECTS, MaxDepth,
-            ACPI_OWNER_ID_MAX, SearchHandle);
+        ACPI_OWNER_ID_MAX, SearchHandle);
     return_VOID;
 }
 #endif

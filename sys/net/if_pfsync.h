@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Michael Shalayeff
  * All rights reserved.
  *
@@ -204,17 +206,6 @@ struct pfsync_tdb {
 } __packed;
 
 #define	PFSYNC_HDRLEN		sizeof(struct pfsync_header)
-
-/*
- * Names for PFSYNC sysctl objects
- */
-#define	PFSYNCCTL_STATS		1	/* PFSYNC stats */
-#define	PFSYNCCTL_MAXID		2
-
-#define	PFSYNCCTL_NAMES { \
-	{ 0, 0 }, \
-	{ "stats", CTLTYPE_STRUCT }, \
-}
 
 struct pfsyncstats {
 	u_int64_t	pfsyncs_ipackets;	/* total input packets, IPv4 */

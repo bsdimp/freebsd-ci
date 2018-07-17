@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983 Regents of the University of California.
  * All rights reserved.
  *
@@ -10,11 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *	This product includes software developed by the University of
- *	California, Berkeley and its contributors.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -49,7 +47,6 @@ static char *rcsid = "$FreeBSD$";
 
 #include <sys/types.h>
 #include <sys/sysctl.h>
-#include <paths.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -66,7 +63,7 @@ static int findbucket();
 /*
  * Pre-allocate mmap'ed pages
  */
-#define	NPOOLPAGES	(32*1024/pagesz)
+#define	NPOOLPAGES	(128*1024/pagesz)
 static caddr_t		pagepool_start, pagepool_end;
 static int		morepages();
 
@@ -143,25 +140,14 @@ botch(s)
 /* Debugging stuff */
 #define TRACE()	rtld_printf("TRACE %s:%d\n", __FILE__, __LINE__)
 
-extern int pagesize;
-
-static int
-rtld_getpagesize(void)
-{
-	int mib[2];
-	size_t size;
-
-	if (pagesize != 0)
-		return (pagesize);
-
-	mib[0] = CTL_HW;
-	mib[1] = HW_PAGESIZE;
-	size = sizeof(pagesize);
-	if (sysctl(mib, 2, &pagesize, &size, NULL, 0) == -1)
-		return (-1);
-	return (pagesize);
-
-}
+/*
+ * The array of supported page sizes is provided by the user, i.e., the
+ * program that calls this storage allocator.  That program must initialize
+ * the array before making its first call to allocate storage.  The array
+ * must contain at least one page size.  The page sizes must be stored in
+ * increasing order.
+ */
+extern size_t *pagesizes;
 
 void *
 malloc(nbytes)
@@ -177,7 +163,7 @@ malloc(nbytes)
 	 * align break pointer so all data will be page aligned.
 	 */
 	if (pagesz == 0) {
-		pagesz = n = rtld_getpagesize();
+		pagesz = n = pagesizes[0];
 		if (morepages(NPOOLPAGES) == 0)
 			return NULL;
 		op = (union overhead *)(pagepool_start);
@@ -240,7 +226,7 @@ malloc(nbytes)
 	 * Record allocated size of block and
 	 * bound space with magic numbers.
 	 */
-	op->ov_size = (nbytes + RSLOP - 1) & ~(RSLOP - 1);
+	op->ov_size = roundup2(nbytes, RSLOP);
 	op->ov_rmagic = RMAGIC;
   	*(u_short *)((caddr_t)(op + 1) + op->ov_size) = RMAGIC;
 #endif
@@ -344,7 +330,7 @@ free(cp)
  * old malloc man page, it realloc's an already freed block.  Usually
  * this is the last block it freed; occasionally it might be farther
  * back.  We have to search all the free lists for the block in order
- * to determine its bucket: 1st we make one pass thru the lists
+ * to determine its bucket: 1st we make one pass through the lists
  * checking only the first block in each; if that fails we search
  * ``realloc_srchlen'' blocks in each list for a match (the variable
  * is extern so the caller can modify it).  If that fails we just copy
@@ -404,7 +390,7 @@ realloc(cp, nbytes)
 		}
 		if (nbytes <= onb && nbytes > (size_t)i) {
 #ifdef RCHECK
-			op->ov_size = (nbytes + RSLOP - 1) & ~(RSLOP - 1);
+			op->ov_size = roundup2(nbytes, RSLOP);
 			*(u_short *)((caddr_t)(op + 1) + op->ov_size) = RMAGIC;
 #endif
 			return(cp);
@@ -495,7 +481,7 @@ int	n;
 
 	if ((pagepool_start = mmap(0, n * pagesz,
 			PROT_READ|PROT_WRITE,
-			MAP_ANON|MAP_COPY, fd, 0)) == (caddr_t)-1) {
+			MAP_ANON|MAP_PRIVATE, fd, 0)) == (caddr_t)-1) {
 		rtld_printf("Cannot map anonymous memory\n");
 		return 0;
 	}

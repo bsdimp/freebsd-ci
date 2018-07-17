@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Peter Grehan
  * Copyright (c) 2009 Nathan Whitehorn
  * All rights reserved.
@@ -39,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/lock.h>
 #include <sys/ktr.h>
 #include <sys/mutex.h>
+#include <sys/proc.h>
 #include <sys/systm.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
@@ -64,22 +67,103 @@ static char plat_name[64] = "";
 SYSCTL_STRING(_hw, OID_AUTO, platform, CTLFLAG_RD | CTLFLAG_TUN,
     plat_name, 0, "Platform currently in use");
 
-static struct mem_region *pregions = NULL;
-static struct mem_region *aregions = NULL;
+static struct mem_region pregions[PHYS_AVAIL_SZ];
+static struct mem_region aregions[PHYS_AVAIL_SZ];
 static int npregions, naregions;
+
+/*
+ * Memory region utilities: determine if two regions overlap,
+ * and merge two overlapping regions into one
+ */
+static int
+memr_overlap(struct mem_region *r1, struct mem_region *r2)
+{
+	if ((r1->mr_start + r1->mr_size) < r2->mr_start ||
+	    (r2->mr_start + r2->mr_size) < r1->mr_start)
+		return (FALSE);
+
+	return (TRUE);
+}
+
+static void
+memr_merge(struct mem_region *from, struct mem_region *to)
+{
+	vm_offset_t end;
+	end = uqmax(to->mr_start + to->mr_size, from->mr_start + from->mr_size);
+	to->mr_start = uqmin(from->mr_start, to->mr_start);
+	to->mr_size = end - to->mr_start;
+}
+
+/*
+ * Quick sort callout for comparing memory regions.
+ */
+static int
+mr_cmp(const void *a, const void *b)
+{
+	const struct mem_region *regiona, *regionb;
+
+	regiona = a;
+	regionb = b;
+	if (regiona->mr_start < regionb->mr_start)
+		return (-1);
+	else if (regiona->mr_start > regionb->mr_start)
+		return (1);
+	else
+		return (0);
+}
 
 void
 mem_regions(struct mem_region **phys, int *physsz, struct mem_region **avail,
     int *availsz)
 {
-	if (pregions == NULL)
-		PLATFORM_MEM_REGIONS(plat_obj, &pregions, &npregions,
-		    &aregions, &naregions);
+	int i, j, still_merging;
 
-	*phys = pregions;
-	*avail = aregions;
-	*physsz = npregions;
-	*availsz = naregions;
+	if (npregions == 0) {
+		PLATFORM_MEM_REGIONS(plat_obj, pregions, &npregions,
+		    aregions, &naregions);
+		qsort(pregions, npregions, sizeof(*pregions), mr_cmp);
+		qsort(aregions, naregions, sizeof(*aregions), mr_cmp);
+
+		/* Remove overlapping available regions */
+		do {
+			still_merging = FALSE;
+			for (i = 0; i < naregions; i++) {
+				if (aregions[i].mr_size == 0)
+					continue;
+				for (j = i+1; j < naregions; j++) {
+					if (aregions[j].mr_size == 0)
+						continue;
+					if (!memr_overlap(&aregions[j],
+					    &aregions[i]))
+						continue;
+
+					memr_merge(&aregions[j], &aregions[i]);
+					/* mark inactive */
+					aregions[j].mr_size = 0;
+					still_merging = TRUE;
+				}
+			}
+		} while (still_merging == TRUE);
+
+		/* Collapse zero-length available regions */
+		for (i = 0; i < naregions; i++) {
+			if (aregions[i].mr_size == 0) {
+				memcpy(&aregions[i], &aregions[i+1],
+				    (naregions - i - 1)*sizeof(*aregions));
+				naregions--;
+				i--;
+			}
+		}
+	}
+
+	if (phys != NULL)
+		*phys = pregions;
+	if (avail != NULL)
+		*avail = aregions;
+	if (physsz != NULL)
+		*physsz = npregions;
+	if (availsz != NULL)
+		*availsz = naregions;
 }
 
 int
@@ -87,9 +171,11 @@ mem_valid(vm_offset_t addr, int len)
 {
 	int i;
 
-	if (pregions == NULL)
-		PLATFORM_MEM_REGIONS(plat_obj, &pregions, &npregions,
-		    &aregions, &naregions);
+	if (npregions == 0) {
+		struct mem_region *p, *a;
+		int na, np;
+		mem_regions(&p, &np, &a, &na);
+	}
 
 	for (i = 0; i < npregions; i++)
 		if ((addr >= pregions[i].mr_start)
@@ -117,6 +203,15 @@ platform_timebase_freq(struct cpuref *cpu)
 	return (PLATFORM_TIMEBASE_FREQ(plat_obj, cpu));
 }
 
+/*
+ * Put the current CPU, as last step in suspend, to sleep
+ */
+void
+platform_sleep()
+{
+        PLATFORM_SLEEP(plat_obj);
+}
+
 int
 platform_smp_first_cpu(struct cpuref *cpu)
 {
@@ -141,6 +236,12 @@ platform_smp_start_cpu(struct pcpu *cpu)
 	return (PLATFORM_SMP_START_CPU(plat_obj, cpu));
 }
 
+void
+platform_smp_ap_init()
+{
+	PLATFORM_SMP_AP_INIT(plat_obj);
+}
+
 #ifdef SMP
 struct cpu_group *
 cpu_topo(void)
@@ -156,6 +257,12 @@ void
 cpu_reset()
 {
         PLATFORM_RESET(plat_obj);
+}
+
+void platform_smp_timebase_sync(u_long tb, int ap)
+{
+
+	PLATFORM_SMP_TIMEBASE_SYNC(plat_obj, tb, ap);
 }
 
 /*

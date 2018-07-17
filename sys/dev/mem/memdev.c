@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004 Mark R V Murray
  * All rights reserved.
  *
@@ -37,6 +39,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/memrange.h>
 #include <sys/module.h>
 #include <sys/mutex.h>
+#include <sys/priv.h>
 #include <sys/proc.h>
 #include <sys/signalvar.h>
 #include <sys/systm.h>
@@ -51,7 +54,7 @@ static struct cdev *memdev, *kmemdev;
 
 static struct cdevsw mem_cdevsw = {
 	.d_version =	D_VERSION,
-	.d_flags =	D_MEM|D_NEEDGIANT,
+	.d_flags =	D_MEM,
 	.d_open =	memopen,
 	.d_read =	memrw,
 	.d_write =	memrw,
@@ -67,8 +70,14 @@ memopen(struct cdev *dev __unused, int flags, int fmt __unused,
 {
 	int error = 0;
 
-	if (flags & FWRITE)
-		error = securelevel_gt(td->td_ucred, 0);
+	if (flags & FREAD)
+		error = priv_check(td, PRIV_KMEM_READ);
+	if (flags & FWRITE) {
+		if (error == 0)
+			error = priv_check(td, PRIV_KMEM_WRITE);
+		if (error == 0)
+			error = securelevel_gt(td->td_ucred, 0);
+	}
 
 	return (error);
 }

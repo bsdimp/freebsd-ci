@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1988, 1990, 1993, 1995
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -47,6 +49,9 @@ __FBSDID("$FreeBSD$");
 #include <sys/proc.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
+#ifndef INVARIANTS
+#include <sys/syslog.h>
+#endif
 #include <sys/protosw.h>
 #include <sys/random.h>
 
@@ -54,6 +59,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/route.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/vnet.h>
 
 #include <netinet/in.h>
@@ -91,20 +97,41 @@ __FBSDID("$FreeBSD$");
 #include <security/mac/mac_framework.h>
 
 static VNET_DEFINE(uma_zone_t, tcptw_zone);
-#define	V_tcptw_zone			VNET(tcptw_zone)
+#define	V_tcptw_zone		VNET(tcptw_zone)
 static int	maxtcptw;
 
 /*
  * The timed wait queue contains references to each of the TCP sessions
  * currently in the TIME_WAIT state.  The queue pointers, including the
  * queue pointers in each tcptw structure, are protected using the global
- * tcbinfo lock, which must be held over queue iteration and modification.
+ * timewait lock, which must be held over queue iteration and modification.
+ *
+ * Rules on tcptw usage:
+ *  - a inpcb is always freed _after_ its tcptw
+ *  - a tcptw relies on its inpcb reference counting for memory stability
+ *  - a tcptw is dereferenceable only while its inpcb is locked
  */
 static VNET_DEFINE(TAILQ_HEAD(, tcptw), twq_2msl);
-#define	V_twq_2msl			VNET(twq_2msl)
+#define	V_twq_2msl		VNET(twq_2msl)
+
+/* Global timewait lock */
+static VNET_DEFINE(struct rwlock, tw_lock);
+#define	V_tw_lock		VNET(tw_lock)
+
+#define	TW_LOCK_INIT(tw, d)	rw_init_flags(&(tw), (d), 0)
+#define	TW_LOCK_DESTROY(tw)	rw_destroy(&(tw))
+#define	TW_RLOCK(tw)		rw_rlock(&(tw))
+#define	TW_WLOCK(tw)		rw_wlock(&(tw))
+#define	TW_RUNLOCK(tw)		rw_runlock(&(tw))
+#define	TW_WUNLOCK(tw)		rw_wunlock(&(tw))
+#define	TW_LOCK_ASSERT(tw)	rw_assert(&(tw), RA_LOCKED)
+#define	TW_RLOCK_ASSERT(tw)	rw_assert(&(tw), RA_RLOCKED)
+#define	TW_WLOCK_ASSERT(tw)	rw_assert(&(tw), RA_WLOCKED)
+#define	TW_UNLOCK_ASSERT(tw)	rw_assert(&(tw), RA_UNLOCKED)
 
 static void	tcp_tw_2msl_reset(struct tcptw *, int);
-static void	tcp_tw_2msl_stop(struct tcptw *);
+static void	tcp_tw_2msl_stop(struct tcptw *, int);
+static int	tcp_twrespond(struct tcptw *, int);
 
 static int
 tcptw_auto_size(void)
@@ -145,9 +172,9 @@ SYSCTL_PROC(_net_inet_tcp, OID_AUTO, maxtcptw, CTLTYPE_INT|CTLFLAG_RW,
     &maxtcptw, 0, sysctl_maxtcptw, "IU",
     "Maximum number of compressed TCP TIME_WAIT entries");
 
-VNET_DEFINE(int, nolocaltimewait) = 0;
+static VNET_DEFINE(int, nolocaltimewait) = 0;
 #define	V_nolocaltimewait	VNET(nolocaltimewait)
-SYSCTL_VNET_INT(_net_inet_tcp, OID_AUTO, nolocaltimewait, CTLFLAG_RW,
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, nolocaltimewait, CTLFLAG_VNET | CTLFLAG_RW,
     &VNET_NAME(nolocaltimewait), 0,
     "Do not create compressed TCP TIME_WAIT entries for local connections");
 
@@ -164,13 +191,14 @@ tcp_tw_init(void)
 {
 
 	V_tcptw_zone = uma_zcreate("tcptw", sizeof(struct tcptw),
-	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, UMA_ZONE_NOFREE);
+	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, 0);
 	TUNABLE_INT_FETCH("net.inet.tcp.maxtcptw", &maxtcptw);
 	if (maxtcptw == 0)
 		uma_zone_set_max(V_tcptw_zone, tcptw_auto_size());
 	else
 		uma_zone_set_max(V_tcptw_zone, maxtcptw);
 	TAILQ_INIT(&V_twq_2msl);
+	TW_LOCK_INIT(V_tw_lock, "tcptw");
 }
 
 #ifdef VIMAGE
@@ -178,12 +206,14 @@ void
 tcp_tw_destroy(void)
 {
 	struct tcptw *tw;
+	struct epoch_tracker et;
 
-	INP_INFO_WLOCK(&V_tcbinfo);
-	while((tw = TAILQ_FIRST(&V_twq_2msl)) != NULL)
+	INP_INFO_RLOCK_ET(&V_tcbinfo, et);
+	while ((tw = TAILQ_FIRST(&V_twq_2msl)) != NULL)
 		tcp_twclose(tw, 0);
-	INP_INFO_WUNLOCK(&V_tcbinfo);
+	INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
 
+	TW_LOCK_DESTROY(V_tw_lock);
 	uma_zdestroy(V_tcptw_zone);
 }
 #endif
@@ -196,39 +226,54 @@ tcp_tw_destroy(void)
 void
 tcp_twstart(struct tcpcb *tp)
 {
-	struct tcptw *tw;
+	struct tcptw twlocal, *tw;
 	struct inpcb *inp = tp->t_inpcb;
-	int acknow;
 	struct socket *so;
+	bool acknow, local;
 #ifdef INET6
-	int isipv6 = inp->inp_inc.inc_flags & INC_ISIPV6;
+	bool isipv6 = inp->inp_inc.inc_flags & INC_ISIPV6;
 #endif
 
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);	/* tcp_tw_2msl_reset(). */
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	INP_WLOCK_ASSERT(inp);
 
+	/* A dropped inp should never transition to TIME_WAIT state. */
+	KASSERT((inp->inp_flags & INP_DROPPED) == 0, ("tcp_twstart: "
+	    "(inp->inp_flags & INP_DROPPED) != 0"));
+
 	if (V_nolocaltimewait) {
-		int error = 0;
 #ifdef INET6
 		if (isipv6)
-			error = in6_localaddr(&inp->in6p_faddr);
-#endif
-#if defined(INET6) && defined(INET)
+			local = in6_localaddr(&inp->in6p_faddr);
 		else
 #endif
 #ifdef INET
-			error = in_localip(inp->inp_faddr);
+			local = in_localip(inp->inp_faddr);
+#else
+			local = false;
 #endif
-		if (error) {
-			tp = tcp_close(tp);
-			if (tp != NULL)
-				INP_WUNLOCK(inp);
-			return;
-		}
-	}
+	} else
+		local = false;
 
-	tw = uma_zalloc(V_tcptw_zone, M_NOWAIT);
+	/*
+	 * For use only by DTrace.  We do not reference the state
+	 * after this point so modifying it in place is not a problem.
+	 */
+	tcp_state_change(tp, TCPS_TIME_WAIT);
+
+	if (local)
+		tw = &twlocal;
+	else
+		tw = uma_zalloc(V_tcptw_zone, M_NOWAIT);
 	if (tw == NULL) {
+		/*
+		 * Reached limit on total number of TIMEWAIT connections
+		 * allowed. Remove a connection from TIMEWAIT queue in LRU
+		 * fashion to make room for this connection.
+		 *
+		 * XXX:  Check if it possible to always have enough room
+		 * in advance based on guarantees provided by uma_zalloc().
+		 */
 		tw = tcp_tw_2msl_scan(1);
 		if (tw == NULL) {
 			tp = tcp_close(tp);
@@ -237,6 +282,10 @@ tcp_twstart(struct tcpcb *tp)
 			return;
 		}
 	}
+	/*
+	 * For !local case the tcptw will hold a reference on its inpcb
+	 * until tcp_twclose is called.
+	 */
 	tw->tw_inpcb = inp;
 
 	/*
@@ -284,15 +333,19 @@ tcp_twstart(struct tcpcb *tp)
 	tcp_discardcb(tp);
 	so = inp->inp_socket;
 	soisdisconnected(so);
-	tw->tw_cred = crhold(so->so_cred);
-	SOCK_LOCK(so);
 	tw->tw_so_options = so->so_options;
-	SOCK_UNLOCK(so);
+	inp->inp_flags |= INP_TIMEWAIT;
 	if (acknow)
 		tcp_twrespond(tw, TH_ACK);
-	inp->inp_ppcb = tw;
-	inp->inp_flags |= INP_TIMEWAIT;
-	tcp_tw_2msl_reset(tw, 0);
+	if (local)
+		in_pcbdrop(inp);
+	else {
+		in_pcbref(inp);	/* Reference from tw */
+		tw->tw_cred = crhold(so->so_cred);
+		inp->inp_ppcb = tw;
+		TCPSTATES_INC(TCPS_TIME_WAIT);
+		tcp_tw_2msl_reset(tw, 0);
+	}
 
 	/*
 	 * If the inpcb owns the sole reference to the socket, then we can
@@ -303,7 +356,6 @@ tcp_twstart(struct tcpcb *tp)
 		    ("tcp_twstart: !SS_PROTOREF"));
 		inp->inp_flags &= ~INP_SOCKREF;
 		INP_WUNLOCK(inp);
-		ACCEPT_LOCK();
 		SOCK_LOCK(so);
 		so->so_state &= ~SS_PROTOREF;
 		sofree(so);
@@ -311,53 +363,19 @@ tcp_twstart(struct tcpcb *tp)
 		INP_WUNLOCK(inp);
 }
 
-#if 0
-/*
- * The appromixate rate of ISN increase of Microsoft TCP stacks;
- * the actual rate is slightly higher due to the addition of
- * random positive increments.
- *
- * Most other new OSes use semi-randomized ISN values, so we
- * do not need to worry about them.
- */
-#define MS_ISN_BYTES_PER_SECOND		250000
-
-/*
- * Determine if the ISN we will generate has advanced beyond the last
- * sequence number used by the previous connection.  If so, indicate
- * that it is safe to recycle this tw socket by returning 1.
- */
-int
-tcp_twrecycleable(struct tcptw *tw)
-{
-	tcp_seq new_iss = tw->iss;
-	tcp_seq new_irs = tw->irs;
-
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);
-	new_iss += (ticks - tw->t_starttime) * (ISN_BYTES_PER_SECOND / hz);
-	new_irs += (ticks - tw->t_starttime) * (MS_ISN_BYTES_PER_SECOND / hz);
-
-	if (SEQ_GT(new_iss, tw->snd_nxt) && SEQ_GT(new_irs, tw->rcv_nxt))
-		return (1);
-	else
-		return (0);
-}
-#endif
-
 /*
  * Returns 1 if the TIME_WAIT state was killed and we should start over,
  * looking for a pcb in the listen state.  Returns 0 otherwise.
  */
 int
-tcp_twcheck(struct inpcb *inp, struct tcpopt *to, struct tcphdr *th,
+tcp_twcheck(struct inpcb *inp, struct tcpopt *to __unused, struct tcphdr *th,
     struct mbuf *m, int tlen)
 {
 	struct tcptw *tw;
 	int thflags;
 	tcp_seq seq;
 
-	/* tcbinfo lock required for tcp_twclose(), tcp_tw_2msl_reset(). */
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	INP_WLOCK_ASSERT(inp);
 
 	/*
@@ -458,11 +476,10 @@ tcp_twclose(struct tcptw *tw, int reuse)
 	inp = tw->tw_inpcb;
 	KASSERT((inp->inp_flags & INP_TIMEWAIT), ("tcp_twclose: !timewait"));
 	KASSERT(intotw(inp) == tw, ("tcp_twclose: inp_ppcb != tw"));
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);	/* tcp_tw_2msl_stop(). */
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);	/* in_pcbfree() */
 	INP_WLOCK_ASSERT(inp);
 
-	tw->tw_inpcb = NULL;
-	tcp_tw_2msl_stop(tw);
+	tcp_tw_2msl_stop(tw, reuse);
 	inp->inp_ppcb = NULL;
 	in_pcbdrop(inp);
 
@@ -477,7 +494,6 @@ tcp_twclose(struct tcptw *tw, int reuse)
 		if (inp->inp_flags & INP_SOCKREF) {
 			inp->inp_flags &= ~INP_SOCKREF;
 			INP_WUNLOCK(inp);
-			ACCEPT_LOCK();
 			SOCK_LOCK(so);
 			KASSERT(so->so_state & SS_PROTOREF,
 			    ("tcp_twclose: INP_SOCKREF && !SS_PROTOREF"));
@@ -491,17 +507,17 @@ tcp_twclose(struct tcptw *tw, int reuse)
 			 */
 			INP_WUNLOCK(inp);
 		}
-	} else
+	} else {
+		/*
+		 * The socket has been already cleaned-up for us, only free the
+		 * inpcb.
+		 */
 		in_pcbfree(inp);
+	}
 	TCPSTAT_INC(tcps_closed);
-	crfree(tw->tw_cred);
-	tw->tw_cred = NULL;
-	if (reuse)
-		return;
-	uma_zfree(V_tcptw_zone, tw);
 }
 
-int
+static int
 tcp_twrespond(struct tcptw *tw, int flags)
 {
 	struct inpcb *inp = tw->tw_inpcb;
@@ -614,36 +630,126 @@ static void
 tcp_tw_2msl_reset(struct tcptw *tw, int rearm)
 {
 
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	INP_WLOCK_ASSERT(tw->tw_inpcb);
+
+	TW_WLOCK(V_tw_lock);
 	if (rearm)
 		TAILQ_REMOVE(&V_twq_2msl, tw, tw_2msl);
 	tw->tw_time = ticks + 2 * tcp_msl;
 	TAILQ_INSERT_TAIL(&V_twq_2msl, tw, tw_2msl);
+	TW_WUNLOCK(V_tw_lock);
 }
 
 static void
-tcp_tw_2msl_stop(struct tcptw *tw)
+tcp_tw_2msl_stop(struct tcptw *tw, int reuse)
 {
+	struct ucred *cred;
+	struct inpcb *inp;
+	int released __unused;
 
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);
+	INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
+
+	TW_WLOCK(V_tw_lock);
+	inp = tw->tw_inpcb;
+	tw->tw_inpcb = NULL;
+
 	TAILQ_REMOVE(&V_twq_2msl, tw, tw_2msl);
+	cred = tw->tw_cred;
+	tw->tw_cred = NULL;
+	TW_WUNLOCK(V_tw_lock);
+
+	if (cred != NULL)
+		crfree(cred);
+
+	released = in_pcbrele_wlocked(inp);
+	KASSERT(!released, ("%s: inp should not be released here", __func__));
+
+	if (!reuse)
+		uma_zfree(V_tcptw_zone, tw);
+	TCPSTATES_DEC(TCPS_TIME_WAIT);
 }
 
 struct tcptw *
 tcp_tw_2msl_scan(int reuse)
 {
 	struct tcptw *tw;
+	struct inpcb *inp;
+	struct epoch_tracker et;
 
-	INP_INFO_WLOCK_ASSERT(&V_tcbinfo);
-	for (;;) {
-		tw = TAILQ_FIRST(&V_twq_2msl);
-		if (tw == NULL || (!reuse && (tw->tw_time - ticks) > 0))
-			break;
-		INP_WLOCK(tw->tw_inpcb);
-		tcp_twclose(tw, reuse);
-		if (reuse)
-			return (tw);
+#ifdef INVARIANTS
+	if (reuse) {
+		/*
+		 * Exclusive pcbinfo lock is not required in reuse case even if
+		 * two inpcb locks can be acquired simultaneously:
+		 *  - the inpcb transitioning to TIME_WAIT state in
+		 *    tcp_tw_start(),
+		 *  - the inpcb closed by tcp_twclose().
+		 *
+		 * It is because only inpcbs in FIN_WAIT2 or CLOSING states can
+		 * transition in TIME_WAIT state.  Then a pcbcb cannot be in
+		 * TIME_WAIT list and transitioning to TIME_WAIT state at same
+		 * time.
+		 */
+		INP_INFO_RLOCK_ASSERT(&V_tcbinfo);
 	}
-	return (NULL);
+#endif
+
+	for (;;) {
+		TW_RLOCK(V_tw_lock);
+		tw = TAILQ_FIRST(&V_twq_2msl);
+		if (tw == NULL || (!reuse && (tw->tw_time - ticks) > 0)) {
+			TW_RUNLOCK(V_tw_lock);
+			break;
+		}
+		KASSERT(tw->tw_inpcb != NULL, ("%s: tw->tw_inpcb == NULL",
+		    __func__));
+
+		inp = tw->tw_inpcb;
+		in_pcbref(inp);
+		TW_RUNLOCK(V_tw_lock);
+
+		INP_INFO_RLOCK_ET(&V_tcbinfo, et);
+		INP_WLOCK(inp);
+		tw = intotw(inp);
+		if (in_pcbrele_wlocked(inp)) {
+			if (__predict_true(tw == NULL)) {
+				INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+				continue;
+			} else {
+				/* This should not happen as in TIMEWAIT
+				 * state the inp should not be destroyed
+				 * before its tcptw. If INVARIANTS is
+				 * defined panic.
+				 */
+#ifdef INVARIANTS
+				panic("%s: Panic before an infinite "
+					  "loop: INP_TIMEWAIT && (INP_FREED "
+					  "|| inp last reference) && tw != "
+					  "NULL", __func__);
+#else
+				log(LOG_ERR, "%s: Avoid an infinite "
+					"loop: INP_TIMEWAIT && (INP_FREED "
+					"|| inp last reference) && tw != "
+					"NULL", __func__);
+#endif
+				INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+				break;
+			}
+		}
+
+		if (tw == NULL) {
+			/* tcp_twclose() has already been called */
+			INP_WUNLOCK(inp);
+			INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+			continue;
+		}
+
+		tcp_twclose(tw, reuse);
+		INP_INFO_RUNLOCK_ET(&V_tcbinfo, et);
+		if (reuse)
+			return tw;
+	}
+
+	return NULL;
 }

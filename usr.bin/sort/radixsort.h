@@ -1,7 +1,9 @@
 /*	$FreeBSD$	*/
 
 /*-
- * Copyright (C) 2012 Oleg Moskalenko <oleg.moskalenko@citrix.com>
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (C) 2012 Oleg Moskalenko <mom040267@gmail.com>
  * Copyright (C) 2012 Gabor Kovesdan <gabor@FreeBSD.org>
  * All rights reserved.
  *
@@ -28,7 +30,7 @@
  */
 
 #if !defined(__SORT_RADIX_H__)
-#define __SORT_RADIX_H__
+#define	__SORT_RADIX_H__
 
 #include "coll.h"
 #include "sort.h"

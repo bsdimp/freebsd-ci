@@ -30,10 +30,6 @@
 #include "ah.h"
 #include "ah_internal.h"
 
-#ifndef	ATH_DEFAULT
-#define	ATH_DEFAULT	"ath0"
-#endif
-
 #include <getopt.h>
 #include <errno.h>
 #include <err.h>
@@ -67,7 +63,7 @@ spectral_opendev(struct spectralhandler *spectral, const char *devid)
 	spectral->atd.ad_out_data = (caddr_t) &revs;
 	spectral->atd.ad_out_size = sizeof(revs);
 	if (ioctl(spectral->s, SIOCGATHDIAG, &spectral->atd) < 0) {
-		warn(spectral->atd.ad_name);
+		warn("%s", spectral->atd.ad_name);
 		return 0;
 	}
 	spectral->ah_devid = revs.ah_devid;
@@ -108,6 +104,9 @@ spectralset(struct spectralhandler *spectral, int op, u_int32_t param)
 	case SPECTRAL_PARAM_SS_SHORT_RPT:
 		pe.ss_short_report = param;
 		break;
+	case SPECTRAL_PARAM_SS_SPECTRAL_PRI:
+		pe.ss_spectral_pri = param;
+		break;
 	}
 
 	spectral->atd.ad_id = SPECTRAL_CONTROL_SET_PARAMS | ATH_DIAG_IN;
@@ -116,7 +115,7 @@ spectralset(struct spectralhandler *spectral, int op, u_int32_t param)
 	spectral->atd.ad_in_data = (caddr_t) &pe;
 	spectral->atd.ad_in_size = sizeof(HAL_SPECTRAL_PARAM);
 	if (ioctl(spectral->s, SIOCGATHSPECTRAL, &spectral->atd) < 0)
-		err(1, spectral->atd.ad_name);
+		err(1, "%s", spectral->atd.ad_name);
 }
 
 static void
@@ -133,7 +132,7 @@ spectral_get(struct spectralhandler *spectral)
 	spectral->atd.ad_out_size = sizeof(pe);
 
 	if (ioctl(spectral->s, SIOCGATHSPECTRAL, &spectral->atd) < 0)
-		err(1, spectral->atd.ad_name);
+		err(1, "%s", spectral->atd.ad_name);
 
 	printf("Spectral parameters (raw):\n");
 	printf("   ss_enabled: %d\n", pe.ss_enabled);
@@ -142,6 +141,7 @@ spectral_get(struct spectralhandler *spectral)
 	printf("   ss_fft_period: %d\n", pe.ss_fft_period);
 	printf("   ss_period: %d\n", pe.ss_period);
 	printf("   ss_short_report: %d\n", pe.ss_short_report);
+	printf("   ss_spectral_pri: %d\n", pe.ss_spectral_pri);
 	printf("   radar_bin_thresh_sel: %d\n", pe.radar_bin_thresh_sel);
 }
 
@@ -163,7 +163,7 @@ spectral_start(struct spectralhandler *spectral)
 	spectral->atd.ad_out_size = sizeof(pe);
 
 	if (ioctl(spectral->s, SIOCGATHSPECTRAL, &spectral->atd) < 0)
-		err(1, spectral->atd.ad_name);
+		err(1, "%s", spectral->atd.ad_name);
 }
 
 static void
@@ -184,7 +184,7 @@ spectral_stop(struct spectralhandler *spectral)
 	spectral->atd.ad_out_size = sizeof(pe);
 
 	if (ioctl(spectral->s, SIOCGATHSPECTRAL, &spectral->atd) < 0)
-		err(1, spectral->atd.ad_name);
+		err(1, "%s", spectral->atd.ad_name);
 }
 
 static void
@@ -207,7 +207,7 @@ spectral_enable_at_reset(struct spectralhandler *spectral, int val)
 	printf("%s: val=%d\n", __func__, v);
 
 	if (ioctl(spectral->s, SIOCGATHSPECTRAL, &spectral->atd) < 0)
-		err(1, spectral->atd.ad_name);
+		err(1, "%s", spectral->atd.ad_name);
 }
 
 static int
@@ -226,6 +226,8 @@ spectral_set_param(struct spectralhandler *spectral, const char *param,
 		spectralset(spectral, SPECTRAL_PARAM_SS_PERIOD, v);
 	} else if (strcmp(param, "ss_count") == 0) {
 		spectralset(spectral, SPECTRAL_PARAM_SS_COUNT, v);
+	} else if (strcmp(param, "ss_spectral_pri") == 0) {
+		spectralset(spectral, SPECTRAL_PARAM_SS_SPECTRAL_PRI, v);
 	} else {
 		return (0);
 	}

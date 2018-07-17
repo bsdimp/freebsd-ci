@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
@@ -39,6 +41,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/systm.h>
 #include <sys/time.h>
 #include <sys/clock.h>
+#include <sys/disk.h>
 #include <geom/geom.h>
 #include "geom/raid/g_raid.h"
 #include "geom/raid/md_ddf.h"
@@ -257,7 +260,7 @@ g_raid_md_ddf_print(struct ddf_meta *meta)
 	printf("BBM Log              %u:%u\n", GET32(meta, hdr->bbmlog_section), GET32(meta, hdr->bbmlog_length));
 	printf("Diagnostic Space     %u:%u\n", GET32(meta, hdr->Diagnostic_Space), GET32(meta, hdr->Diagnostic_Space_Length));
 	printf("Vendor_Specific_Logs %u:%u\n", GET32(meta, hdr->Vendor_Specific_Logs), GET32(meta, hdr->Vendor_Specific_Logs_Length));
-	printf("**** Controler Data ****\n");
+	printf("**** Controller Data ****\n");
 	printf("Controller_GUID      ");
 	print_guid(meta->cdr->Controller_GUID);
 	printf("\n");
@@ -515,7 +518,7 @@ ddf_meta_find_disk(struct ddf_vol_meta *vmeta, uint32_t PD_Reference,
 	int i, bvd, pos;
 
 	i = 0;
-	for (bvd = 0; bvd < GET16(vmeta, vdc->Secondary_Element_Count); bvd++) {
+	for (bvd = 0; bvd < GET8(vmeta, vdc->Secondary_Element_Count); bvd++) {
 		if (vmeta->bvdc[bvd] == NULL) {
 			i += GET16(vmeta, vdc->Primary_Element_Count); // XXX
 			continue;
@@ -570,7 +573,7 @@ ddf_meta_create(struct g_raid_disk *disk, struct ddf_meta *sample)
 	off_t anchorlba;
 	u_int ss, pos, size;
 	int len, error;
-	char serial_buffer[24];
+	char serial_buffer[DISK_IDENT_SIZE];
 
 	if (sample->hdr == NULL)
 		sample = NULL;
@@ -593,35 +596,36 @@ ddf_meta_create(struct g_raid_disk *disk, struct ddf_meta *sample)
 		memcpy(meta->hdr, sample->hdr, sizeof(struct ddf_header));
 		if (ss != sample->sectorsize) {
 			SET32(meta, hdr->WorkSpace_Length,
-			    (GET32(sample, hdr->WorkSpace_Length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->WorkSpace_Length) *
+			        sample->sectorsize, ss));
 			SET16(meta, hdr->Configuration_Record_Length,
-			    (GET16(sample, hdr->Configuration_Record_Length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET16(sample,
+			        hdr->Configuration_Record_Length) *
+				sample->sectorsize, ss));
 			SET32(meta, hdr->cd_length,
-			    (GET32(sample, hdr->cd_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->cd_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->pdr_length,
-			    (GET32(sample, hdr->pdr_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->pdr_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->vdr_length,
-			    (GET32(sample, hdr->vdr_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->vdr_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->cr_length,
-			    (GET32(sample, hdr->cr_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->cr_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->pdd_length,
-			    (GET32(sample, hdr->pdd_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->pdd_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->bbmlog_length,
-			    (GET32(sample, hdr->bbmlog_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->bbmlog_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->Diagnostic_Space,
-			    (GET32(sample, hdr->bbmlog_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->bbmlog_length) *
+			        sample->sectorsize, ss));
 			SET32(meta, hdr->Vendor_Specific_Logs,
-			    (GET32(sample, hdr->bbmlog_length) *
-			    sample->sectorsize + ss - 1) / ss);
+			    howmany(GET32(sample, hdr->bbmlog_length) *
+			        sample->sectorsize, ss));
 		}
 	} else {
 		SET32(meta, hdr->Signature, DDF_HEADER_SIGNATURE);
@@ -635,24 +639,23 @@ ddf_meta_create(struct g_raid_disk *disk, struct ddf_meta *sample)
 		SET16(meta, hdr->Max_Partitions, DDF_MAX_PARTITIONS);
 		SET16(meta, hdr->Max_Primary_Element_Entries, DDF_MAX_DISKS);
 		SET16(meta, hdr->Configuration_Record_Length,
-		    (sizeof(struct ddf_vdc_record) +
-		     (4 + 8) * GET16(meta, hdr->Max_Primary_Element_Entries) +
-		     ss - 1) / ss);
+		    howmany(sizeof(struct ddf_vdc_record) + (4 + 8) *
+		        GET16(meta, hdr->Max_Primary_Element_Entries), ss));
 		SET32(meta, hdr->cd_length,
-		    (sizeof(struct ddf_cd_record) + ss - 1) / ss);
+		    howmany(sizeof(struct ddf_cd_record), ss));
 		SET32(meta, hdr->pdr_length,
-		    (sizeof(struct ddf_pd_record) +
-		     sizeof(struct ddf_pd_entry) *
-		     GET16(meta, hdr->Max_PD_Entries) + ss - 1) / ss);
+		    howmany(sizeof(struct ddf_pd_record) +
+		        sizeof(struct ddf_pd_entry) * GET16(meta,
+			hdr->Max_PD_Entries), ss));
 		SET32(meta, hdr->vdr_length,
-		    (sizeof(struct ddf_vd_record) +
-		     sizeof(struct ddf_vd_entry) *
-		     GET16(meta, hdr->Max_VD_Entries) + ss - 1) / ss);
+		    howmany(sizeof(struct ddf_vd_record) +
+		        sizeof(struct ddf_vd_entry) *
+			GET16(meta, hdr->Max_VD_Entries), ss));
 		SET32(meta, hdr->cr_length,
 		    GET16(meta, hdr->Configuration_Record_Length) *
 		    (GET16(meta, hdr->Max_Partitions) + 1));
 		SET32(meta, hdr->pdd_length,
-		    (sizeof(struct ddf_pdd_record) + ss - 1) / ss);
+		    howmany(sizeof(struct ddf_pdd_record), ss));
 		SET32(meta, hdr->bbmlog_length, 0);
 		SET32(meta, hdr->Diagnostic_Space_Length, 0);
 		SET32(meta, hdr->Vendor_Specific_Logs_Length, 0);
@@ -755,10 +758,8 @@ ddf_meta_create(struct g_raid_disk *disk, struct ddf_meta *sample)
 static void
 ddf_meta_copy(struct ddf_meta *dst, struct ddf_meta *src)
 {
-	struct ddf_header *hdr;
 	u_int ss;
 
-	hdr = src->hdr;
 	dst->bigendian = src->bigendian;
 	ss = dst->sectorsize = src->sectorsize;
 	dst->hdr = malloc(ss, M_MD_DDF, M_WAITOK);
@@ -843,10 +844,8 @@ ddf_vol_meta_create(struct ddf_vol_meta *meta, struct ddf_meta *sample)
 {
 	struct timespec ts;
 	struct clocktime ct;
-	struct ddf_header *hdr;
 	u_int ss, size;
 
-	hdr = sample->hdr;
 	meta->bigendian = sample->bigendian;
 	ss = meta->sectorsize = sample->sectorsize;
 	meta->hdr = malloc(ss, M_MD_DDF, M_WAITOK);
@@ -872,13 +871,11 @@ static void
 ddf_vol_meta_update(struct ddf_vol_meta *dst, struct ddf_meta *src,
     uint8_t *GUID, int started)
 {
-	struct ddf_header *hdr;
 	struct ddf_vd_entry *vde;
 	struct ddf_vdc_record *vdc;
 	int vnew, bvnew, bvd, size;
 	u_int ss;
 
-	hdr = src->hdr;
 	vde = &src->vdr->entry[ddf_meta_find_vd(src, GUID)];
 	vdc = ddf_meta_find_vdc(src, GUID);
 	if (GET8D(src, vdc->Secondary_Element_Count) == 1)
@@ -1161,6 +1158,16 @@ hdrerror:
 		    (GET16(meta, hdr->Configuration_Record_Length) * ss - 512) / 12));
 	}
 
+	if (GET32(meta, hdr->cd_length) * ss >= MAXPHYS ||
+	    GET32(meta, hdr->pdr_length) * ss >= MAXPHYS ||
+	    GET32(meta, hdr->vdr_length) * ss >= MAXPHYS ||
+	    GET32(meta, hdr->cr_length) * ss >= MAXPHYS ||
+	    GET32(meta, hdr->pdd_length) * ss >= MAXPHYS ||
+	    GET32(meta, hdr->bbmlog_length) * ss >= MAXPHYS) {
+		G_RAID_DEBUG(1, "%s: Blocksize is too big.", pp->name);
+		goto hdrerror;
+	}
+
 	/* Read controller data. */
 	buf = g_read_data(cp, (lba + GET32(meta, hdr->cd_section)) * ss,
 	    GET32(meta, hdr->cd_length) * ss, &error);
@@ -1182,6 +1189,28 @@ hdrerror:
 	g_free(buf);
 	if (GET32(meta, pdr->Signature) != DDF_PDR_SIGNATURE)
 		goto hdrerror;
+	/*
+	 * Workaround for reading metadata corrupted due to graid bug.
+	 * XXX: Remove this before we have disks above 128PB. :)
+	 */
+	if (meta->bigendian) {
+		for (i = 0; i < GET16(meta, pdr->Populated_PDEs); i++) {
+			if (isff(meta->pdr->entry[i].PD_GUID, 24))
+				continue;
+			if (GET32(meta, pdr->entry[i].PD_Reference) ==
+			    0xffffffff)
+				continue;
+			if (GET64(meta, pdr->entry[i].Configured_Size) >=
+			     (1ULL << 48)) {
+				SET16(meta, pdr->entry[i].PD_State,
+				    GET16(meta, pdr->entry[i].PD_State) &
+				    ~DDF_PDE_FAILED);
+				SET64(meta, pdr->entry[i].Configured_Size,
+				    GET64(meta, pdr->entry[i].Configured_Size) &
+				    ((1ULL << 48) - 1));
+			}
+		}
+	}
 
 	/* Read virtual disk records. */
 	buf = g_read_data(cp, (lba + GET32(meta, hdr->vdr_section)) * ss,
@@ -1393,12 +1422,10 @@ static int
 g_raid_md_ddf_purge_volumes(struct g_raid_softc *sc)
 {
 	struct g_raid_volume	*vol, *tvol;
-	struct g_raid_md_ddf_pervolume *pv;
 	int i, res;
 
 	res = 0;
 	TAILQ_FOREACH_SAFE(vol, &sc->sc_volumes, v_next, tvol) {
-		pv = vol->v_md_data;
 		if (vol->v_stopping)
 			continue;
 		for (i = 0; i < vol->v_disks_count; i++) {
@@ -1604,7 +1631,7 @@ g_raid_md_ddf_start_disk(struct g_raid_disk *disk, struct g_raid_volume *vol)
 	vmeta = &pv->pv_meta;
 	gmeta = &mdi->mdio_meta;
 
-	/* Find disk position in metadata by it's reference. */
+	/* Find disk position in metadata by its reference. */
 	disk_pos = ddf_meta_find_disk(vmeta, reference,
 	    &md_disk_bvd, &md_disk_pos);
 	md_pde_pos = ddf_meta_find_pd(gmeta, NULL, reference);
@@ -1711,7 +1738,7 @@ nofit:
 	/* Welcome the new disk. */
 	if (resurrection)
 		g_raid_change_disk_state(disk, G_RAID_DISK_S_ACTIVE);
-	else if (GET8(gmeta, pdr->entry[md_pde_pos].PD_State) & DDF_PDE_PFA)
+	else if (GET16(gmeta, pdr->entry[md_pde_pos].PD_State) & DDF_PDE_PFA)
 		g_raid_change_disk_state(disk, G_RAID_DISK_S_FAILED);
 	else
 		g_raid_change_disk_state(disk, G_RAID_DISK_S_ACTIVE);
@@ -1730,11 +1757,11 @@ nofit:
 		/* Stale disk, almost same as new. */
 		g_raid_change_subdisk_state(sd,
 		    G_RAID_SUBDISK_S_NEW);
-	} else if (GET8(gmeta, pdr->entry[md_pde_pos].PD_State) & DDF_PDE_PFA) {
+	} else if (GET16(gmeta, pdr->entry[md_pde_pos].PD_State) & DDF_PDE_PFA) {
 		/* Failed disk. */
 		g_raid_change_subdisk_state(sd,
 		    G_RAID_SUBDISK_S_FAILED);
-	} else if ((GET8(gmeta, pdr->entry[md_pde_pos].PD_State) &
+	} else if ((GET16(gmeta, pdr->entry[md_pde_pos].PD_State) &
 	     (DDF_PDE_FAILED | DDF_PDE_REBUILD)) != 0) {
 		/* Rebuilding disk. */
 		g_raid_change_subdisk_state(sd,
@@ -1832,7 +1859,6 @@ g_raid_md_ddf_start(struct g_raid_volume *vol)
 	struct g_raid_md_ddf_pervolume *pv;
 	struct g_raid_md_ddf_object *mdi;
 	struct ddf_vol_meta *vmeta;
-	struct ddf_vdc_record *vdc;
 	uint64_t *val2;
 	int i, j, bvd;
 
@@ -1841,7 +1867,6 @@ g_raid_md_ddf_start(struct g_raid_volume *vol)
 	mdi = (struct g_raid_md_ddf_object *)md;
 	pv = vol->v_md_data;
 	vmeta = &pv->pv_meta;
-	vdc = vmeta->vdc;
 
 	vol->v_raid_level = GET8(vmeta, vdc->Primary_RAID_Level);
 	vol->v_raid_level_qualifier = GET8(vmeta, vdc->RLQ);
@@ -2098,13 +2123,10 @@ g_raid_md_taste_ddf(struct g_raid_md_object *md, struct g_class *mp,
 	pp = cp->provider;
 
 	/* Read metadata from device. */
-	if (g_access(cp, 1, 0, 0) != 0)
-		return (G_RAID_MD_TASTE_FAIL);
 	g_topology_unlock();
 	bzero(&meta, sizeof(meta));
 	error = ddf_meta_read(cp, &meta);
 	g_topology_lock();
-	g_access(cp, -1, 0, 0);
 	if (error != 0)
 		return (G_RAID_MD_TASTE_FAIL);
 	be = meta.bigendian;
@@ -2142,7 +2164,11 @@ g_raid_md_taste_ddf(struct g_raid_md_object *md, struct g_class *mp,
 		geom = sc->sc_geom;
 	}
 
+	/* There is no return after this point, so we close passed consumer. */
+	g_access(cp, -1, 0, 0);
+
 	rcp = g_new_consumer(geom);
+	rcp->flags |= G_CF_DIRECT_RECEIVE;
 	g_attach(rcp, pp);
 	if (g_access(rcp, 1, 1, 1) != 0)
 		; //goto fail1;
@@ -2832,24 +2858,24 @@ g_raid_md_write_ddf(struct g_raid_md_object *md, struct g_raid_volume *tvol,
 			    GET32(vmeta, bvdc[bvd]->Physical_Disk_Sequence[pos]));
 			if (j < 0)
 				continue;
-			SET32(gmeta, pdr->entry[j].PD_Type,
-			    GET32(gmeta, pdr->entry[j].PD_Type) |
+			SET16(gmeta, pdr->entry[j].PD_Type,
+			    GET16(gmeta, pdr->entry[j].PD_Type) |
 			    DDF_PDE_PARTICIPATING);
 			if (sd->sd_state == G_RAID_SUBDISK_S_NONE)
-				SET32(gmeta, pdr->entry[j].PD_State,
-				    GET32(gmeta, pdr->entry[j].PD_State) |
+				SET16(gmeta, pdr->entry[j].PD_State,
+				    GET16(gmeta, pdr->entry[j].PD_State) |
 				    (DDF_PDE_FAILED | DDF_PDE_MISSING));
 			else if (sd->sd_state == G_RAID_SUBDISK_S_FAILED)
-				SET32(gmeta, pdr->entry[j].PD_State,
-				    GET32(gmeta, pdr->entry[j].PD_State) |
+				SET16(gmeta, pdr->entry[j].PD_State,
+				    GET16(gmeta, pdr->entry[j].PD_State) |
 				    (DDF_PDE_FAILED | DDF_PDE_PFA));
 			else if (sd->sd_state <= G_RAID_SUBDISK_S_REBUILD)
-				SET32(gmeta, pdr->entry[j].PD_State,
-				    GET32(gmeta, pdr->entry[j].PD_State) |
+				SET16(gmeta, pdr->entry[j].PD_State,
+				    GET16(gmeta, pdr->entry[j].PD_State) |
 				    DDF_PDE_REBUILD);
 			else
-				SET32(gmeta, pdr->entry[j].PD_State,
-				    GET32(gmeta, pdr->entry[j].PD_State) |
+				SET16(gmeta, pdr->entry[j].PD_State,
+				    GET16(gmeta, pdr->entry[j].PD_State) |
 				    DDF_PDE_ONLINE);
 		}
 	}
@@ -2862,8 +2888,8 @@ g_raid_md_write_ddf(struct g_raid_md_object *md, struct g_raid_volume *tvol,
 		if (i < 0)
 			continue;
 		if (disk->d_state == G_RAID_DISK_S_FAILED) {
-			SET32(gmeta, pdr->entry[i].PD_State,
-			    GET32(gmeta, pdr->entry[i].PD_State) |
+			SET16(gmeta, pdr->entry[i].PD_State,
+			    GET16(gmeta, pdr->entry[i].PD_State) |
 			    (DDF_PDE_FAILED | DDF_PDE_PFA));
 		}
 		if (disk->d_state != G_RAID_DISK_S_SPARE)
@@ -2880,8 +2906,8 @@ g_raid_md_write_ddf(struct g_raid_md_object *md, struct g_raid_volume *tvol,
 			    GET16(gmeta, pdr->entry[i].PD_Type) |
 			    DDF_PDE_CONFIG_SPARE);
 		}
-		SET32(gmeta, pdr->entry[i].PD_State,
-		    GET32(gmeta, pdr->entry[i].PD_State) |
+		SET16(gmeta, pdr->entry[i].PD_State,
+		    GET16(gmeta, pdr->entry[i].PD_State) |
 		    DDF_PDE_ONLINE);
 	}
 

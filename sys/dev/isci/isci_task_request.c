@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * BSD LICENSE
  *
  * Copyright(c) 2008 - 2011 Intel Corporation. All rights reserved.
@@ -194,11 +196,30 @@ isci_task_request_complete(SCI_CONTROLLER_HANDLE_T scif_controller,
 		break;
 
 	case SCI_TASK_FAILURE_INVALID_STATE:
-	case SCI_TASK_FAILURE_INSUFFICIENT_RESOURCES:
-	case SCI_FAILURE_TIMEOUT:
 		retry_task = TRUE;
 		isci_log_message(0, "ISCI",
-		    "unhandled task completion code 0x%x\n", completion_status);
+		    "task failure (invalid state) - retrying\n");
+		break;
+
+	case SCI_TASK_FAILURE_INSUFFICIENT_RESOURCES:
+		retry_task = TRUE;
+		isci_log_message(0, "ISCI",
+		    "task failure (insufficient resources) - retrying\n");
+		break;
+
+	case SCI_FAILURE_TIMEOUT:
+		if (isci_controller->fail_on_task_timeout) {
+			retry_task = FALSE;
+			isci_log_message(0, "ISCI",
+			    "task timeout - not retrying\n");
+			scif_cb_domain_device_removed(scif_controller,
+			    isci_remote_device->domain->sci_object,
+			    remote_device);
+		} else {
+			retry_task = TRUE;
+			isci_log_message(0, "ISCI",
+			    "task timeout - retrying\n");
+		}
 		break;
 
 	case SCI_TASK_FAILURE:

@@ -27,9 +27,10 @@
 #
 # $FreeBSD$
 
+PACKAGE=lib${LIB}
 SHLIBDIR?= /lib
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
 LIB=	ipsec
 SHLIB_MAJOR= 4
@@ -39,7 +40,7 @@ CFLAGS+=-DIPSEC_DEBUG -DIPSEC
 CFLAGS+=-DINET6
 .endif
 
-#.PATH:	${.CURDIR}/../../sys/netipsec
+#.PATH:	${SRCTOP}/sys/netipsec
 #SRCS=	pfkey.c pfkey_dump.c
 SRCS+=	ipsec_strerror.c policy_parse.y policy_token.l
 SRCS+=	ipsec_dump_policy.c ipsec_get_policylen.c

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-07 Applied Micro Circuits Corporation.
  * Copyright (c) 2004-05 Vinod Kashyap.
  * All rights reserved.
@@ -207,15 +209,17 @@ tw_osli_execute_scsi(struct tw_osli_req_context *req, union ccb *ccb)
 		csio->cdb_io.cdb_bytes[0]);
 
 	if (ccb_h->target_id >= TW_CL_MAX_NUM_UNITS) {
-		tw_osli_dbg_dprintf(3, sc, "Invalid target. PTL = %x %x %x",
-			ccb_h->path_id, ccb_h->target_id, ccb_h->target_lun);
+		tw_osli_dbg_dprintf(3, sc, "Invalid target. PTL = %x %x %jx",
+			ccb_h->path_id, ccb_h->target_id,
+			(uintmax_t)ccb_h->target_lun);
 		ccb_h->status |= CAM_TID_INVALID;
 		xpt_done(ccb);
 		return(1);
 	}
 	if (ccb_h->target_lun >= TW_CL_MAX_NUM_LUNS) {
-		tw_osli_dbg_dprintf(3, sc, "Invalid lun. PTL = %x %x %x",
-			ccb_h->path_id, ccb_h->target_id, ccb_h->target_lun);
+		tw_osli_dbg_dprintf(3, sc, "Invalid lun. PTL = %x %x %jx",
+			ccb_h->path_id, ccb_h->target_id,
+			(uintmax_t)ccb_h->target_lun);
 		ccb_h->status |= CAM_LUN_INVALID;
 		xpt_done(ccb);
 		return(1);
@@ -422,14 +426,14 @@ twa_action(struct cam_sim *sim, union ccb *ccb)
 		path_inq->bus_id = cam_sim_bus(sim);
 		path_inq->initiator_id = TW_CL_MAX_NUM_UNITS;
 		path_inq->base_transfer_speed = 100000;
-		strncpy(path_inq->sim_vid, "FreeBSD", SIM_IDLEN);
-		strncpy(path_inq->hba_vid, "3ware", HBA_IDLEN);
-		strncpy(path_inq->dev_name, cam_sim_name(sim), DEV_IDLEN);
-                path_inq->transport = XPORT_SPI;
-                path_inq->transport_version = 2;
-                path_inq->protocol = PROTO_SCSI;
-                path_inq->protocol_version = SCSI_REV_2;
-                path_inq->maxio = TW_CL_MAX_IO_SIZE;
+		strlcpy(path_inq->sim_vid, "FreeBSD", SIM_IDLEN);
+		strlcpy(path_inq->hba_vid, "3ware", HBA_IDLEN);
+		strlcpy(path_inq->dev_name, cam_sim_name(sim), DEV_IDLEN);
+		path_inq->transport = XPORT_SPI;
+		path_inq->transport_version = 2;
+		path_inq->protocol = PROTO_SCSI;
+		path_inq->protocol_version = SCSI_REV_2;
+		path_inq->maxio = TW_CL_MAX_IO_SIZE;
 		ccb_h->status = CAM_REQ_CMP;
 		xpt_done(ccb);
 		break;
@@ -488,7 +492,7 @@ tw_osli_request_bus_scan(struct twa_softc *sc)
 	if ((ccb = xpt_alloc_ccb()) == NULL)
 		return(ENOMEM);
 	mtx_lock(sc->sim_lock);
-	if (xpt_create_path(&ccb->ccb_h.path, xpt_periph, cam_sim_path(sc->sim),
+	if (xpt_create_path(&ccb->ccb_h.path, NULL, cam_sim_path(sc->sim),
 	    CAM_TARGET_WILDCARD, CAM_LUN_WILDCARD) != CAM_REQ_CMP) {
 		xpt_free_ccb(ccb);
 		mtx_unlock(sc->sim_lock);

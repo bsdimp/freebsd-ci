@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -32,6 +34,8 @@
 
 #ifndef _ARPA_TFTP_H_
 #define	_ARPA_TFTP_H_
+
+#include <sys/cdefs.h>
 
 /*
  * Trivial File Transfer Protocol (IEN-133)

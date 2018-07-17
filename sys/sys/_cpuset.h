@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008,	Jeffrey Roberson <jeff@freebsd.org>
  * All rights reserved.
  *
@@ -32,27 +34,19 @@
 #ifndef _SYS__CPUSET_H_
 #define	_SYS__CPUSET_H_
 
+#include <sys/_bitset.h>
+
 #ifdef _KERNEL
 #define	CPU_SETSIZE	MAXCPU
 #endif
 
-#define	CPU_MAXSIZE	128
+#define	CPU_MAXSIZE	256
 
 #ifndef	CPU_SETSIZE
 #define	CPU_SETSIZE	CPU_MAXSIZE
 #endif
 
-#define	_NCPUBITS	(sizeof(long) * NBBY)	/* bits per mask */
-#define	_NCPUWORDS	howmany(CPU_SETSIZE, _NCPUBITS)
-
-typedef	struct _cpuset {
-	long	__bits[howmany(CPU_SETSIZE, _NCPUBITS)];
-} cpuset_t;
-
-#define	CPUSET_FSET							\
-	[ 0 ... (_NCPUWORDS - 1) ] = (-1L)
-
-#define	CPUSET_T_INITIALIZER(x)						\
-	{ .__bits = { x } }
+BITSET_DEFINE(_cpuset, CPU_SETSIZE);
+typedef struct _cpuset cpuset_t;
 
 #endif /* !_SYS__CPUSET_H_ */

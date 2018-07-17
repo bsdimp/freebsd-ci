@@ -4,12 +4,13 @@
 #
 
 # PROVIDE: rpcbind
-# REQUIRE: NETWORKING ntpdate syslogd named
+# REQUIRE: NETWORKING ntpdate syslogd
 # KEYWORD: shutdown
 
 . /etc/rc.subr
 
 name="rpcbind"
+desc="Universal addresses to RPC program number mapper"
 rcvar="rpcbind_enable"
 command="/usr/sbin/${name}"
 

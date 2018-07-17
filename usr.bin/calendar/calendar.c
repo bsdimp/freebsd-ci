@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1989, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -96,10 +98,14 @@ main(int argc, char *argv[])
 
 		case 'A': /* days after current date */
 			f_dayAfter = atoi(optarg);
+			if (f_dayAfter < 0)
+				errx(1, "number of days must be positive");
 			break;
 
 		case 'B': /* days before current date */
 			f_dayBefore = atoi(optarg);
+			if (f_dayBefore < 0)
+				errx(1, "number of days must be positive");
 			break;
 
 		case 'D': /* debug output of sun and moon info */

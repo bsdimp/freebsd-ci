@@ -23,7 +23,8 @@
  */
 
 static int dtrace_verbose_ioctl;
-SYSCTL_INT(_debug_dtrace, OID_AUTO, verbose_ioctl, CTLFLAG_RW, &dtrace_verbose_ioctl, 0, "");
+SYSCTL_INT(_debug_dtrace, OID_AUTO, verbose_ioctl, CTLFLAG_RW,
+    &dtrace_verbose_ioctl, 0, "log DTrace ioctls");
 
 #define DTRACE_IOCTL_PRINTF(fmt, ...)	if (dtrace_verbose_ioctl) printf(fmt, ## __VA_ARGS__ )
 
@@ -31,45 +32,63 @@ static int
 dtrace_ioctl_helper(struct cdev *dev, u_long cmd, caddr_t addr, int flags,
     struct thread *td)
 {
+	struct proc *p;
+	dof_helper_t *dhp;
+	dof_hdr_t *dof;
 	int rval;
-	dof_helper_t *dhp = NULL;
-	dof_hdr_t *dof = NULL;
 
+	dhp = NULL;
+	dof = NULL;
+	rval = 0;
 	switch (cmd) {
 	case DTRACEHIOC_ADDDOF:
 		dhp = (dof_helper_t *)addr;
-		/* XXX all because dofhp_dof is 64 bit */
-		addr = (caddr_t)(vm_offset_t)dhp->dofhp_dof;
-		/* FALLTHROUGH */
-	case DTRACEHIOC_ADD:
-		dof = dtrace_dof_copyin((intptr_t)addr, &rval);
+		addr = (caddr_t)(uintptr_t)dhp->dofhp_dof;
+		p = curproc;
+		if (p->p_pid == dhp->dofhp_pid) {
+			dof = dtrace_dof_copyin((uintptr_t)addr, &rval);
+		} else {
+			p = pfind(dhp->dofhp_pid);
+			if (p == NULL)
+				return (EINVAL);
+			if (!P_SHOULDSTOP(p) ||
+			    (p->p_flag & (P_TRACED | P_WEXIT)) != P_TRACED ||
+			    p->p_pptr != curproc) {
+				PROC_UNLOCK(p);
+				return (EINVAL);
+			}
+			_PHOLD(p);
+			PROC_UNLOCK(p);
+			dof = dtrace_dof_copyin_proc(p, (uintptr_t)addr, &rval);
+		}
 
-		if (dof == NULL)
-			return (rval);
+		if (dof == NULL) {
+			if (p != curproc)
+				PRELE(p);
+			break;
+		}
 
 		mutex_enter(&dtrace_lock);
-		if ((rval = dtrace_helper_slurp((dof_hdr_t *)dof, dhp)) != -1) {
-			if (dhp) {
-				dhp->gen = rval;
-				copyout(dhp, addr, sizeof(*dhp));
-			}
+		if ((rval = dtrace_helper_slurp(dof, dhp, p)) != -1) {
+			dhp->dofhp_gen = rval;
 			rval = 0;
 		} else {
 			rval = EINVAL;
 		}
 		mutex_exit(&dtrace_lock);
-		return (rval);
+		if (p != curproc)
+			PRELE(p);
+		break;
 	case DTRACEHIOC_REMOVE:
 		mutex_enter(&dtrace_lock);
-		rval = dtrace_helper_destroygen((int)*addr);
+		rval = dtrace_helper_destroygen(NULL, *(int *)(uintptr_t)addr);
 		mutex_exit(&dtrace_lock);
-
-		return (rval);
+		break;
 	default:
+		rval = ENOTTY;
 		break;
 	}
-
-	return (ENOTTY);
+	return (rval);
 }
 
 /* ARGSUSED */
@@ -77,12 +96,9 @@ static int
 dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
     int flags __unused, struct thread *td)
 {
-#if __FreeBSD_version < 800039
-	dtrace_state_t *state = dev->si_drv1;
-#else
 	dtrace_state_t *state;
 	devfs_get_cdevpriv((void **) &state);
-#endif
+
 	int error = 0;
 	if (state == NULL)
 		return (EINVAL);
@@ -215,9 +231,7 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 		    "DTRACEIOC_AGGSNAP":"DTRACEIOC_BUFSNAP",
 		    curcpu, desc.dtbd_cpu);
 
-		if (desc.dtbd_cpu >= NCPU)
-			return (ENOENT);
-		if (pcpu_find(desc.dtbd_cpu) == NULL)
+		if (desc.dtbd_cpu >= MAXCPU || CPU_ABSENT(desc.dtbd_cpu))
 			return (ENOENT);
 
 		mutex_enter(&dtrace_lock);
@@ -274,6 +288,7 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 			desc.dtbd_drops = buf->dtb_drops;
 			desc.dtbd_errors = buf->dtb_errors;
 			desc.dtbd_oldest = buf->dtb_xamot_offset;
+			desc.dtbd_timestamp = dtrace_gethrtime();
 
 			mutex_exit(&dtrace_lock);
 
@@ -328,6 +343,7 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 		desc.dtbd_drops = buf->dtb_xamot_drops;
 		desc.dtbd_errors = buf->dtb_xamot_errors;
 		desc.dtbd_oldest = 0;
+		desc.dtbd_timestamp = buf->dtb_switched;
 
 		mutex_exit(&dtrace_lock);
 
@@ -411,7 +427,8 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 			return (EBUSY);
 		}
 
-		if (dtrace_dof_slurp(dof, vstate, td->td_ucred, &enab, 0, B_TRUE) != 0) {
+		if (dtrace_dof_slurp(dof, vstate, td->td_ucred, &enab, 0, 0,
+		    B_TRUE) != 0) {
 			mutex_exit(&dtrace_lock);
 			mutex_exit(&cpu_lock);
 			dtrace_dof_destroy(dof);
@@ -578,19 +595,25 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 			return (EINVAL);
 
 		mutex_enter(&dtrace_provider_lock);
+#ifdef illumos
 		mutex_enter(&mod_lock);
+#endif
 		mutex_enter(&dtrace_lock);
 
 		if (desc->dtargd_id > dtrace_nprobes) {
 			mutex_exit(&dtrace_lock);
+#ifdef illumos
 			mutex_exit(&mod_lock);
+#endif
 			mutex_exit(&dtrace_provider_lock);
 			return (EINVAL);
 		}
 
 		if ((probe = dtrace_probes[desc->dtargd_id - 1]) == NULL) {
 			mutex_exit(&dtrace_lock);
+#ifdef illumos
 			mutex_exit(&mod_lock);
+#endif
 			mutex_exit(&dtrace_provider_lock);
 			return (EINVAL);
 		}
@@ -614,7 +637,9 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 			    probe->dtpr_id, probe->dtpr_arg, desc);
 		}
 
+#ifdef illumos
 		mutex_exit(&mod_lock);
+#endif
 		mutex_exit(&dtrace_provider_lock);
 
 		return (0);
@@ -770,11 +795,7 @@ dtrace_ioctl(struct cdev *dev, u_long cmd, caddr_t addr,
 		nerrs = state->dts_errors;
 		dstate = &state->dts_vstate.dtvs_dynvars;
 
-		for (i = 0; i < NCPU; i++) {
-#if !defined(sun)
-			if (pcpu_find(i) == NULL)
-				continue;
-#endif
+		CPU_FOREACH(i) {
 			dtrace_dstate_percpu_t *dcpu = &dstate->dtds_percpu[i];
 
 			stat->dtst_dyndrops += dcpu->dtdsc_drops;

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -42,8 +44,8 @@ drm_le_cmp(void *priv, const void *d1, const void *d2)
 	struct drm_list_sort_thunk *thunk;
 
 	thunk = priv;
-	le1 = __DECONST(struct list_head *, d1);
-	le2 = __DECONST(struct list_head *, d2);
+	le1 = *(__DECONST(struct list_head **, d1));
+	le2 = *(__DECONST(struct list_head **, d2));
 	return ((thunk->cmp)(thunk->priv, le1, le2));
 }
 

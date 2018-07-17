@@ -114,9 +114,9 @@ class basic_ios
 public:
     // types:
     typedef charT char_type;
-    typedef typename traits::int_type int_type;
-    typedef typename traits::pos_type pos_type;
-    typedef typename traits::off_type off_type;
+    typedef typename traits::int_type int_type;  // removed in C++17
+    typedef typename traits::pos_type pos_type;  // removed in C++17
+    typedef typename traits::off_type off_type;  // removed in C++17
     typedef traits traits_type;
 
     operator unspecified-bool-type() const;
@@ -203,9 +203,9 @@ enum class io_errc
 };
 
 concept_map ErrorCodeEnum<io_errc> { };
-error_code make_error_code(io_errc e);
-error_condition make_error_condition(io_errc e);
-storage-class-specifier const error_category& iostream_category;
+error_code make_error_code(io_errc e) noexcept; 
+error_condition make_error_condition(io_errc e) noexcept; 
+storage-class-specifier const error_category& iostream_category() noexcept;
 
 }  // std
 
@@ -216,6 +216,10 @@ storage-class-specifier const error_category& iostream_category;
 #include <__locale>
 #include <system_error>
 
+#if !defined(_LIBCPP_HAS_NO_ATOMIC_HEADER)
+#include <atomic>     // for __xindex_
+#endif
+
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
 #pragma GCC system_header
 #endif
@@ -224,10 +228,10 @@ _LIBCPP_BEGIN_NAMESPACE_STD
 
 typedef ptrdiff_t streamsize;
 
-class _LIBCPP_VISIBLE ios_base
+class _LIBCPP_TYPE_VIS ios_base
 {
 public:
-    class _LIBCPP_VISIBLE failure;
+    class _LIBCPP_EXCEPTION_ABI failure;
 
     typedef unsigned int fmtflags;
     static const fmtflags boolalpha   = 0x0001;
@@ -250,14 +254,12 @@ public:
     static const fmtflags floatfield  = scientific | fixed;
 
     typedef unsigned int iostate;
-    typedef iostate      io_state;
     static const iostate badbit  = 0x1;
     static const iostate eofbit  = 0x2;
     static const iostate failbit = 0x4;
     static const iostate goodbit = 0x0;
 
     typedef unsigned int openmode;
-    typedef openmode     open_mode;
     static const openmode app    = 0x01;
     static const openmode ate    = 0x02;
     static const openmode binary = 0x04;
@@ -266,12 +268,17 @@ public:
     static const openmode trunc  = 0x20;
 
     enum seekdir {beg, cur, end};
-    typedef seekdir seek_dir;
+
+#if _LIBCPP_STD_VER <= 14
+    typedef iostate      io_state;
+    typedef openmode     open_mode;
+    typedef seekdir      seek_dir;
 
     typedef _VSTD::streamoff streamoff;
     typedef _VSTD::streampos streampos;
+#endif
 
-    class _LIBCPP_VISIBLE Init;
+    class _LIBCPP_TYPE_VIS Init;
 
     // 27.5.2.2 fmtflags state:
     _LIBCPP_INLINE_VISIBILITY fmtflags flags() const;
@@ -319,7 +326,7 @@ public:
     _LIBCPP_INLINE_VISIBILITY bool bad() const;
 
     _LIBCPP_INLINE_VISIBILITY iostate exceptions() const;
-    _LIBCPP_INLINE_VISIBILITY void exceptions(iostate __except);
+    _LIBCPP_INLINE_VISIBILITY void exceptions(iostate __iostate);
 
     void __set_badbit_and_consider_rethrow();
     void __set_failbit_and_consider_rethrow();
@@ -363,7 +370,13 @@ private:
     int*            __index_;
     size_t          __event_size_;
     size_t          __event_cap_;
+// TODO(EricWF): Enable this for both Clang and GCC. Currently it is only
+// enabled with clang.
+#if defined(_LIBCPP_HAS_C_ATOMIC_IMP) && !defined(_LIBCPP_HAS_NO_THREADS)
+    static atomic<int> __xindex_;
+#else
     static int      __xindex_;
+#endif
     long*           __iarray_;
     size_t          __iarray_size_;
     size_t          __iarray_cap_;
@@ -380,26 +393,26 @@ _LIBCPP_DECLARE_STRONG_ENUM(io_errc)
 _LIBCPP_DECLARE_STRONG_ENUM_EPILOG(io_errc)
 
 template <>
-struct _LIBCPP_VISIBLE is_error_code_enum<io_errc> : public true_type { };
+struct _LIBCPP_TEMPLATE_VIS is_error_code_enum<io_errc> : public true_type { };
 
 #ifdef _LIBCPP_HAS_NO_STRONG_ENUMS
 template <>
-struct _LIBCPP_VISIBLE is_error_code_enum<io_errc::__lx> : public true_type { };
+struct _LIBCPP_TEMPLATE_VIS is_error_code_enum<io_errc::__lx> : public true_type { };
 #endif
 
-_LIBCPP_VISIBLE
-const error_category& iostream_category();
+_LIBCPP_FUNC_VIS
+const error_category& iostream_category() _NOEXCEPT;
 
 inline _LIBCPP_INLINE_VISIBILITY
 error_code
-make_error_code(io_errc __e)
+make_error_code(io_errc __e) _NOEXCEPT
 {
     return error_code(static_cast<int>(__e), iostream_category());
 }
 
 inline _LIBCPP_INLINE_VISIBILITY
 error_condition
-make_error_condition(io_errc __e)
+make_error_condition(io_errc __e) _NOEXCEPT
 {
     return error_condition(static_cast<int>(__e), iostream_category());
 }
@@ -413,7 +426,7 @@ public:
     virtual ~failure() throw();
 };
 
-class _LIBCPP_VISIBLE ios_base::Init
+class _LIBCPP_TYPE_VIS ios_base::Init
 {
 public:
     Init();
@@ -527,21 +540,21 @@ inline _LIBCPP_INLINE_VISIBILITY
 bool
 ios_base::eof() const
 {
-    return __rdstate_ & eofbit;
+    return (__rdstate_ & eofbit) != 0;
 }
 
 inline _LIBCPP_INLINE_VISIBILITY
 bool
 ios_base::fail() const
 {
-    return __rdstate_ & (failbit | badbit);
+    return (__rdstate_ & (failbit | badbit)) != 0;
 }
 
 inline _LIBCPP_INLINE_VISIBILITY
 bool
 ios_base::bad() const
 {
-    return __rdstate_ & badbit;
+    return (__rdstate_ & badbit) != 0;
 }
 
 inline _LIBCPP_INLINE_VISIBILITY
@@ -553,14 +566,21 @@ ios_base::exceptions() const
 
 inline _LIBCPP_INLINE_VISIBILITY
 void
-ios_base::exceptions(iostate __except)
+ios_base::exceptions(iostate __iostate)
 {
-    __exceptions_ = __except;
+    __exceptions_ = __iostate;
     clear(__rdstate_);
 }
 
+#if defined(_LIBCPP_CXX03_LANG)
+struct _LIBCPP_TYPE_VIS __cxx03_bool {
+  typedef void (__cxx03_bool::*__bool_type)();
+  void __true_value() {}
+};
+#endif
+
 template <class _CharT, class _Traits>
-class _LIBCPP_VISIBLE basic_ios
+class _LIBCPP_TEMPLATE_VIS basic_ios
     : public ios_base
 {
 public:
@@ -572,9 +592,19 @@ public:
     typedef typename traits_type::pos_type pos_type;
     typedef typename traits_type::off_type off_type;
 
+  // __true_value will generate undefined references when linking unless
+  // we give it internal linkage.
+
+#if defined(_LIBCPP_CXX03_LANG)
     _LIBCPP_ALWAYS_INLINE
-        _LIBCPP_EXPLICIT
-        operator bool() const {return !fail();}
+    operator __cxx03_bool::__bool_type() const {
+        return !fail() ? &__cxx03_bool::__true_value : nullptr;
+    }
+#else
+    _LIBCPP_ALWAYS_INLINE
+    _LIBCPP_EXPLICIT operator bool() const {return !fail();}
+#endif
+
     _LIBCPP_ALWAYS_INLINE bool operator!() const    {return  fail();}
     _LIBCPP_ALWAYS_INLINE iostate rdstate() const   {return ios_base::rdstate();}
     _LIBCPP_ALWAYS_INLINE void clear(iostate __state = goodbit) {ios_base::clear(__state);}
@@ -585,7 +615,7 @@ public:
     _LIBCPP_ALWAYS_INLINE bool bad() const  {return ios_base::bad();}
 
     _LIBCPP_ALWAYS_INLINE iostate exceptions() const {return ios_base::exceptions();}
-    _LIBCPP_ALWAYS_INLINE void exceptions(iostate __except) {ios_base::exceptions(__except);}
+    _LIBCPP_ALWAYS_INLINE void exceptions(iostate __iostate) {ios_base::exceptions(__iostate);}
 
     // 27.5.4.1 Constructor/destructor:
     _LIBCPP_INLINE_VISIBILITY
@@ -627,7 +657,7 @@ protected:
 
     _LIBCPP_INLINE_VISIBILITY 
     void move(basic_ios& __rhs);
-#ifndef _LIBCPP_HAS_NO_RVALUE_REFERENCES
+#ifndef _LIBCPP_CXX03_LANG
     _LIBCPP_ALWAYS_INLINE
     void move(basic_ios&& __rhs) {move(__rhs);}
 #endif
@@ -982,6 +1012,33 @@ defaultfloat(ios_base& __str)
     __str.unsetf(ios_base::floatfield);
     return __str;
 }
+
+template <class _CharT, class _Traits>
+class __save_flags
+{
+    typedef basic_ios<_CharT, _Traits> __stream_type;
+    typedef typename __stream_type::fmtflags fmtflags;
+
+    __stream_type& __stream_;
+    fmtflags       __fmtflags_;
+    _CharT         __fill_;
+
+    __save_flags(const __save_flags&);
+    __save_flags& operator=(const __save_flags&);
+public:
+    _LIBCPP_INLINE_VISIBILITY
+    explicit __save_flags(__stream_type& __stream)
+        : __stream_(__stream),
+          __fmtflags_(__stream.flags()),
+          __fill_(__stream.fill())
+        {}
+    _LIBCPP_INLINE_VISIBILITY
+    ~__save_flags()
+    {
+        __stream_.flags(__fmtflags_);
+        __stream_.fill(__fill_);
+    }
+};
 
 _LIBCPP_END_NAMESPACE_STD
 

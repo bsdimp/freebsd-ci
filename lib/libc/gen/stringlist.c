@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 1994 Christos Zoulas
  * All rights reserved.
  *
@@ -10,8 +12,6 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS
  * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
@@ -26,10 +26,8 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char *rcsid = "$NetBSD: stringlist.c,v 1.2 1997/01/17 07:26:20 lukem Exp $";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
+__RCSID("$NetBSD: stringlist.c,v 1.2 1997/01/17 07:26:20 lukem Exp $");
 __FBSDID("$FreeBSD$");
 
 #include "namespace.h"
@@ -46,7 +44,7 @@ __FBSDID("$FreeBSD$");
  * sl_init(): Initialize a string list
  */
 StringList *
-sl_init()
+sl_init(void)
 {
 	StringList *sl;
 
@@ -67,9 +65,7 @@ sl_init()
  * sl_add(): Add an item to the string list
  */
 int
-sl_add(sl, name)
-	StringList *sl;
-	char *name;
+sl_add(StringList *sl, char *name)
 {
 	if (sl->sl_cur == sl->sl_max - 1) {
 		sl->sl_max += _SL_CHUNKSIZE;
@@ -86,9 +82,7 @@ sl_add(sl, name)
  * sl_free(): Free a stringlist
  */
 void
-sl_free(sl, all)
-	StringList *sl;
-	int all;
+sl_free(StringList *sl, int all)
 {
 	size_t i;
 
@@ -108,9 +102,7 @@ sl_free(sl, all)
  * sl_find(): Find a name in the string list
  */
 char *
-sl_find(sl, name)
-	StringList *sl;
-	char *name;
+sl_find(StringList *sl, const char *name)
 {
 	size_t i;
 

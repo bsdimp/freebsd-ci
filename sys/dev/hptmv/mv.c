@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2004-2005 HighPoint Technologies, Inc.
  * All rights reserved.
  *
@@ -33,17 +35,7 @@
 #include <sys/bus.h>
 #include <machine/resource.h>
 
-#if __FreeBSD_version >= 500043
 #include <machine/pci_cfgreg.h>
-#endif
-
-#if (__FreeBSD_version < 500043)
-#include <sys/bus_private.h>
-#endif
-
-#if (__FreeBSD_version < 500000)
-#include <machine/clock.h>
-#endif
 
 #ifndef __KERNEL__
 #define __KERNEL__

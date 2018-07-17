@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Oleksandr Tymoshenko
  * All rights reserved.
  *
@@ -111,6 +113,10 @@
 #define PCI_WINDOW7_CONF_ADDR		0x07000000
 
 #define	AR71XX_UART_ADDR		0x18020000
+#define		AR71XX_UART_THR		0x0
+#define		AR71XX_UART_LSR		0x14
+#define		AR71XX_UART_LSR_THRE	(1 << 5)
+#define		AR71XX_UART_LSR_TEMT	(1 << 6)
 
 #define	AR71XX_USB_CTRL_FLADJ		0x18030000
 #define		USB_CTRL_FLADJ_HOST_SHIFT	12
@@ -162,7 +168,7 @@
 #define	AR71XX_BASE_FREQ		40000000
 #define	AR71XX_PLL_CPU_BASE		0x18050000
 #define	AR71XX_PLL_CPU_CONFIG		0x18050000
-#define		PLL_SW_UPDATE			(1 << 31)
+#define		PLL_SW_UPDATE			(1U << 31)
 #define		PLL_LOCKED			(1 << 30)
 #define		PLL_AHB_DIV_SHIFT		20
 #define		PLL_AHB_DIV_MASK		7
@@ -200,7 +206,7 @@
 #define	AR71XX_RST_BLOCK_BASE	0x18060000
 
 #define AR71XX_RST_WDOG_CONTROL	0x18060008
-#define		RST_WDOG_LAST			(1 << 31)
+#define		RST_WDOG_LAST			(1U << 31)
 #define		RST_WDOG_ACTION_MASK		3
 #define		RST_WDOG_ACTION_RESET		3
 #define		RST_WDOG_ACTION_NMI		2
@@ -273,6 +279,7 @@ typedef enum {
 	AR71XX_MII_MODE_MII,
 	AR71XX_MII_MODE_RGMII,
 	AR71XX_MII_MODE_RMII,
+	AR71XX_MII_MODE_SGMII	/* not hardware defined, though! */
 } ar71xx_mii_mode;
 
 /*
@@ -303,7 +310,7 @@ typedef enum {
 #define AR71XX_MAC1_BASE	0x1A000000
 
 #define		AR71XX_MAC_CFG1			0x00
-#define			MAC_CFG1_SOFT_RESET		(1 << 31)
+#define			MAC_CFG1_SOFT_RESET		(1U << 31)
 #define			MAC_CFG1_SIMUL_RESET		(1 << 30)
 #define			MAC_CFG1_MAC_RX_BLOCK_RESET	(1 << 19)
 #define			MAC_CFG1_MAC_TX_BLOCK_RESET	(1 << 18)
@@ -332,10 +339,11 @@ typedef enum {
 #define		AR71XX_MAC_HDUPLEX		0x0C
 #define		AR71XX_MAC_MAX_FRAME_LEN	0x10
 #define		AR71XX_MAC_MII_CFG		0x20
-#define			MAC_MII_CFG_RESET		(1 << 31)
+#define			MAC_MII_CFG_RESET		(1U << 31)
 #define			MAC_MII_CFG_SCAN_AUTO_INC	(1 <<  5)
 #define			MAC_MII_CFG_PREAMBLE_SUP	(1 <<  4)
 #define			MAC_MII_CFG_CLOCK_SELECT_MASK	0x7
+#define			MAC_MII_CFG_CLOCK_SELECT_MASK_AR933X	0xf
 #define			MAC_MII_CFG_CLOCK_DIV_4		0
 #define			MAC_MII_CFG_CLOCK_DIV_6		2
 #define			MAC_MII_CFG_CLOCK_DIV_8		3
@@ -343,6 +351,17 @@ typedef enum {
 #define			MAC_MII_CFG_CLOCK_DIV_14	5
 #define			MAC_MII_CFG_CLOCK_DIV_20	6
 #define			MAC_MII_CFG_CLOCK_DIV_28	7
+
+/* .. and the AR933x/AR934x extensions */
+#define			MAC_MII_CFG_CLOCK_DIV_34	8
+#define			MAC_MII_CFG_CLOCK_DIV_42	9
+#define			MAC_MII_CFG_CLOCK_DIV_50	10
+#define			MAC_MII_CFG_CLOCK_DIV_58	11
+#define			MAC_MII_CFG_CLOCK_DIV_66	12
+#define			MAC_MII_CFG_CLOCK_DIV_74	13
+#define			MAC_MII_CFG_CLOCK_DIV_82	14
+#define			MAC_MII_CFG_CLOCK_DIV_98	15
+
 #define		AR71XX_MAC_MII_CMD		0x24
 #define			MAC_MII_CMD_SCAN_CYCLE		(1 << 1)
 #define			MAC_MII_CMD_READ		1
@@ -511,10 +530,14 @@ typedef enum {
 #define		AR71XX_SPI_RDS		0x0C
 
 #define ATH_READ_REG(reg) \
-    *((volatile uint32_t *)MIPS_PHYS_TO_KSEG1((reg)))
-
+	*((volatile uint32_t *)MIPS_PHYS_TO_KSEG1((reg)))
+/*
+ * Note: Don't put a flush read here; some users (eg the AR724x PCI fixup code)
+ * requires write-only space to certain registers.  Doing the read afterwards
+ * causes things to break.
+ */
 #define ATH_WRITE_REG(reg, val) \
-    *((volatile uint32_t *)MIPS_PHYS_TO_KSEG1((reg))) = (val)
+      *((volatile uint32_t *)MIPS_PHYS_TO_KSEG1((reg))) = (val)
 
 static inline void
 ar71xx_ddr_flush(uint32_t reg)

@@ -1,8 +1,10 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 The FreeBSD Foundation
  * Copyright (c) 2008 John Birrell (jb@freebsd.org)
  * All rights reserved.
- * 
+ *
  * Portions of this software were developed by Rui Paulo under sponsorship
  * from the FreeBSD Foundation.
  *
@@ -26,19 +28,21 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
- *
- * $FreeBSD$
  */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
+
 #include <err.h>
 #include <errno.h>
-#include <unistd.h>
-#include <stdio.h>
 #include <signal.h>
 #include <string.h>
+#include <unistd.h>
+
 #include "_libproc.h"
 
 int
@@ -59,11 +63,17 @@ proc_clearflags(struct proc_handle *phdl, int mask)
 int
 proc_continue(struct proc_handle *phdl)
 {
+	int pending;
 
 	if (phdl == NULL)
 		return (-1);
 
-	if (ptrace(PT_CONTINUE, phdl->pid, (caddr_t)(uintptr_t) 1, 0) != 0)
+	if (phdl->status == PS_STOP && WSTOPSIG(phdl->wstat) != SIGTRAP)
+		pending = WSTOPSIG(phdl->wstat);
+	else
+		pending = 0;
+	if (ptrace(PT_CONTINUE, proc_getpid(phdl), (caddr_t)(uintptr_t)1,
+	    pending) != 0)
 		return (-1);
 
 	phdl->status = PS_RUN;
@@ -75,23 +85,29 @@ int
 proc_detach(struct proc_handle *phdl, int reason)
 {
 	int status;
+	pid_t pid;
 
 	if (phdl == NULL)
 		return (EINVAL);
+	if (reason == PRELEASE_HANG)
+		return (EINVAL);
 	if (reason == PRELEASE_KILL) {
-		kill(phdl->pid, SIGKILL);
-		return (0);
+		kill(proc_getpid(phdl), SIGKILL);
+		goto free;
 	}
-	if (ptrace(PT_DETACH, phdl->pid, 0, 0) != 0 && errno == ESRCH)
-		return (0);
+	if ((phdl->flags & PATTACH_RDONLY) != 0)
+		goto free;
+	pid = proc_getpid(phdl);
+	if (ptrace(PT_DETACH, pid, 0, 0) != 0 && errno == ESRCH)
+		goto free;
 	if (errno == EBUSY) {
-		kill(phdl->pid, SIGSTOP);
-		waitpid(phdl->pid, &status, WUNTRACED);
-		ptrace(PT_DETACH, phdl->pid, 0, 0);
-		kill(phdl->pid, SIGCONT);
-		return (0);
+		kill(pid, SIGSTOP);
+		waitpid(pid, &status, WUNTRACED);
+		ptrace(PT_DETACH, pid, 0, 0);
+		kill(pid, SIGCONT);
 	}
-
+free:
+	proc_free(phdl);
 	return (0);
 }
 
@@ -102,7 +118,7 @@ proc_getflags(struct proc_handle *phdl)
 	if (phdl == NULL)
 		return (-1);
 
-	return(phdl->flags);
+	return (phdl->flags);
 }
 
 int
@@ -127,14 +143,14 @@ proc_state(struct proc_handle *phdl)
 	return (phdl->status);
 }
 
-pid_t
-proc_getpid(struct proc_handle *phdl)
+int
+proc_getmodel(struct proc_handle *phdl)
 {
 
 	if (phdl == NULL)
 		return (-1);
 
-	return (phdl->pid);
+	return (phdl->model);
 }
 
 int
@@ -144,9 +160,9 @@ proc_wstatus(struct proc_handle *phdl)
 
 	if (phdl == NULL)
 		return (-1);
-	if (waitpid(phdl->pid, &status, WUNTRACED) < 0) {
+	if (waitpid(proc_getpid(phdl), &status, WUNTRACED) < 0) {
 		if (errno != EINTR)
-			warn("waitpid");
+			DPRINTF("waitpid");
 		return (-1);
 	}
 	if (WIFSTOPPED(status))
@@ -189,7 +205,7 @@ proc_read(struct proc_handle *phdl, void *buf, size_t size, size_t addr)
 	piod.piod_addr = (void *)buf;
 	piod.piod_offs = (void *)addr;
 
-	if (ptrace(PT_IO, phdl->pid, (caddr_t)&piod, 0) < 0)
+	if (ptrace(PT_IO, proc_getpid(phdl), (caddr_t)&piod, 0) < 0)
 		return (-1);
 	return (piod.piod_len);
 }
@@ -203,17 +219,21 @@ proc_getlwpstatus(struct proc_handle *phdl)
 
 	if (phdl == NULL)
 		return (NULL);
-	if (ptrace(PT_LWPINFO, phdl->pid, (caddr_t)&lwpinfo,
+	if (ptrace(PT_LWPINFO, proc_getpid(phdl), (caddr_t)&lwpinfo,
 	    sizeof(lwpinfo)) < 0)
 		return (NULL);
 	siginfo = &lwpinfo.pl_siginfo;
 	if (lwpinfo.pl_event == PL_EVENT_SIGNAL &&
-	    (lwpinfo.pl_flags & PL_FLAG_SI) &&
-	    siginfo->si_signo == SIGTRAP &&
-	    (siginfo->si_code == TRAP_BRKPT ||
-	    siginfo->si_code == TRAP_TRACE)) {
-		psp->pr_why = PR_FAULTED;
-		psp->pr_what = FLTBPT;
+	    (lwpinfo.pl_flags & PL_FLAG_SI) != 0) {
+		if (siginfo->si_signo == SIGTRAP &&
+		    (siginfo->si_code == TRAP_BRKPT ||
+		    siginfo->si_code == TRAP_TRACE)) {
+			psp->pr_why = PR_FAULTED;
+			psp->pr_what = FLTBPT;
+		} else {
+			psp->pr_why = PR_SIGNALLED;
+			psp->pr_what = siginfo->si_signo;
+		}
 	} else if (lwpinfo.pl_flags & PL_FLAG_SCE) {
 		psp->pr_why = PR_SYSENTRY;
 	} else if (lwpinfo.pl_flags & PL_FLAG_SCX) {

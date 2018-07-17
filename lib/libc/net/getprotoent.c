@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1983, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -34,7 +36,6 @@ static char sccsid[] = "@(#)getprotoent.c	8.1 (Berkeley) 6/4/93";
 __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
-#include <sys/types.h>
 #include <sys/socket.h>
 #include <errno.h>
 #include <limits.h>
@@ -342,7 +343,7 @@ void
 __setprotoent_p(int f, struct protoent_data *ped)
 {
 	if (ped->fp == NULL)
-		ped->fp = fopen(_PATH_PROTOCOLS, "r");
+		ped->fp = fopen(_PATH_PROTOCOLS, "re");
 	else
 		rewind(ped->fp);
 	ped->stayopen |= f;
@@ -365,7 +366,7 @@ __getprotoent_p(struct protoent *pe, struct protoent_data *ped)
 	char *cp, **q, *endp;
 	long l;
 
-	if (ped->fp == NULL && (ped->fp = fopen(_PATH_PROTOCOLS, "r")) == NULL)
+	if (ped->fp == NULL && (ped->fp = fopen(_PATH_PROTOCOLS, "re")) == NULL)
 		return (-1);
 again:
 	if ((p = fgets(ped->line, sizeof ped->line, ped->fp)) == NULL)

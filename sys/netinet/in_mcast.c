@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2007-2009 Bruce Simpson.
  * Copyright (c) 2005 Robert N. M. Watson.
  * All rights reserved.
@@ -38,24 +40,31 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/protosw.h>
+#include <sys/rmlock.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
 #include <sys/sysctl.h>
 #include <sys/ktr.h>
 #include <sys/taskqueue.h>
+#include <sys/gtaskqueue.h>
 #include <sys/tree.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/route.h>
 #include <net/vnet.h>
 
+#include <net/ethernet.h>
+
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
+#include <netinet/in_fib.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
@@ -85,17 +94,25 @@ static MALLOC_DEFINE(M_IPMSOURCE, "ip_msource",
 
 /*
  * Locking:
- * - Lock order is: Giant, INP_WLOCK, IN_MULTI_LOCK, IGMP_LOCK, IF_ADDR_LOCK.
+ * - Lock order is: Giant, INP_WLOCK, IN_MULTI_LIST_LOCK, IGMP_LOCK, IF_ADDR_LOCK.
  * - The IF_ADDR_LOCK is implicitly taken by inm_lookup() earlier, however
  *   it can be taken by code in net/if.c also.
  * - ip_moptions and in_mfilter are covered by the INP_WLOCK.
  *
- * struct in_multi is covered by IN_MULTI_LOCK. There isn't strictly
+ * struct in_multi is covered by IN_MULTI_LIST_LOCK. There isn't strictly
  * any need for in_multi itself to be virtualized -- it is bound to an ifp
  * anyway no matter what happens.
  */
-struct mtx in_multi_mtx;
-MTX_SYSINIT(in_multi_mtx, &in_multi_mtx, "in_multi_mtx", MTX_DEF);
+struct mtx in_multi_list_mtx;
+MTX_SYSINIT(in_multi_mtx, &in_multi_list_mtx, "in_multi_list_mtx", MTX_DEF);
+
+struct mtx in_multi_free_mtx;
+MTX_SYSINIT(in_multi_free_mtx, &in_multi_free_mtx, "in_multi_free_mtx", MTX_DEF);
+
+struct sx in_multi_sx;
+SX_SYSINIT(in_multi_sx, &in_multi_sx, "in_multi_sx");
+
+int ifma_restart;
 
 /*
  * Functions with non-static linkage defined in this file should be
@@ -139,14 +156,15 @@ static int	in_getmulti(struct ifnet *, const struct in_addr *,
 		    struct in_multi **);
 static int	inm_get_source(struct in_multi *inm, const in_addr_t haddr,
 		    const int noalloc, struct ip_msource **pims);
+#ifdef KTR
 static int	inm_is_ifp_detached(const struct in_multi *);
+#endif
 static int	inm_merge(struct in_multi *, /*const*/ struct in_mfilter *);
 static void	inm_purge(struct in_multi *);
 static void	inm_reap(struct in_multi *);
+static void inm_release(struct in_multi *);
 static struct ip_moptions *
 		inp_findmoptions(struct inpcb *);
-static void	inp_freemoptions_internal(struct ip_moptions *);
-static void	inp_gcmoptions(void *, int);
 static int	inp_get_source_filters(struct inpcb *, struct sockopt *);
 static int	inp_join_group(struct inpcb *, struct sockopt *);
 static int	inp_leave_group(struct inpcb *, struct sockopt *);
@@ -163,29 +181,23 @@ static SYSCTL_NODE(_net_inet_ip, OID_AUTO, mcast, CTLFLAG_RW, 0,
 
 static u_long in_mcast_maxgrpsrc = IP_MAX_GROUP_SRC_FILTER;
 SYSCTL_ULONG(_net_inet_ip_mcast, OID_AUTO, maxgrpsrc,
-    CTLFLAG_RW | CTLFLAG_TUN, &in_mcast_maxgrpsrc, 0,
+    CTLFLAG_RWTUN, &in_mcast_maxgrpsrc, 0,
     "Max source filters per group");
-TUNABLE_ULONG("net.inet.ip.mcast.maxgrpsrc", &in_mcast_maxgrpsrc);
 
 static u_long in_mcast_maxsocksrc = IP_MAX_SOCK_SRC_FILTER;
 SYSCTL_ULONG(_net_inet_ip_mcast, OID_AUTO, maxsocksrc,
-    CTLFLAG_RW | CTLFLAG_TUN, &in_mcast_maxsocksrc, 0,
+    CTLFLAG_RWTUN, &in_mcast_maxsocksrc, 0,
     "Max source filters per socket");
-TUNABLE_ULONG("net.inet.ip.mcast.maxsocksrc", &in_mcast_maxsocksrc);
 
 int in_mcast_loop = IP_DEFAULT_MULTICAST_LOOP;
-SYSCTL_INT(_net_inet_ip_mcast, OID_AUTO, loop, CTLFLAG_RW | CTLFLAG_TUN,
+SYSCTL_INT(_net_inet_ip_mcast, OID_AUTO, loop, CTLFLAG_RWTUN,
     &in_mcast_loop, 0, "Loopback multicast datagrams by default");
-TUNABLE_INT("net.inet.ip.mcast.loop", &in_mcast_loop);
 
 static SYSCTL_NODE(_net_inet_ip_mcast, OID_AUTO, filters,
     CTLFLAG_RD | CTLFLAG_MPSAFE, sysctl_ip_mcast_filters,
     "Per-interface stack-wide source filters");
 
-static STAILQ_HEAD(, ip_moptions) imo_gc_list =
-    STAILQ_HEAD_INITIALIZER(imo_gc_list);
-static struct task imo_gc_task = TASK_INITIALIZER(0, inp_gcmoptions, NULL);
-
+#ifdef KTR
 /*
  * Inline function which wraps assertions for a valid ifp.
  * The ifnet layer will set the ifma's ifp pointer to NULL if the ifp
@@ -208,6 +220,94 @@ inm_is_ifp_detached(const struct in_multi *inm)
 
 	return (ifp == NULL);
 }
+#endif
+
+static struct grouptask free_gtask;
+static struct in_multi_head inm_free_list;
+static void inm_release_task(void *arg __unused);
+static void inm_init(void)
+{
+	SLIST_INIT(&inm_free_list);
+	taskqgroup_config_gtask_init(NULL, &free_gtask, inm_release_task, "inm release task");
+}
+
+SYSINIT(inm_init, SI_SUB_SMP + 1, SI_ORDER_FIRST,
+	inm_init, NULL);
+
+
+void
+inm_release_list_deferred(struct in_multi_head *inmh)
+{
+
+	if (SLIST_EMPTY(inmh))
+		return;
+	mtx_lock(&in_multi_free_mtx);
+	SLIST_CONCAT(&inm_free_list, inmh, in_multi, inm_nrele);
+	mtx_unlock(&in_multi_free_mtx);
+	GROUPTASK_ENQUEUE(&free_gtask);
+}
+
+void
+inm_disconnect(struct in_multi *inm)
+{
+	struct ifnet *ifp;
+	struct ifmultiaddr *ifma, *ll_ifma;
+
+	ifp = inm->inm_ifp;
+	IF_ADDR_WLOCK_ASSERT(ifp);
+	ifma = inm->inm_ifma;
+
+	if_ref(ifp);
+	CK_STAILQ_REMOVE(&ifp->if_multiaddrs, ifma, ifmultiaddr, ifma_link);
+	MCDPRINTF("removed ifma: %p from %s\n", ifma, ifp->if_xname);
+	if ((ll_ifma = ifma->ifma_llifma) != NULL) {
+		MPASS(ifma != ll_ifma);
+		ifma->ifma_llifma = NULL;
+		MPASS(ll_ifma->ifma_llifma == NULL);
+		MPASS(ll_ifma->ifma_ifp == ifp);
+		if (--ll_ifma->ifma_refcount == 0) {
+			CK_STAILQ_REMOVE(&ifp->if_multiaddrs, ll_ifma, ifmultiaddr, ifma_link);
+			MCDPRINTF("removed ll_ifma: %p from %s\n", ll_ifma, ifp->if_xname);
+			if_freemulti(ll_ifma);
+			ifma_restart = true;
+		}
+	}
+}
+
+void
+inm_release_deferred(struct in_multi *inm)
+{
+	struct in_multi_head tmp;
+
+	IN_MULTI_LIST_LOCK_ASSERT();
+	MPASS(inm->inm_refcount > 0);
+	if (--inm->inm_refcount == 0) {
+		SLIST_INIT(&tmp);
+		inm_disconnect(inm);
+		inm->inm_ifma->ifma_protospec = NULL;
+		SLIST_INSERT_HEAD(&tmp, inm, inm_nrele);
+		inm_release_list_deferred(&tmp);
+	}
+}
+
+static void
+inm_release_task(void *arg __unused)
+{
+	struct in_multi_head inm_free_tmp;
+	struct in_multi *inm, *tinm;
+
+	SLIST_INIT(&inm_free_tmp);
+	mtx_lock(&in_multi_free_mtx);
+	SLIST_CONCAT(&inm_free_tmp, &inm_free_list, in_multi, inm_nrele);
+	mtx_unlock(&in_multi_free_mtx);
+	IN_MULTI_LOCK();
+	SLIST_FOREACH_SAFE(inm, &inm_free_tmp, inm_nrele, tinm) {
+		SLIST_REMOVE_HEAD(&inm_free_tmp, inm_nrele);
+		MPASS(inm);
+		inm_release(inm);
+	}
+	IN_MULTI_UNLOCK();
+}
 
 /*
  * Initialize an in_mfilter structure to a known state at t0, t1
@@ -220,6 +320,50 @@ imf_init(struct in_mfilter *imf, const int st0, const int st1)
 	RB_INIT(&imf->imf_sources);
 	imf->imf_st[0] = st0;
 	imf->imf_st[1] = st1;
+}
+
+/*
+ * Function for looking up an in_multi record for an IPv4 multicast address
+ * on a given interface. ifp must be valid. If no record found, return NULL.
+ * The IN_MULTI_LIST_LOCK and IF_ADDR_LOCK on ifp must be held.
+ */
+struct in_multi *
+inm_lookup_locked(struct ifnet *ifp, const struct in_addr ina)
+{
+	struct ifmultiaddr *ifma;
+	struct in_multi *inm;
+
+	IN_MULTI_LIST_LOCK_ASSERT();
+	IF_ADDR_LOCK_ASSERT(ifp);
+
+	inm = NULL;
+	CK_STAILQ_FOREACH(ifma, &((ifp)->if_multiaddrs), ifma_link) {
+		if (ifma->ifma_addr->sa_family != AF_INET ||
+			ifma->ifma_protospec == NULL)
+			continue;
+		inm = (struct in_multi *)ifma->ifma_protospec;
+		if (inm->inm_addr.s_addr == ina.s_addr)
+			break;
+		inm = NULL;
+	}
+	return (inm);
+}
+
+/*
+ * Wrapper for inm_lookup_locked().
+ * The IF_ADDR_LOCK will be taken on ifp and released on return.
+ */
+struct in_multi *
+inm_lookup(struct ifnet *ifp, const struct in_addr ina)
+{
+	struct in_multi *inm;
+
+	IN_MULTI_LIST_LOCK_ASSERT();
+	IF_ADDR_RLOCK(ifp);
+	inm = inm_lookup_locked(ifp, ina);
+	IF_ADDR_RUNLOCK(ifp);
+
+	return (inm);
 }
 
 /*
@@ -401,7 +545,7 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 	IN_MULTI_LOCK_ASSERT();
 
 	ii = (struct in_ifinfo *)ifp->if_afdata[AF_INET];
-
+	IN_MULTI_LIST_LOCK();
 	inm = inm_lookup(ifp, *group);
 	if (inm != NULL) {
 		/*
@@ -410,11 +554,13 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 		 */
 		KASSERT(inm->inm_refcount >= 1,
 		    ("%s: bad refcount %d", __func__, inm->inm_refcount));
-		++inm->inm_refcount;
+		inm_acquire_locked(inm);
 		*pinm = inm;
-		return (0);
 	}
-
+	IN_MULTI_LIST_UNLOCK();
+	if (inm != NULL)
+		return (0);
+	
 	memset(&gsin, 0, sizeof(gsin));
 	gsin.sin_family = AF_INET;
 	gsin.sin_len = sizeof(struct sockaddr_in);
@@ -429,6 +575,7 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 		return (error);
 
 	/* XXX ifma_protospec must be covered by IF_ADDR_LOCK */
+	IN_MULTI_LIST_LOCK();
 	IF_ADDR_WLOCK(ifp);
 
 	/*
@@ -447,14 +594,16 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 		    ("%s: ifma not AF_INET", __func__));
 		KASSERT(inm != NULL, ("%s: no ifma_protospec", __func__));
 		if (inm->inm_ifma != ifma || inm->inm_ifp != ifp ||
-		    !in_hosteq(inm->inm_addr, *group))
+		    !in_hosteq(inm->inm_addr, *group)) {
+			char addrbuf[INET_ADDRSTRLEN];
+
 			panic("%s: ifma %p is inconsistent with %p (%s)",
-			    __func__, ifma, inm, inet_ntoa(*group));
+			    __func__, ifma, inm, inet_ntoa_r(*group, addrbuf));
+		}
 #endif
-		++inm->inm_refcount;
+		inm_acquire_locked(inm);
 		*pinm = inm;
-		IF_ADDR_WUNLOCK(ifp);
-		return (0);
+		goto out_locked;
 	}
 
 	IF_ADDR_WLOCK_ASSERT(ifp);
@@ -468,8 +617,9 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 	 */
 	inm = malloc(sizeof(*inm), M_IPMADDR, M_NOWAIT | M_ZERO);
 	if (inm == NULL) {
-		if_delmulti_ifma(ifma);
 		IF_ADDR_WUNLOCK(ifp);
+		IN_MULTI_LIST_UNLOCK();
+		if_delmulti_ifma(ifma);
 		return (ENOMEM);
 	}
 	inm->inm_addr = *group;
@@ -478,12 +628,7 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 	inm->inm_ifma = ifma;
 	inm->inm_refcount = 1;
 	inm->inm_state = IGMP_NOT_MEMBER;
-
-	/*
-	 * Pending state-changes per group are subject to a bounds check.
-	 */
-	IFQ_SET_MAXLEN(&inm->inm_scq, IGMP_MAX_STATE_CHANGES);
-
+	mbufq_init(&inm->inm_scq, IGMP_MAX_STATE_CHANGES);
 	inm->inm_st[0].iss_fmode = MCAST_UNDEFINED;
 	inm->inm_st[1].iss_fmode = MCAST_UNDEFINED;
 	RB_INIT(&inm->inm_srcs);
@@ -491,8 +636,9 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 	ifma->ifma_protospec = inm;
 
 	*pinm = inm;
-
+ out_locked:
 	IF_ADDR_WUNLOCK(ifp);
+	IN_MULTI_LIST_UNLOCK();
 	return (0);
 }
 
@@ -502,36 +648,33 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
  * If the refcount drops to 0, free the in_multi record and
  * delete the underlying link-layer membership.
  */
-void
-inm_release_locked(struct in_multi *inm)
+static void
+inm_release(struct in_multi *inm)
 {
 	struct ifmultiaddr *ifma;
-
-	IN_MULTI_LOCK_ASSERT();
+	struct ifnet *ifp;
 
 	CTR2(KTR_IGMPV3, "%s: refcount is %d", __func__, inm->inm_refcount);
-
-	if (--inm->inm_refcount > 0) {
-		CTR2(KTR_IGMPV3, "%s: refcount is now %d", __func__,
-		    inm->inm_refcount);
-		return;
-	}
-
+	MPASS(inm->inm_refcount == 0);
 	CTR2(KTR_IGMPV3, "%s: freeing inm %p", __func__, inm);
 
 	ifma = inm->inm_ifma;
+	ifp = inm->inm_ifp;
 
 	/* XXX this access is not covered by IF_ADDR_LOCK */
 	CTR2(KTR_IGMPV3, "%s: purging ifma %p", __func__, ifma);
-	KASSERT(ifma->ifma_protospec == inm,
-	    ("%s: ifma_protospec != inm", __func__));
-	ifma->ifma_protospec = NULL;
-
-	inm_purge(inm);
-
-	free(inm, M_IPMADDR);
-
-	if_delmulti_ifma(ifma);
+	if (ifp != NULL) {
+		CURVNET_SET(ifp->if_vnet);
+		inm_purge(inm);
+		free(inm, M_IPMADDR);
+		if_delmulti_ifma_flags(ifma, 1);
+		CURVNET_RESTORE();
+		if_rele(ifp);
+	} else {
+		inm_purge(inm);
+		free(inm, M_IPMADDR);
+		if_delmulti_ifma_flags(ifma, 1);
+	}
 }
 
 /*
@@ -544,7 +687,7 @@ inm_clear_recorded(struct in_multi *inm)
 {
 	struct ip_msource	*ims;
 
-	IN_MULTI_LOCK_ASSERT();
+	IN_MULTI_LIST_LOCK_ASSERT();
 
 	RB_FOREACH(ims, ip_msource_tree, &inm->inm_srcs) {
 		if (ims->ims_stp) {
@@ -576,7 +719,7 @@ inm_clear_recorded(struct in_multi *inm)
  *
  * Return 0 if the source didn't exist or was already marked as recorded.
  * Return 1 if the source was marked as recorded by this function.
- * Return <0 if any error occured (negated errno code).
+ * Return <0 if any error occurred (negated errno code).
  */
 int
 inm_record_source(struct in_multi *inm, const in_addr_t naddr)
@@ -584,7 +727,7 @@ inm_record_source(struct in_multi *inm, const in_addr_t naddr)
 	struct ip_msource	 find;
 	struct ip_msource	*ims, *nims;
 
-	IN_MULTI_LOCK_ASSERT();
+	IN_MULTI_LIST_LOCK_ASSERT();
 
 	find.ims_haddr = ntohl(naddr);
 	ims = RB_FIND(ip_msource_tree, &inm->inm_srcs, &find);
@@ -831,9 +974,6 @@ inm_get_source(struct in_multi *inm, const in_addr_t haddr,
 {
 	struct ip_msource	 find;
 	struct ip_msource	*ims, *nims;
-#ifdef KTR
-	struct in_addr ia;
-#endif
 
 	find.ims_haddr = haddr;
 	ims = RB_FIND(ip_msource_tree, &inm->inm_srcs, &find);
@@ -849,9 +989,8 @@ inm_get_source(struct in_multi *inm, const in_addr_t haddr,
 		++inm->inm_nsrc;
 		ims = nims;
 #ifdef KTR
-		ia.s_addr = htonl(haddr);
-		CTR3(KTR_IGMPV3, "%s: allocated %s as %p", __func__,
-		    inet_ntoa(ia), ims);
+		CTR3(KTR_IGMPV3, "%s: allocated 0x%08x as %p", __func__,
+		    haddr, ims);
 #endif
 	}
 
@@ -868,29 +1007,24 @@ ims_merge(struct ip_msource *ims, const struct in_msource *lims,
     const int rollback)
 {
 	int n = rollback ? -1 : 1;
-#ifdef KTR
-	struct in_addr ia;
-
-	ia.s_addr = htonl(ims->ims_haddr);
-#endif
 
 	if (lims->imsl_st[0] == MCAST_EXCLUDE) {
-		CTR3(KTR_IGMPV3, "%s: t1 ex -= %d on %s",
-		    __func__, n, inet_ntoa(ia));
+		CTR3(KTR_IGMPV3, "%s: t1 ex -= %d on 0x%08x",
+		    __func__, n, ims->ims_haddr);
 		ims->ims_st[1].ex -= n;
 	} else if (lims->imsl_st[0] == MCAST_INCLUDE) {
-		CTR3(KTR_IGMPV3, "%s: t1 in -= %d on %s",
-		    __func__, n, inet_ntoa(ia));
+		CTR3(KTR_IGMPV3, "%s: t1 in -= %d on 0x%08x",
+		    __func__, n, ims->ims_haddr);
 		ims->ims_st[1].in -= n;
 	}
 
 	if (lims->imsl_st[1] == MCAST_EXCLUDE) {
-		CTR3(KTR_IGMPV3, "%s: t1 ex += %d on %s",
-		    __func__, n, inet_ntoa(ia));
+		CTR3(KTR_IGMPV3, "%s: t1 ex += %d on 0x%08x",
+		    __func__, n, ims->ims_haddr);
 		ims->ims_st[1].ex += n;
 	} else if (lims->imsl_st[1] == MCAST_INCLUDE) {
-		CTR3(KTR_IGMPV3, "%s: t1 in += %d on %s",
-		    __func__, n, inet_ntoa(ia));
+		CTR3(KTR_IGMPV3, "%s: t1 in += %d on 0x%08x",
+		    __func__, n, ims->ims_haddr);
 		ims->ims_st[1].in += n;
 	}
 }
@@ -920,6 +1054,7 @@ inm_merge(struct in_multi *inm, /*const*/ struct in_mfilter *imf)
 	schanged = 0;
 	error = 0;
 	nsrc1 = nsrc0 = 0;
+	IN_MULTI_LIST_LOCK_ASSERT();
 
 	/*
 	 * Update the source filters first, as this may fail.
@@ -1010,9 +1145,10 @@ inm_merge(struct in_multi *inm, /*const*/ struct in_mfilter *imf)
 	/* Decrement ASM listener count on transition out of ASM mode. */
 	if (imf->imf_st[0] == MCAST_EXCLUDE && nsrc0 == 0) {
 		if ((imf->imf_st[1] != MCAST_EXCLUDE) ||
-		    (imf->imf_st[1] == MCAST_EXCLUDE && nsrc1 > 0))
+		    (imf->imf_st[1] == MCAST_EXCLUDE && nsrc1 > 0)) {
 			CTR1(KTR_IGMPV3, "%s: --asm on inm at t1", __func__);
 			--inm->inm_st[1].iss_asm;
+		}
 	}
 
 	/* Increment ASM listener count on transition to ASM mode. */
@@ -1125,9 +1261,10 @@ in_joingroup_locked(struct ifnet *ifp, const struct in_addr *gina,
 	int			 error;
 
 	IN_MULTI_LOCK_ASSERT();
+	IN_MULTI_LIST_UNLOCK_ASSERT();
 
-	CTR4(KTR_IGMPV3, "%s: join %s on %p(%s))", __func__,
-	    inet_ntoa(*gina), ifp, ifp->if_xname);
+	CTR4(KTR_IGMPV3, "%s: join 0x%08x on %p(%s))", __func__,
+	    ntohl(gina->s_addr), ifp, ifp->if_xname);
 
 	error = 0;
 	inm = NULL;
@@ -1146,7 +1283,7 @@ in_joingroup_locked(struct ifnet *ifp, const struct in_addr *gina,
 		CTR1(KTR_IGMPV3, "%s: in_getmulti() failure", __func__);
 		return (error);
 	}
-
+	IN_MULTI_LIST_LOCK();
 	CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
 	error = inm_merge(inm, imf);
 	if (error) {
@@ -1161,13 +1298,15 @@ in_joingroup_locked(struct ifnet *ifp, const struct in_addr *gina,
 		goto out_inm_release;
 	}
 
-out_inm_release:
+ out_inm_release:
 	if (error) {
+
 		CTR2(KTR_IGMPV3, "%s: dropping ref on %p", __func__, inm);
-		inm_release_locked(inm);
+		inm_release_deferred(inm);
 	} else {
 		*pinm = inm;
 	}
+	IN_MULTI_LIST_UNLOCK();
 
 	return (error);
 }
@@ -1209,9 +1348,10 @@ in_leavegroup_locked(struct in_multi *inm, /*const*/ struct in_mfilter *imf)
 	error = 0;
 
 	IN_MULTI_LOCK_ASSERT();
+	IN_MULTI_LIST_UNLOCK_ASSERT();
 
-	CTR5(KTR_IGMPV3, "%s: leave inm %p, %s/%s, imf %p", __func__,
-	    inm, inet_ntoa(inm->inm_addr),
+	CTR5(KTR_IGMPV3, "%s: leave inm %p, 0x%08x/%s, imf %p", __func__,
+	    inm, ntohl(inm->inm_addr.s_addr),
 	    (inm_is_ifp_detached(inm) ? "null" : inm->inm_ifp->if_xname),
 	    imf);
 
@@ -1232,16 +1372,22 @@ in_leavegroup_locked(struct in_multi *inm, /*const*/ struct in_mfilter *imf)
 	 * the transaction, it MUST NOT fail.
 	 */
 	CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
+	IN_MULTI_LIST_LOCK();
 	error = inm_merge(inm, imf);
 	KASSERT(error == 0, ("%s: failed to merge inm state", __func__));
 
 	CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
+	CURVNET_SET(inm->inm_ifp->if_vnet);
 	error = igmp_change_state(inm);
+	IF_ADDR_WLOCK(inm->inm_ifp);
+	inm_release_deferred(inm);
+	IF_ADDR_WUNLOCK(inm->inm_ifp);
+	IN_MULTI_LIST_UNLOCK();
+	CURVNET_RESTORE();
 	if (error)
 		CTR1(KTR_IGMPV3, "%s: failed igmp downcall", __func__);
 
 	CTR2(KTR_IGMPV3, "%s: dropping ref on %p", __func__, inm);
-	inm_release_locked(inm);
 
 	return (error);
 }
@@ -1257,9 +1403,13 @@ in_addmulti(struct in_addr *ap, struct ifnet *ifp)
 {
 	struct in_multi *pinm;
 	int error;
+#ifdef INVARIANTS
+	char addrbuf[INET_ADDRSTRLEN];
+#endif
 
 	KASSERT(IN_LOCAL_GROUP(ntohl(ap->s_addr)),
-	    ("%s: %s not in 224.0.0.0/24", __func__, inet_ntoa(*ap)));
+	    ("%s: %s not in 224.0.0.0/24", __func__,
+	    inet_ntoa_r(*ap, addrbuf)));
 
 	error = in_joingroup(ifp, ap, NULL, &pinm);
 	if (error != 0)
@@ -1267,18 +1417,6 @@ in_addmulti(struct in_addr *ap, struct ifnet *ifp)
 
 	return (pinm);
 }
-
-/*
- * Leave an IPv4 multicast group, assumed to be in exclusive (*,G) mode.
- * This KPI is for legacy kernel consumers only.
- */
-void
-in_delmulti(struct in_multi *inm)
-{
-
-	(void)in_leavegroup(inm, NULL);
-}
-/*#endif*/
 
 /*
  * Block or unblock an ASM multicast source on an inpcb.
@@ -1338,8 +1476,8 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 		if (sopt->sopt_name == IP_BLOCK_SOURCE)
 			doblock = 1;
 
-		CTR3(KTR_IGMPV3, "%s: imr_interface = %s, ifp = %p",
-		    __func__, inet_ntoa(mreqs.imr_interface), ifp);
+		CTR3(KTR_IGMPV3, "%s: imr_interface = 0x%08x, ifp = %p",
+		    __func__, ntohl(mreqs.imr_interface.s_addr), ifp);
 		break;
 	    }
 
@@ -1411,8 +1549,8 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	 */
 	ims = imo_match_source(imo, idx, &ssa->sa);
 	if ((ims != NULL && doblock) || (ims == NULL && !doblock)) {
-		CTR3(KTR_IGMPV3, "%s: source %s %spresent", __func__,
-		    inet_ntoa(ssa->sin.sin_addr), doblock ? "" : "not ");
+		CTR3(KTR_IGMPV3, "%s: source 0x%08x %spresent", __func__,
+		    ntohl(ssa->sin.sin_addr.s_addr), doblock ? "" : "not ");
 		error = EADDRNOTAVAIL;
 		goto out_inp_locked;
 	}
@@ -1441,21 +1579,24 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	 * Begin state merge transaction at IGMP layer.
 	 */
 	IN_MULTI_LOCK();
-
 	CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
+	IN_MULTI_LIST_LOCK();
 	error = inm_merge(inm, imf);
 	if (error) {
 		CTR1(KTR_IGMPV3, "%s: failed to merge inm state", __func__);
-		goto out_imf_rollback;
+		IN_MULTI_LIST_UNLOCK();
+		goto out_in_multi_locked;
 	}
 
 	CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 	error = igmp_change_state(inm);
+	IN_MULTI_LIST_UNLOCK();
 	if (error)
 		CTR1(KTR_IGMPV3, "%s: failed igmp downcall", __func__);
 
-	IN_MULTI_UNLOCK();
+out_in_multi_locked:
 
+	IN_MULTI_UNLOCK();
 out_imf_rollback:
 	if (error)
 		imf_rollback(imf);
@@ -1521,37 +1662,31 @@ inp_findmoptions(struct inpcb *inp)
 	return (imo);
 }
 
-/*
- * Discard the IP multicast options (and source filters).  To minimize
- * the amount of work done while holding locks such as the INP's
- * pcbinfo lock (which is used in the receive path), the free
- * operation is performed asynchronously in a separate task.
- *
- * SMPng: NOTE: assumes INP write lock is held.
- */
-void
-inp_freemoptions(struct ip_moptions *imo)
-{
-
-	KASSERT(imo != NULL, ("%s: ip_moptions is NULL", __func__));
-	IN_MULTI_LOCK();
-	STAILQ_INSERT_TAIL(&imo_gc_list, imo, imo_link);
-	IN_MULTI_UNLOCK();
-	taskqueue_enqueue(taskqueue_thread, &imo_gc_task);
-}
-
 static void
-inp_freemoptions_internal(struct ip_moptions *imo)
+inp_gcmoptions(epoch_context_t ctx)
 {
+	struct ip_moptions *imo;
 	struct in_mfilter	*imf;
+	struct in_multi *inm;
+	struct ifnet *ifp;
 	size_t			 idx, nmships;
+
+	imo =  __containerof(ctx, struct ip_moptions, imo_epoch_ctx);
 
 	nmships = imo->imo_num_memberships;
 	for (idx = 0; idx < nmships; ++idx) {
 		imf = imo->imo_mfilters ? &imo->imo_mfilters[idx] : NULL;
 		if (imf)
 			imf_leave(imf);
-		(void)in_leavegroup(imo->imo_membership[idx], imf);
+		inm = imo->imo_membership[idx];
+		ifp = inm->inm_ifp;
+		if (ifp != NULL) {
+			CURVNET_SET(ifp->if_vnet);
+			(void)in_leavegroup(inm, imf);
+			CURVNET_RESTORE();
+		} else {
+			(void)in_leavegroup(inm, imf);
+		}
 		if (imf)
 			imf_purge(imf);
 	}
@@ -1562,20 +1697,18 @@ inp_freemoptions_internal(struct ip_moptions *imo)
 	free(imo, M_IPMOPTS);
 }
 
-static void
-inp_gcmoptions(void *context, int pending)
+/*
+ * Discard the IP multicast options (and source filters).  To minimize
+ * the amount of work done while holding locks such as the INP's
+ * pcbinfo lock (which is used in the receive path), the free
+ * operation is deferred to the epoch callback task.
+ */
+void
+inp_freemoptions(struct ip_moptions *imo)
 {
-	struct ip_moptions *imo;
-
-	IN_MULTI_LOCK();
-	while (!STAILQ_EMPTY(&imo_gc_list)) {
-		imo = STAILQ_FIRST(&imo_gc_list);
-		STAILQ_REMOVE_HEAD(&imo_gc_list, imo_link);
-		IN_MULTI_UNLOCK();
-		inp_freemoptions_internal(imo);
-		IN_MULTI_LOCK();
-	}
-	IN_MULTI_UNLOCK();
+	if (imo == NULL)
+		return;
+	epoch_call(net_epoch_preempt, &imo->imo_epoch_ctx, inp_gcmoptions);
 }
 
 /*
@@ -1646,6 +1779,8 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	 * has asked for, but we always tell userland how big the
 	 * buffer really needs to be.
 	 */
+	if (msfr.msfr_nsrcs > in_mcast_maxsocksrc)
+		msfr.msfr_nsrcs = in_mcast_maxsocksrc;
 	tss = NULL;
 	if (msfr.msfr_srcs != NULL && msfr.msfr_nsrcs > 0) {
 		tss = malloc(sizeof(struct sockaddr_storage) * msfr.msfr_nsrcs,
@@ -1702,6 +1837,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 int
 inp_getmoptions(struct inpcb *inp, struct sockopt *sopt)
 {
+	struct rm_priotracker	 in_ifa_tracker;
 	struct ip_mreqn		 mreqn;
 	struct ip_moptions	*imo;
 	struct ifnet		*ifp;
@@ -1741,12 +1877,12 @@ inp_getmoptions(struct inpcb *inp, struct sockopt *sopt)
 				mreqn.imr_address = imo->imo_multicast_addr;
 			} else if (ifp != NULL) {
 				mreqn.imr_ifindex = ifp->if_index;
-				IFP_TO_IA(ifp, ia);
-				if (ia != NULL) {
+				NET_EPOCH_ENTER();
+				IFP_TO_IA(ifp, ia, &in_ifa_tracker);
+				if (ia != NULL)
 					mreqn.imr_address =
 					    IA_SIN(ia)->sin_addr;
-					ifa_free(&ia->ia_ifa);
-				}
+				NET_EPOCH_EXIT();
 			}
 		}
 		INP_WUNLOCK(inp);
@@ -1760,7 +1896,7 @@ inp_getmoptions(struct inpcb *inp, struct sockopt *sopt)
 		break;
 
 	case IP_MULTICAST_TTL:
-		if (imo == 0)
+		if (imo == NULL)
 			optval = coptval = IP_DEFAULT_MULTICAST_TTL;
 		else
 			optval = coptval = imo->imo_multicast_ttl;
@@ -1772,7 +1908,7 @@ inp_getmoptions(struct inpcb *inp, struct sockopt *sopt)
 		break;
 
 	case IP_MULTICAST_LOOP:
-		if (imo == 0)
+		if (imo == NULL)
 			optval = coptval = IP_DEFAULT_MULTICAST_LOOP;
 		else
 			optval = coptval = imo->imo_multicast_loop;
@@ -1832,7 +1968,10 @@ static struct ifnet *
 inp_lookup_mcast_ifp(const struct inpcb *inp,
     const struct sockaddr_in *gsin, const struct in_addr ina)
 {
+	struct rm_priotracker in_ifa_tracker;
 	struct ifnet *ifp;
+	struct nhop4_basic nh4;
+	uint32_t fibnum;
 
 	KASSERT(gsin->sin_family == AF_INET, ("%s: not AF_INET", __func__));
 	KASSERT(IN_MULTICAST(ntohl(gsin->sin_addr.s_addr)),
@@ -1842,22 +1981,16 @@ inp_lookup_mcast_ifp(const struct inpcb *inp,
 	if (!in_nullhost(ina)) {
 		INADDR_TO_IFP(ina, ifp);
 	} else {
-		struct route ro;
-
-		ro.ro_rt = NULL;
-		memcpy(&ro.ro_dst, gsin, sizeof(struct sockaddr_in));
-		in_rtalloc_ign(&ro, 0, inp ? inp->inp_inc.inc_fibnum : 0);
-		if (ro.ro_rt != NULL) {
-			ifp = ro.ro_rt->rt_ifp;
-			KASSERT(ifp != NULL, ("%s: null ifp", __func__));
-			RTFREE(ro.ro_rt);
-		} else {
+		fibnum = inp ? inp->inp_inc.inc_fibnum : 0;
+		if (fib4_lookup_nh_basic(fibnum, gsin->sin_addr, 0, 0, &nh4)==0)
+			ifp = nh4.nh_ifp;
+		else {
 			struct in_ifaddr *ia;
 			struct ifnet *mifp;
 
 			mifp = NULL;
-			IN_IFADDR_RLOCK();
-			TAILQ_FOREACH(ia, &V_in_ifaddrhead, ia_link) {
+			IN_IFADDR_RLOCK(&in_ifa_tracker);
+			CK_STAILQ_FOREACH(ia, &V_in_ifaddrhead, ia_link) {
 				mifp = ia->ia_ifp;
 				if (!(mifp->if_flags & IFF_LOOPBACK) &&
 				     (mifp->if_flags & IFF_MULTICAST)) {
@@ -1865,7 +1998,7 @@ inp_lookup_mcast_ifp(const struct inpcb *inp,
 					break;
 				}
 			}
-			IN_IFADDR_RUNLOCK();
+			IN_IFADDR_RUNLOCK(&in_ifa_tracker);
 		}
 	}
 
@@ -1938,8 +2071,8 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 
 		ifp = inp_lookup_mcast_ifp(inp, &gsa->sin,
 		    mreqs.imr_interface);
-		CTR3(KTR_IGMPV3, "%s: imr_interface = %s, ifp = %p",
-		    __func__, inet_ntoa(mreqs.imr_interface), ifp);
+		CTR3(KTR_IGMPV3, "%s: imr_interface = 0x%08x, ifp = %p",
+		    __func__, ntohl(mreqs.imr_interface.s_addr), ifp);
 		break;
 	}
 
@@ -2115,35 +2248,46 @@ inp_join_group(struct inpcb *inp, struct sockopt *sopt)
 	/*
 	 * Begin state merge transaction at IGMP layer.
 	 */
+	in_pcbref(inp);
+	INP_WUNLOCK(inp);
 	IN_MULTI_LOCK();
 
 	if (is_new) {
 		error = in_joingroup_locked(ifp, &gsa->sin.sin_addr, imf,
 		    &inm);
-		if (error)
+		if (error) {
+                        CTR1(KTR_IGMPV3, "%s: in_joingroup_locked failed", 
+                            __func__);
+                        IN_MULTI_LIST_UNLOCK();
 			goto out_imo_free;
+                }
 		imo->imo_membership[idx] = inm;
 	} else {
 		CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
+		IN_MULTI_LIST_LOCK();
 		error = inm_merge(inm, imf);
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed to merge inm state",
-			    __func__);
-			goto out_imf_rollback;
+				 __func__);
+			IN_MULTI_LIST_UNLOCK();
+			goto out_in_multi_locked;
 		}
 		CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 		error = igmp_change_state(inm);
+		IN_MULTI_LIST_UNLOCK();
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed igmp downcall",
 			    __func__);
-			goto out_imf_rollback;
+			goto out_in_multi_locked;
 		}
 	}
 
-	IN_MULTI_UNLOCK();
+out_in_multi_locked:
 
-out_imf_rollback:
-	INP_WLOCK_ASSERT(inp);
+	IN_MULTI_UNLOCK();
+	INP_WLOCK(inp);
+	if (in_pcbrele_wlocked(inp))
+		return (ENXIO);
 	if (error) {
 		imf_rollback(imf);
 		if (is_new)
@@ -2234,8 +2378,8 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		if (!in_nullhost(mreqs.imr_interface))
 			INADDR_TO_IFP(mreqs.imr_interface, ifp);
 
-		CTR3(KTR_IGMPV3, "%s: imr_interface = %s, ifp = %p",
-		    __func__, inet_ntoa(mreqs.imr_interface), ifp);
+		CTR3(KTR_IGMPV3, "%s: imr_interface = 0x%08x, ifp = %p",
+		    __func__, ntohl(mreqs.imr_interface.s_addr), ifp);
 
 		break;
 
@@ -2315,8 +2459,8 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		}
 		ims = imo_match_source(imo, idx, &ssa->sa);
 		if (ims == NULL) {
-			CTR3(KTR_IGMPV3, "%s: source %s %spresent", __func__,
-			    inet_ntoa(ssa->sin.sin_addr), "not ");
+			CTR3(KTR_IGMPV3, "%s: source 0x%08x %spresent",
+			    __func__, ntohl(ssa->sin.sin_addr.s_addr), "not ");
 			error = EADDRNOTAVAIL;
 			goto out_inp_locked;
 		}
@@ -2332,6 +2476,8 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 	/*
 	 * Begin state merge transaction at IGMP layer.
 	 */
+	in_pcbref(inp);
+	INP_WUNLOCK(inp);
 	IN_MULTI_LOCK();
 
 	if (is_final) {
@@ -2342,24 +2488,31 @@ inp_leave_group(struct inpcb *inp, struct sockopt *sopt)
 		(void)in_leavegroup_locked(inm, imf);
 	} else {
 		CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
+		IN_MULTI_LIST_LOCK();
 		error = inm_merge(inm, imf);
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed to merge inm state",
 			    __func__);
-			goto out_imf_rollback;
+			IN_MULTI_LIST_UNLOCK();
+			goto out_in_multi_locked;
 		}
 
 		CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 		error = igmp_change_state(inm);
+		IN_MULTI_LIST_UNLOCK();
 		if (error) {
 			CTR1(KTR_IGMPV3, "%s: failed igmp downcall",
 			    __func__);
 		}
 	}
 
-	IN_MULTI_UNLOCK();
+out_in_multi_locked:
 
-out_imf_rollback:
+	IN_MULTI_UNLOCK();
+	INP_WLOCK(inp);
+	if (in_pcbrele_wlocked(inp))
+		return (ENXIO);
+
 	if (error)
 		imf_rollback(imf);
 	else
@@ -2434,8 +2587,8 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 			if (ifp == NULL)
 				return (EADDRNOTAVAIL);
 		}
-		CTR3(KTR_IGMPV3, "%s: ifp = %p, addr = %s", __func__, ifp,
-		    inet_ntoa(addr));
+		CTR3(KTR_IGMPV3, "%s: ifp = %p, addr = 0x%08x", __func__, ifp,
+		    ntohl(addr.s_addr));
 	}
 
 	/* Reject interfaces which do not support multicast. */
@@ -2590,16 +2743,21 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	 * Begin state merge transaction at IGMP layer.
 	 */
 	CTR1(KTR_IGMPV3, "%s: merge inm state", __func__);
+	IN_MULTI_LIST_LOCK();
 	error = inm_merge(inm, imf);
 	if (error) {
 		CTR1(KTR_IGMPV3, "%s: failed to merge inm state", __func__);
-		goto out_imf_rollback;
+		IN_MULTI_LIST_UNLOCK();
+		goto out_in_multi_locked;
 	}
 
 	CTR1(KTR_IGMPV3, "%s: doing igmp downcall", __func__);
 	error = igmp_change_state(inm);
+	IN_MULTI_LIST_UNLOCK();
 	if (error)
 		CTR1(KTR_IGMPV3, "%s: failed igmp downcall", __func__);
+
+out_in_multi_locked:
 
 	IN_MULTI_UNLOCK();
 
@@ -2810,8 +2968,8 @@ sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS)
 
 	group.s_addr = name[1];
 	if (!IN_MULTICAST(ntohl(group.s_addr))) {
-		CTR2(KTR_IGMPV3, "%s: group %s is not multicast",
-		    __func__, inet_ntoa(group));
+		CTR2(KTR_IGMPV3, "%s: group 0x%08x is not multicast",
+		    __func__, ntohl(group.s_addr));
 		return (EINVAL);
 	}
 
@@ -2827,10 +2985,10 @@ sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS)
 	if (retval)
 		return (retval);
 
-	IN_MULTI_LOCK();
+	IN_MULTI_LIST_LOCK();
 
 	IF_ADDR_RLOCK(ifp);
-	TAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_INET ||
 		    ifma->ifma_protospec == NULL)
 			continue;
@@ -2842,12 +3000,8 @@ sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS)
 		if (retval != 0)
 			break;
 		RB_FOREACH(ims, ip_msource_tree, &inm->inm_srcs) {
-#ifdef KTR
-			struct in_addr ina;
-			ina.s_addr = htonl(ims->ims_haddr);
-			CTR2(KTR_IGMPV3, "%s: visit node %s", __func__,
-			    inet_ntoa(ina));
-#endif
+			CTR2(KTR_IGMPV3, "%s: visit node 0x%08x", __func__,
+			    ims->ims_haddr);
 			/*
 			 * Only copy-out sources which are in-mode.
 			 */
@@ -2864,12 +3018,12 @@ sysctl_ip_mcast_filters(SYSCTL_HANDLER_ARGS)
 	}
 	IF_ADDR_RUNLOCK(ifp);
 
-	IN_MULTI_UNLOCK();
+	IN_MULTI_LIST_UNLOCK();
 
 	return (retval);
 }
 
-#ifdef KTR
+#if defined(KTR) && (KTR_COMPILE & KTR_IGMPV3)
 
 static const char *inm_modestrs[] = { "un", "in", "ex" };
 
@@ -2910,13 +3064,14 @@ void
 inm_print(const struct in_multi *inm)
 {
 	int t;
+	char addrbuf[INET_ADDRSTRLEN];
 
 	if ((ktr_mask & KTR_IGMPV3) == 0)
 		return;
 
 	printf("%s: --- begin inm %p ---\n", __func__, inm);
 	printf("addr %s ifp %p(%s) ifma %p\n",
-	    inet_ntoa(inm->inm_addr),
+	    inet_ntoa_r(inm->inm_addr, addrbuf),
 	    inm->inm_ifp,
 	    inm->inm_ifp->if_xname,
 	    inm->inm_ifma);
@@ -2924,7 +3079,7 @@ inm_print(const struct in_multi *inm)
 	    inm->inm_timer,
 	    inm_state_str(inm->inm_state),
 	    inm->inm_refcount,
-	    inm->inm_scq.ifq_len);
+	    inm->inm_scq.mq_len);
 	printf("igi %p nsrc %lu sctimer %u scrv %u\n",
 	    inm->inm_igi,
 	    inm->inm_nsrc,
@@ -2941,7 +3096,7 @@ inm_print(const struct in_multi *inm)
 	printf("%s: --- end inm %p ---\n", __func__, inm);
 }
 
-#else /* !KTR */
+#else /* !KTR || !(KTR_COMPILE & KTR_IGMPV3) */
 
 void
 inm_print(const struct in_multi *inm)
@@ -2949,6 +3104,6 @@ inm_print(const struct in_multi *inm)
 
 }
 
-#endif /* KTR */
+#endif /* KTR && (KTR_COMPILE & KTR_IGMPV3) */
 
 RB_GENERATE(ip_msource_tree, ip_msource, ims_link, ip_msource_cmp);

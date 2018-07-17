@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Peter Grehan
  * All rights reserved.
  *
@@ -43,7 +45,9 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/kernel.h>
+#include <sys/conf.h>
 #include <sys/lock.h>
+#include <sys/kerneldump.h>
 #include <sys/ktr.h>
 #include <sys/mutex.h>
 #include <sys/systm.h>
@@ -51,6 +55,8 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/vm_page.h>
 
+#include <machine/dump.h>
+#include <machine/md_var.h>
 #include <machine/mmuvar.h>
 #include <machine/smp.h>
 
@@ -66,11 +72,10 @@ static struct kobj_ops	mmu_kernel_kops;
  */
 struct pmap kernel_pmap_store;
 
-struct msgbuf *msgbufp;
 vm_offset_t    msgbuf_phys;
 
 vm_offset_t kernel_vm_end;
-vm_offset_t phys_avail[PHYS_AVAIL_SZ];
+vm_paddr_t phys_avail[PHYS_AVAIL_SZ];
 vm_offset_t virtual_avail;
 vm_offset_t virtual_end;
 
@@ -91,11 +96,12 @@ RB_GENERATE(pvo_tree, pvo_entry, pvo_plink, pvo_vaddr_compare);
 	
 
 void
-pmap_change_wiring(pmap_t pmap, vm_offset_t va, boolean_t wired)
+pmap_advise(pmap_t pmap, vm_offset_t start, vm_offset_t end, int advice)
 {
 
-	CTR4(KTR_PMAP, "%s(%p, %#x, %u)", __func__, pmap, va, wired);
-	MMU_CHANGE_WIRING(mmu_obj, pmap, va, wired);
+	CTR5(KTR_PMAP, "%s(%p, %#x, %#x, %d)", __func__, pmap, start, end,
+	    advice);
+	MMU_ADVISE(mmu_obj, pmap, start, end, advice);
 }
 
 void
@@ -104,14 +110,6 @@ pmap_clear_modify(vm_page_t m)
 
 	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
 	MMU_CLEAR_MODIFY(mmu_obj, m);
-}
-
-void
-pmap_clear_reference(vm_page_t m)
-{
-
-	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
-	MMU_CLEAR_REFERENCE(mmu_obj, m);
 }
 
 void
@@ -142,14 +140,14 @@ pmap_copy_pages(vm_page_t ma[], vm_offset_t a_offset, vm_page_t mb[],
 	MMU_COPY_PAGES(mmu_obj, ma, a_offset, mb, b_offset, xfersize);
 }
 
-void
-pmap_enter(pmap_t pmap, vm_offset_t va, vm_prot_t access, vm_page_t p,
-    vm_prot_t prot, boolean_t wired)
+int
+pmap_enter(pmap_t pmap, vm_offset_t va, vm_page_t p, vm_prot_t prot,
+    u_int flags, int8_t psind)
 {
 
-	CTR6(KTR_PMAP, "pmap_enter(%p, %#x, %#x, %p, %#x, %u)", pmap, va,
-	    access, p, prot, wired);
-	MMU_ENTER(mmu_obj, pmap, va, p, prot, wired);
+	CTR6(KTR_PMAP, "pmap_enter(%p, %#x, %p, %#x, %x, %d)", pmap, va,
+	    p, prot, flags, psind);
+	return (MMU_ENTER(mmu_obj, pmap, va, p, prot, flags, psind));
 }
 
 void
@@ -360,6 +358,14 @@ pmap_remove_write(vm_page_t m)
 }
 
 void
+pmap_unwire(pmap_t pmap, vm_offset_t start, vm_offset_t end)
+{
+
+	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, pmap, start, end);
+	MMU_UNWIRE(mmu_obj, pmap, start, end);
+}
+
+void
 pmap_zero_page(vm_page_t m)
 {
 
@@ -373,14 +379,6 @@ pmap_zero_page_area(vm_page_t m, int off, int size)
 
 	CTR4(KTR_PMAP, "%s(%p, %d, %d)", __func__, m, off, size);
 	MMU_ZERO_PAGE_AREA(mmu_obj, m, off, size);
-}
-
-void
-pmap_zero_page_idle(vm_page_t m)
-{
-
-	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
-	MMU_ZERO_PAGE_IDLE(mmu_obj, m);
 }
 
 int
@@ -458,7 +456,7 @@ pmap_mapdev(vm_paddr_t pa, vm_size_t size)
 }
 
 void *
-pmap_mapdev_attr(vm_offset_t pa, vm_size_t size, vm_memattr_t attr)
+pmap_mapdev_attr(vm_paddr_t pa, vm_size_t size, vm_memattr_t attr)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %#x, %#x)", __func__, pa, size, attr);
@@ -498,11 +496,36 @@ pmap_kenter(vm_offset_t va, vm_paddr_t pa)
 }
 
 void
-pmap_kenter_attr(vm_offset_t va, vm_offset_t pa, vm_memattr_t ma)
+pmap_kenter_attr(vm_offset_t va, vm_paddr_t pa, vm_memattr_t ma)
 {
 
 	CTR4(KTR_PMAP, "%s(%#x, %#x, %#x)", __func__, va, pa, ma);
 	MMU_KENTER_ATTR(mmu_obj, va, pa, ma);
+}
+
+void
+pmap_kremove(vm_offset_t va)
+{
+
+	CTR2(KTR_PMAP, "%s(%#x)", __func__, va);
+	return (MMU_KREMOVE(mmu_obj, va));
+}
+
+int
+pmap_map_user_ptr(pmap_t pm, volatile const void *uaddr, void **kaddr,
+    size_t ulen, size_t *klen)
+{
+
+	CTR2(KTR_PMAP, "%s(%p)", __func__, uaddr);
+	return (MMU_MAP_USER_PTR(mmu_obj, pm, uaddr, kaddr, ulen, klen));
+}
+
+int
+pmap_decode_kernel_ptr(vm_offset_t addr, int *is_user, vm_offset_t *decoded)
+{
+
+	CTR2(KTR_PMAP, "%s(%#jx)", __func__, (uintmax_t)addr);
+	return (MMU_DECODE_KERNEL_PTR(mmu_obj, addr, is_user, decoded));
 }
 
 boolean_t
@@ -521,28 +544,49 @@ pmap_sync_icache(pmap_t pm, vm_offset_t va, vm_size_t sz)
 	return (MMU_SYNC_ICACHE(mmu_obj, pm, va, sz));
 }
 
-vm_offset_t
-pmap_dumpsys_map(struct pmap_md *md, vm_size_t ofs, vm_size_t *sz)
+void
+dumpsys_map_chunk(vm_paddr_t pa, size_t sz, void **va)
 {
 
-	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, md, ofs, *sz);
-	return (MMU_DUMPSYS_MAP(mmu_obj, md, ofs, sz));
+	CTR4(KTR_PMAP, "%s(%#jx, %#zx, %p)", __func__, (uintmax_t)pa, sz, va);
+	return (MMU_DUMPSYS_MAP(mmu_obj, pa, sz, va));
 }
 
 void
-pmap_dumpsys_unmap(struct pmap_md *md, vm_size_t ofs, vm_offset_t va)
+dumpsys_unmap_chunk(vm_paddr_t pa, size_t sz, void *va)
 {
 
-	CTR4(KTR_PMAP, "%s(%p, %#x, %#x)", __func__, md, ofs, va);
-	return (MMU_DUMPSYS_UNMAP(mmu_obj, md, ofs, va));
+	CTR4(KTR_PMAP, "%s(%#jx, %#zx, %p)", __func__, (uintmax_t)pa, sz, va);
+	return (MMU_DUMPSYS_UNMAP(mmu_obj, pa, sz, va));
 }
 
-struct pmap_md *
-pmap_scan_md(struct pmap_md *prev)
+void
+dumpsys_pa_init(void)
 {
 
-	CTR2(KTR_PMAP, "%s(%p)", __func__, prev);
-	return (MMU_SCAN_MD(mmu_obj, prev));
+	CTR1(KTR_PMAP, "%s()", __func__);
+	return (MMU_SCAN_INIT(mmu_obj));
+}
+
+vm_offset_t
+pmap_quick_enter_page(vm_page_t m)
+{
+	CTR2(KTR_PMAP, "%s(%p)", __func__, m);
+	return (MMU_QUICK_ENTER_PAGE(mmu_obj, m));
+}
+
+void
+pmap_quick_remove_page(vm_offset_t addr)
+{
+	CTR2(KTR_PMAP, "%s(%#x)", __func__, addr);
+	MMU_QUICK_REMOVE_PAGE(mmu_obj, addr);
+}
+
+int
+pmap_change_attr(vm_offset_t addr, vm_size_t size, vm_memattr_t mode)
+{
+	CTR4(KTR_PMAP, "%s(%#x, %#zx, %d)", __func__, addr, size, mode);
+	return (MMU_CHANGE_ATTR(mmu_obj, addr, size, mode));
 }
 
 /*

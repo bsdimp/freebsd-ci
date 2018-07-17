@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-3-Clause
+ *
  * Copyright (c) 1999 Michael Smith
  * All rights reserved.
  *
@@ -108,7 +110,7 @@ struct amr_user_ioctl {
 
 #define AMR_IO_COMMAND	_IOWR('A', 0x201, struct amr_user_ioctl)
 
-#if defined(__amd64__) || defined(__ia64__)
+#if defined(__amd64__)
 
 struct amr_user_ioctl32 {
     unsigned char	au_cmd[32];	/* command text from userspace */

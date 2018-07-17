@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2005-2011 Atheros Communications, Inc.
  * All rights reserved.
@@ -51,6 +53,7 @@ enum {
 	FCC2_FCCA	= 0x20,		/* Canada */
 	FCC2_WORLD	= 0x21,		/* Australia & HK */
 	FCC2_ETSIC	= 0x22,
+	FCC_UBNT	= 0x2A,		/* Ubiquity PicoStation M2HP */
 	FRANCE_RES	= 0x31,		/* Legacy France for OEM */
 	FCC3_FCCA	= 0x3A,		/* USA & Canada w/5470 band, 11h, DFS enabled */
 	FCC3_WORLD	= 0x3B,		/* USA & Canada w/5470 band, 11h, DFS enabled */

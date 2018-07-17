@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998
  *	Nan Yang Computer Services Limited.  All rights reserved.
  *
@@ -36,4 +38,5 @@
 
 /* $FreeBSD$ */
 
-#define GVINUMMOD	"geom_vinum"
+#define	GVINUMMOD	"g_vinum"
+#define	GVINUMKLD	"geom_vinum"

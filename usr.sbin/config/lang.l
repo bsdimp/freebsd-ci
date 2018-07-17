@@ -1,5 +1,7 @@
 %{
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -11,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -34,12 +36,10 @@
 #include <assert.h>
 #include <ctype.h>
 #include <err.h>
+#include <stdlib.h>
 #include <string.h>
 #include "y.tab.h"
 #include "config.h"
-
-#define YY_NO_UNPUT
-#define YY_NO_INPUT
 
 /*
  * Data for returning to previous files from include files.
@@ -70,6 +70,7 @@ struct kt {
 	{ "nodevice",	NODEVICE },
 	{ "nodevices",	NODEVICE },
 	{ "env",	ENV },
+	{ "envvar",	ENVVAR },
 	{ "hints",	HINTS },
 	{ "ident",	IDENT },
 	{ "machine",	ARCH }, /* MACHINE is defined in /sys/param.h */
@@ -96,11 +97,22 @@ unsigned int octal(const char *);
 unsigned int hex(const char *);
 int yyerror(const char *);
 
+#define YY_DECL int yylex(void)
 %}
+
+%option nounput
+%option noinput
+
 ID	[A-Za-z_][-A-Za-z_0-9]*
 PATH	[./][-/.%^A-Za-z_0-9]+
 %START TOEOL
+%START ENVC
 %%
+<ENVC>[^#\n]*	{
+			BEGIN 0;
+			yylval.str = strdup(yytext);
+			return ENVLINE;
+		}
 {ID}		{
 			int i;
 
@@ -110,6 +122,9 @@ PATH	[./][-/.%^A-Za-z_0-9]+
 				yylval.str = strdup(yytext);
 				return ID;
 			}
+			/* We'll glom onto the rest of an envvar line */
+			if (i == ENVVAR)
+				BEGIN ENVC;
 			return i;
 		}
 \\\"[^"]+\\\"	{
@@ -255,6 +270,7 @@ include(const char *fname, int ateof)
 {
 	FILE *fp;
 	struct incl *in;
+	struct includepath* ipath;
 	char *fnamebuf;
 
 	fnamebuf = NULL;
@@ -263,6 +279,18 @@ include(const char *fname, int ateof)
 		asprintf(&fnamebuf, "../../conf/%s", fname);
 		if (fnamebuf != NULL) {
 			fp = fopen(fnamebuf, "r");
+			if (fp == NULL)
+				free(fnamebuf);
+		}
+	}
+	if (fp == NULL) {
+		SLIST_FOREACH(ipath, &includepath, path_next) {
+			asprintf(&fnamebuf, "%s/%s", ipath->path, fname);
+			if (fnamebuf != NULL) {
+				fp = fopen(fnamebuf, "r");
+			}
+			if (fp != NULL)
+				break;
 			free(fnamebuf);
 		}
 	}

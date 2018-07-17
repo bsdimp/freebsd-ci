@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Jonathan Lemon
  * All rights reserved.
  *
@@ -113,7 +115,7 @@ struct vm86context {
 	} pmap[VM86_PMAPSIZE];
 };
 
-#define VM_USERCHANGE   (PSL_USERCHANGE | PSL_RF)
+#define VM_USERCHANGE   (PSL_USERCHANGE)
 #define VME_USERCHANGE  (VM_USERCHANGE | PSL_VIP | PSL_VIF)
 
 struct vm86_kernel {

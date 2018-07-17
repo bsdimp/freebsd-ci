@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009, Oleksandr Tymoshenko <gonzo@FreeBSD.org>
  * All rights reserved.
  *
@@ -92,7 +94,7 @@ ar71xx_wdog_probe(device_t dev)
 {
 
 	device_set_desc(dev, "Atheros AR71XX watchdog timer");
-	return (0);
+	return (BUS_PROBE_NOWILDCARD);
 }
 
 static void

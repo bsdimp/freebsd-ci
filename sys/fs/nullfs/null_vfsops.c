@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993, 1995
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -65,7 +67,6 @@ static vfs_statfs_t	nullfs_statfs;
 static vfs_unmount_t	nullfs_unmount;
 static vfs_vget_t	nullfs_vget;
 static vfs_extattrctl_t	nullfs_extattrctl;
-static vfs_reclaim_lowervp_t nullfs_reclaim_lowervp;
 
 /*
  * Mount null layer
@@ -77,15 +78,12 @@ nullfs_mount(struct mount *mp)
 	struct vnode *lowerrootvp, *vp;
 	struct vnode *nullm_rootvp;
 	struct null_mount *xmp;
-	struct thread *td = curthread;
 	char *target;
 	int isvnunlocked = 0, len;
 	struct nameidata nd, *ndp = &nd;
 
 	NULLFSDEBUG("nullfs_mount(mp = %p)\n", (void *)mp);
 
-	if (!prison_allow(td->td_ucred, PR_ALLOW_MOUNT_NULLFS))
-		return (EPERM);
 	if (mp->mnt_flag & MNT_ROOTFS)
 		return (EOPNOTSUPP);
 
@@ -189,7 +187,8 @@ nullfs_mount(struct mount *mp)
 	}
 
 	xmp->nullm_flags |= NULLM_CACHE;
-	if (vfs_getopt(mp->mnt_optnew, "nocache", NULL, NULL) == 0)
+	if (vfs_getopt(mp->mnt_optnew, "nocache", NULL, NULL) == 0 ||
+	    (xmp->nullm_vfs->mnt_kern_flag & MNTK_NULL_NOCACHE) != 0)
 		xmp->nullm_flags &= ~NULLM_CACHE;
 
 	MNT_ILOCK(mp);
@@ -199,6 +198,8 @@ nullfs_mount(struct mount *mp)
 		    MNTK_EXTENDED_SHARED);
 	}
 	mp->mnt_kern_flag |= MNTK_LOOKUP_EXCL_DOTDOT;
+	mp->mnt_kern_flag |= lowerrootvp->v_mount->mnt_kern_flag &
+	    (MNTK_USES_BCACHE | MNTK_NO_IOPF | MNTK_UNMAPPED_BUFS);
 	MNT_IUNLOCK(mp);
 	mp->mnt_data = xmp;
 	vfs_getnewfsid(mp);
@@ -299,29 +300,34 @@ nullfs_statfs(mp, sbp)
 	struct statfs *sbp;
 {
 	int error;
-	struct statfs mstat;
+	struct statfs *mstat;
 
 	NULLFSDEBUG("nullfs_statfs(mp = %p, vp = %p->%p)\n", (void *)mp,
 	    (void *)MOUNTTONULLMOUNT(mp)->nullm_rootvp,
 	    (void *)NULLVPTOLOWERVP(MOUNTTONULLMOUNT(mp)->nullm_rootvp));
 
-	bzero(&mstat, sizeof(mstat));
+	mstat = malloc(sizeof(struct statfs), M_STATFS, M_WAITOK | M_ZERO);
 
-	error = VFS_STATFS(MOUNTTONULLMOUNT(mp)->nullm_vfs, &mstat);
-	if (error)
+	error = VFS_STATFS(MOUNTTONULLMOUNT(mp)->nullm_vfs, mstat);
+	if (error) {
+		free(mstat, M_STATFS);
 		return (error);
+	}
 
 	/* now copy across the "interesting" information and fake the rest */
-	sbp->f_type = mstat.f_type;
+	sbp->f_type = mstat->f_type;
 	sbp->f_flags = (sbp->f_flags & (MNT_RDONLY | MNT_NOEXEC | MNT_NOSUID |
-	    MNT_UNION | MNT_NOSYMFOLLOW)) | (mstat.f_flags & ~MNT_ROOTFS);
-	sbp->f_bsize = mstat.f_bsize;
-	sbp->f_iosize = mstat.f_iosize;
-	sbp->f_blocks = mstat.f_blocks;
-	sbp->f_bfree = mstat.f_bfree;
-	sbp->f_bavail = mstat.f_bavail;
-	sbp->f_files = mstat.f_files;
-	sbp->f_ffree = mstat.f_ffree;
+	    MNT_UNION | MNT_NOSYMFOLLOW | MNT_AUTOMOUNTED)) |
+	    (mstat->f_flags & ~(MNT_ROOTFS | MNT_AUTOMOUNTED));
+	sbp->f_bsize = mstat->f_bsize;
+	sbp->f_iosize = mstat->f_iosize;
+	sbp->f_blocks = mstat->f_blocks;
+	sbp->f_bfree = mstat->f_bfree;
+	sbp->f_bavail = mstat->f_bavail;
+	sbp->f_files = mstat->f_files;
+	sbp->f_ffree = mstat->f_ffree;
+
+	free(mstat, M_STATFS);
 	return (0);
 }
 
@@ -391,8 +397,49 @@ nullfs_reclaim_lowervp(struct mount *mp, struct vnode *lowervp)
 	vp = null_hashget(mp, lowervp);
 	if (vp == NULL)
 		return;
+	VTONULL(vp)->null_flags |= NULLV_NOUNLOCK;
 	vgone(vp);
-	vn_lock(lowervp, LK_EXCLUSIVE | LK_RETRY);
+	vput(vp);
+}
+
+static void
+nullfs_unlink_lowervp(struct mount *mp, struct vnode *lowervp)
+{
+	struct vnode *vp;
+	struct null_node *xp;
+
+	vp = null_hashget(mp, lowervp);
+	if (vp == NULL)
+		return;
+	xp = VTONULL(vp);
+	xp->null_flags |= NULLV_DROP | NULLV_NOUNLOCK;
+	vhold(vp);
+	vunref(vp);
+
+	if (vp->v_usecount == 0) {
+		/*
+		 * If vunref() dropped the last use reference on the
+		 * nullfs vnode, it must be reclaimed, and its lock
+		 * was split from the lower vnode lock.  Need to do
+		 * extra unlock before allowing the final vdrop() to
+		 * free the vnode.
+		 */
+		KASSERT((vp->v_iflag & VI_DOOMED) != 0,
+		    ("not reclaimed nullfs vnode %p", vp));
+		VOP_UNLOCK(vp, 0);
+	} else {
+		/*
+		 * Otherwise, the nullfs vnode still shares the lock
+		 * with the lower vnode, and must not be unlocked.
+		 * Also clear the NULLV_NOUNLOCK, the flag is not
+		 * relevant for future reclamations.
+		 */
+		ASSERT_VOP_ELOCKED(vp, "unlink_lowervp");
+		KASSERT((vp->v_iflag & VI_DOOMED) == 0,
+		    ("reclaimed nullfs vnode %p", vp));
+		xp->null_flags &= ~NULLV_NOUNLOCK;
+	}
+	vdrop(vp);
 }
 
 static struct vfsops null_vfsops = {
@@ -408,6 +455,7 @@ static struct vfsops null_vfsops = {
 	.vfs_unmount =		nullfs_unmount,
 	.vfs_vget =		nullfs_vget,
 	.vfs_reclaim_lowervp =	nullfs_reclaim_lowervp,
+	.vfs_unlink_lowervp =	nullfs_unlink_lowervp,
 };
 
 VFS_SET(null_vfsops, nullfs, VFCF_LOOPBACK | VFCF_JAIL);

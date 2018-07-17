@@ -1,7 +1,9 @@
 /* $FreeBSD$ */
-/* $NetBSD: citrus_mapper.c,v 1.7 2008/07/25 14:05:25 christos Exp $ */
+/*	$NetBSD: citrus_mapper.c,v 1.10 2012/06/08 07:49:42 martin Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c)2003 Citrus Project,
  * All rights reserved.
  *
@@ -55,6 +57,8 @@
 #define CM_HASH_SIZE 101
 #define REFCOUNT_PERSISTENT	-1
 
+static pthread_rwlock_t		cm_lock = PTHREAD_RWLOCK_INITIALIZER;
+
 struct _citrus_mapper_area {
 	_CITRUS_HASH_HEAD(, _citrus_mapper, CM_HASH_SIZE)	 ma_cache;
 	char							*ma_dir;
@@ -75,7 +79,7 @@ _citrus_mapper_create_area(
 	char path[PATH_MAX];
 	int ret;
 
-	WLOCK;
+	WLOCK(&cm_lock);
 
 	if (*rma != NULL) {
 		ret = 0;
@@ -96,7 +100,7 @@ _citrus_mapper_create_area(
 	ma->ma_dir = strdup(area);
 	if (ma->ma_dir == NULL) {
 		ret = errno;
-		free(ma->ma_dir);
+		free(ma);
 		goto quit;
 	}
 	_CITRUS_HASH_INIT(&ma->ma_cache, CM_HASH_SIZE);
@@ -104,7 +108,7 @@ _citrus_mapper_create_area(
 	*rma = ma;
 	ret = 0;
 quit:
-	UNLOCK;
+	UNLOCK(&cm_lock);
 
 	return (ret);
 }
@@ -242,8 +246,10 @@ mapper_open(struct _citrus_mapper_area *__restrict ma,
 	if (!cm->cm_ops->mo_init ||
 	    !cm->cm_ops->mo_uninit ||
 	    !cm->cm_ops->mo_convert ||
-	    !cm->cm_ops->mo_init_state)
+	    !cm->cm_ops->mo_init_state) {
+		ret = EINVAL;
 		goto err;
+	}
 
 	/* allocate traits structure */
 	cm->cm_traits = malloc(sizeof(*cm->cm_traits));
@@ -316,7 +322,7 @@ _citrus_mapper_open(struct _citrus_mapper_area *__restrict ma,
 
 	variable = NULL;
 
-	WLOCK;
+	WLOCK(&cm_lock);
 
 	/* search in the cache */
 	hashval = hash_func(mapname);
@@ -337,9 +343,9 @@ _citrus_mapper_open(struct _citrus_mapper_area *__restrict ma,
 		goto quit;
 
 	/* open mapper */
-	UNLOCK;
+	UNLOCK(&cm_lock);
 	ret = mapper_open(ma, &cm, module, variable);
-	WLOCK;
+	WLOCK(&cm_lock);
 	if (ret)
 		goto quit;
 	cm->cm_key = strdup(mapname);
@@ -356,7 +362,7 @@ _citrus_mapper_open(struct _citrus_mapper_area *__restrict ma,
 	*rcm = cm;
 	ret = 0;
 quit:
-	UNLOCK;
+	UNLOCK(&cm_lock);
 
 	return (ret);
 }
@@ -370,7 +376,7 @@ _citrus_mapper_close(struct _citrus_mapper *cm)
 {
 
 	if (cm) {
-		WLOCK;
+		WLOCK(&cm_lock);
 		if (cm->cm_refcount == REFCOUNT_PERSISTENT)
 			goto quit;
 		if (cm->cm_refcount > 0) {
@@ -379,9 +385,11 @@ _citrus_mapper_close(struct _citrus_mapper *cm)
 			_CITRUS_HASH_REMOVE(cm, cm_entry);
 			free(cm->cm_key);
 		}
+		UNLOCK(&cm_lock);
 		mapper_close(cm);
+		return;
 quit:
-		UNLOCK;
+		UNLOCK(&cm_lock);
 	}
 }
 
@@ -393,7 +401,7 @@ void
 _citrus_mapper_set_persistent(struct _citrus_mapper * __restrict cm)
 {
 
-	WLOCK;
+	WLOCK(&cm_lock);
 	cm->cm_refcount = REFCOUNT_PERSISTENT;
-	UNLOCK;
+	UNLOCK(&cm_lock);
 }

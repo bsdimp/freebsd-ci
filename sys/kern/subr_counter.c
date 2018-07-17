@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Gleb Smirnoff <glebius@FreeBSD.org>
  * All rights reserved.
  *
@@ -29,53 +31,44 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/counter.h>
 #include <sys/kernel.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
+#include <sys/proc.h>
+#include <sys/sched.h>
 #include <sys/smp.h>
 #include <sys/sysctl.h>
 #include <vm/uma.h>
- 
-static uma_zone_t uint64_pcpu_zone;
+
+#define IN_SUBR_COUNTER_C
+#include <sys/counter.h>
 
 void
 counter_u64_zero(counter_u64_t c)
 {
-	int i;
 
-	for (i = 0; i < mp_ncpus; i++)
-		*(uint64_t *)((char *)c + sizeof(struct pcpu) * i) = 0;
+	counter_u64_zero_inline(c);
 }
 
 uint64_t
 counter_u64_fetch(counter_u64_t c)
 {
-	uint64_t r;
-	int i;
 
-	r = 0;
-	for (i = 0; i < mp_ncpus; i++)
-		r += *(uint64_t *)((char *)c + sizeof(struct pcpu) * i);
-
-	return (r);
+	return (counter_u64_fetch_inline(c));
 }
 
 counter_u64_t
 counter_u64_alloc(int flags)
 {
-	counter_u64_t r;
 
-	r = uma_zalloc(uint64_pcpu_zone, flags);
-	if (r != NULL)
-		counter_u64_zero(r);
-
-	return (r);
+	return (uma_zalloc_pcpu(pcpu_zone_64, flags | M_ZERO));
 }
 
 void
 counter_u64_free(counter_u64_t c)
 {
 
-	uma_zfree(uint64_pcpu_zone, c);
+	uma_zfree_pcpu(pcpu_zone_64, c);
 }
 
 int
@@ -99,11 +92,83 @@ sysctl_handle_counter_u64(SYSCTL_HANDLER_ARGS)
 	return (0);
 }
 
-static void
-counter_startup(void)
+int
+sysctl_handle_counter_u64_array(SYSCTL_HANDLER_ARGS)
 {
+	uint64_t *out;
+	int error;
 
-	uint64_pcpu_zone = uma_zcreate("uint64 pcpu", sizeof(uint64_t),
-	    NULL, NULL, NULL, NULL, UMA_ALIGN_PTR, UMA_ZONE_PCPU);
+	out = malloc(arg2 * sizeof(uint64_t), M_TEMP, M_WAITOK);
+	for (int i = 0; i < arg2; i++)
+		out[i] = counter_u64_fetch(((counter_u64_t *)arg1)[i]);
+
+	error = SYSCTL_OUT(req, out, arg2 * sizeof(uint64_t));
+	free(out, M_TEMP);
+
+	if (error || !req->newptr)
+		return (error);
+
+	/*
+	 * Any write attempt to a counter zeroes it.
+	 */
+	for (int i = 0; i < arg2; i++)
+		counter_u64_zero(((counter_u64_t *)arg1)[i]);
+ 
+	return (0);
 }
-SYSINIT(counter, SI_SUB_KMEM, SI_ORDER_ANY, counter_startup, NULL);
+
+/*
+ * MP-friendly version of ppsratecheck().
+ *
+ * Returns non-negative if we are in the rate, negative otherwise.
+ *  0 - rate limit not reached.
+ * -1 - rate limit reached.
+ * >0 - rate limit was reached before, and was just reset. The return value
+ *      is number of events since last reset.
+ */
+int64_t
+counter_ratecheck(struct counter_rate *cr, int64_t limit)
+{
+	int64_t val;
+	int now;
+
+	val = cr->cr_over;
+	now = ticks;
+
+	if ((u_int)(now - cr->cr_ticks) >= hz) {
+		/*
+		 * Time to clear the structure, we are in the next second.
+		 * First try unlocked read, and then proceed with atomic.
+		 */
+		if ((cr->cr_lock == 0) &&
+		    atomic_cmpset_acq_int(&cr->cr_lock, 0, 1)) {
+			/*
+			 * Check if other thread has just went through the
+			 * reset sequence before us.
+			 */
+			if ((u_int)(now - cr->cr_ticks) >= hz) {
+				val = counter_u64_fetch(cr->cr_rate);
+				counter_u64_zero(cr->cr_rate);
+				cr->cr_over = 0;
+				cr->cr_ticks = now;
+				if (val <= limit)
+					val = 0;
+			}
+			atomic_store_rel_int(&cr->cr_lock, 0);
+		} else
+			/*
+			 * We failed to lock, in this case other thread may
+			 * be running counter_u64_zero(), so it is not safe
+			 * to do an update, we skip it.
+			 */
+			return (val);
+	}
+
+	counter_u64_add(cr->cr_rate, 1);
+	if (cr->cr_over != 0)
+		return (-1);
+	if (counter_u64_fetch(cr->cr_rate) > limit)
+		val = cr->cr_over = -1;
+
+	return (val);
+}

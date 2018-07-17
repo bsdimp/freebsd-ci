@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010, Pyun YongHyeon <yongari@FreeBSD.org>
  * All rights reserved.
  *
@@ -121,12 +123,6 @@ rdcphy_service(struct mii_softc *sc, struct mii_data *mii, int cmd)
 		break;
 
 	case MII_MEDIACHG:
-		/*
-		 * If the interface is not up, don't do anything.
-		 */
-		if ((mii->mii_ifp->if_flags & IFF_UP) == 0)
-			break;
-
 		mii_phy_setmedia(sc);
 		switch (IFM_SUBTYPE(ife->ifm_media)) {
 		case IFM_100_TX:
@@ -189,11 +185,9 @@ static void
 rdcphy_status(struct mii_softc *sc)
 {
 	struct mii_data *mii;
-	struct ifmedia_entry *ife;
 	int bmsr, bmcr, physts;
 
 	mii = sc->mii_pdata;
-	ife = mii->mii_media.ifm_cur;
 
 	mii->mii_media_status = IFM_AVALID;
 	mii->mii_media_active = IFM_ETHER;

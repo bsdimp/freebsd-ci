@@ -1,4 +1,6 @@
 /*************************************************************************
+SPDX-License-Identifier: BSD-3-Clause
+
 Copyright (c) 2003-2007  Cavium Networks (support@cavium.com). All rights
 reserved.
 
@@ -38,7 +40,9 @@ AND WITH ALL FAULTS AND CAVIUM  NETWORKS MAKES NO PROMISES, REPRESENTATIONS OR W
 #ifndef CAVIUM_ETHERNET_H
 #define CAVIUM_ETHERNET_H
 
+#include <sys/taskqueue.h>
 #include <net/if_media.h>
+#include <net/ifq.h>
 
 /**
  * This is the definition of the Ethernet driver's private

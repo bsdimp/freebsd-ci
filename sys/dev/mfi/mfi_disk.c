@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 IronPort Systems
  * All rights reserved.
  *
@@ -169,6 +171,7 @@ mfi_disk_attach(device_t dev)
 		sc->ld_disk->d_fwheads = 64;
 		sc->ld_disk->d_fwsectors = 32;
 	}
+	sc->ld_disk->d_flags = DISKFLAG_UNMAPPED_BIO;
 	disk_create(sc->ld_disk, DISK_VERSION);
 
 	return (0);

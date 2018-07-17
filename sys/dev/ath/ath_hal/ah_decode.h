@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -53,6 +55,8 @@ enum {
 	AH_MARK_ANI_POLL,		/* ar*AniReset, listen time */
 	AH_MARK_ANI_CONTROL,		/* ar*AniReset, cmd */
 	AH_MARK_RX_CTL,			/* RX DMA control */
+	AH_MARK_CHIP_POWER,		/* chip power control, mode */
+	AH_MARK_CHIP_POWER_DONE,	/* chip power control done, status */
 };
 
 enum {
@@ -61,6 +65,7 @@ enum {
 	AH_MARK_RX_CTL_DMA_START,
 	AH_MARK_RX_CTL_DMA_STOP,
 	AH_MARK_RX_CTL_DMA_STOP_ERR,
+	AH_MARK_RX_CTL_DMA_STOP_OK,
 };
 
 #endif /* _ATH_AH_DECODE_H_ */

@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,7 +31,9 @@
 
 #define	_XOPEN_SOURCE
 #define	_BSD_SOURCE
+#ifdef __linux__
 #define	_POSIX_SOURCE
+#endif
 #define	_POSIX_C_SOURCE 200809
 
 #include <ctype.h>
@@ -39,10 +43,13 @@
 #include <stdint.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef __linux__
 #include <alloca.h>
+#endif
 #include <string.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <setjmp.h>
 #include <pthread.h>
 #include <sys/queue.h>
 #include <sys/ioctl.h>
@@ -50,6 +57,10 @@
 #include <sys/time.h>
 #include <dev/usb/usb_endian.h>
 #include <dev/usb/usb_freebsd.h>
+
+#include <compat/linux/linux_ioctl.h>
+
+#define	IOUSB(a) FBSD_L##a
 
 #ifndef __aligned
 #define	__aligned(x) __attribute__((__aligned__(x)))

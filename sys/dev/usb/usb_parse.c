@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,6 +51,11 @@
 #include <dev/usb/usb.h>
 #include <dev/usb/usbdi.h>
 #include <dev/usb/usbdi_util.h>
+
+#define	USB_DEBUG_VAR usb_debug
+
+#include <dev/usb/usb_core.h>
+#include <dev/usb/usb_debug.h>
 #endif			/* USB_GLOBAL_INCLUDE_FILE */
 
 /*------------------------------------------------------------------------*
@@ -142,7 +149,7 @@ usb_idesc_foreach(struct usb_config_descriptor *cd,
 	}
 
 	if (ps->desc == NULL) {
-		/* first time */
+		/* first time or zero descriptors */
 	} else if (new_iface) {
 		/* new interface */
 		ps->iface_index ++;
@@ -150,6 +157,14 @@ usb_idesc_foreach(struct usb_config_descriptor *cd,
 	} else {
 		/* new alternate interface */
 		ps->iface_index_alt ++;
+	}
+#if (USB_IFACE_MAX <= 0)
+#error "USB_IFACE_MAX must be defined greater than zero"
+#endif
+	/* check for too many interfaces */
+	if (ps->iface_index >= USB_IFACE_MAX) {
+		DPRINTF("Interface limit reached\n");
+		id = NULL;
 	}
 
 	/* store and return current descriptor */

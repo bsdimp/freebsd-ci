@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2000 Tsubai Masanari.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -99,6 +101,7 @@
  */
 
 /* interrupt vector/priority reg */
+#define OPENPIC_SRC_VECTOR_COUNT	64
 #ifndef OPENPIC_SRC_VECTOR
 #define OPENPIC_SRC_VECTOR(irq)		(0x10000 + (irq) * 0x20)
 #endif

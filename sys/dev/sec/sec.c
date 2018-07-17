@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2008-2009 Semihalf, Piotr Ziecik
  * All rights reserved.
  *
@@ -44,6 +46,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/random.h>
 #include <sys/rman.h>
 
+#include <machine/_inttypes.h>
 #include <machine/bus.h>
 #include <machine/resource.h>
 
@@ -199,6 +202,9 @@ sec_probe(device_t dev)
 	struct sec_softc *sc;
 	uint64_t id;
 
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
+
 	if (!ofw_bus_is_compatible(dev, "fsl,sec2.0"))
 		return (ENXIO);
 
@@ -232,7 +238,7 @@ sec_probe(device_t dev)
 		sc->sc_version = 3;
 		break;
 	default:
-		device_printf(dev, "unknown SEC ID 0x%016llx!\n", id);
+		device_printf(dev, "unknown SEC ID 0x%016"PRIx64"!\n", id);
 		return (ENXIO);
 	}
 

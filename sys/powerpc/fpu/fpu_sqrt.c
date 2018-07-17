@@ -1,6 +1,8 @@
 /*	$NetBSD: fpu_sqrt.c,v 1.4 2005/12/11 12:18:42 christos Exp $ */
 
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -274,7 +276,7 @@ fpu_sqrt(struct fpemu *fe)
 	 * double x correctly while doing the `known q=1.0'.
 	 *
 	 * We do this one mantissa-word at a time, as noted above, to
-	 * save work.  To avoid `(1 << 31) << 1', we also do the top bit
+	 * save work.  To avoid `(1U << 31) << 1', we also do the top bit
 	 * outside of each per-word loop.
 	 *
 	 * The calculation `t = y + bit' breaks down into `t0 = y0, ...,

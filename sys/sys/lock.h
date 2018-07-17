@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Berkeley Software Design, Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,6 +36,7 @@
 
 #include <sys/queue.h>
 #include <sys/_lock.h>
+#include <sys/ktr_class.h>
 
 struct lock_list_entry;
 struct thread;
@@ -56,13 +59,14 @@ struct thread;
  */
 
 struct lock_class {
-	const	char *lc_name;
-	u_int	lc_flags;
-	void	(*lc_assert)(const struct lock_object *lock, int what);
-	void	(*lc_ddb_show)(const struct lock_object *lock);
-	void	(*lc_lock)(struct lock_object *lock, int how);
-	int	(*lc_owner)(const struct lock_object *lock, struct thread **owner);
-	int	(*lc_unlock)(struct lock_object *lock);
+	const		char *lc_name;
+	u_int		lc_flags;
+	void		(*lc_assert)(const struct lock_object *lock, int what);
+	void		(*lc_ddb_show)(const struct lock_object *lock);
+	void		(*lc_lock)(struct lock_object *lock, uintptr_t how);
+	int		(*lc_owner)(const struct lock_object *lock,
+			    struct thread **owner);
+	uintptr_t	(*lc_unlock)(struct lock_object *lock);
 };
 
 #define	LC_SLEEPLOCK	0x00000001	/* Sleep lock. */
@@ -79,8 +83,10 @@ struct lock_class {
 #define	LO_SLEEPABLE	0x00100000	/* Lock may be held while sleeping. */
 #define	LO_UPGRADABLE	0x00200000	/* Lock may be upgraded/downgraded. */
 #define	LO_DUPOK	0x00400000	/* Don't check for duplicate acquires */
+#define	LO_IS_VNODE	0x00800000	/* Tell WITNESS about a VNODE lock */
 #define	LO_CLASSMASK	0x0f000000	/* Class index bitmask. */
 #define LO_NOPROFILE    0x10000000      /* Don't profile this lock */
+#define	LO_NEW		0x20000000	/* Don't check for double-init */
 
 /*
  * Lock classes are statically assigned an index into the gobal lock_classes
@@ -121,7 +127,8 @@ struct lock_class {
  * calling conventions for this debugging code in modules so that modules can
  * work with both debug and non-debug kernels.
  */
-#if defined(KLD_MODULE) || defined(WITNESS) || defined(INVARIANTS) || defined(INVARIANT_SUPPORT) || defined(KTR) || defined(LOCK_PROFILING)
+#if (defined(KLD_MODULE) && !defined(KLD_TIED)) || defined(WITNESS) || defined(INVARIANTS) || \
+    defined(LOCK_PROFILING) || defined(KTR)
 #define	LOCK_DEBUG	1
 #else
 #define	LOCK_DEBUG	0
@@ -132,9 +139,13 @@ struct lock_class {
  * operations.  Otherwise, use default values to avoid the unneeded bloat.
  */
 #if LOCK_DEBUG > 0
+#define LOCK_FILE_LINE_ARG_DEF	, const char *file, int line
+#define LOCK_FILE_LINE_ARG	, file, line
 #define	LOCK_FILE	__FILE__
 #define	LOCK_LINE	__LINE__
 #else
+#define LOCK_FILE_LINE_ARG_DEF
+#define LOCK_FILE_LINE_ARG
 #define	LOCK_FILE	NULL
 #define	LOCK_LINE	0
 #endif
@@ -150,8 +161,13 @@ struct lock_class {
  * file    - file name
  * line    - line number
  */
+#if LOCK_DEBUG > 0
 #define	LOCK_LOG_TEST(lo, flags)					\
 	(((flags) & LOP_QUIET) == 0 && ((lo)->lo_flags & LO_QUIET) == 0)
+#else
+#define	LOCK_LOG_TEST(lo, flags)	0
+#endif
+
 
 #define	LOCK_LOG_LOCK(opname, lo, flags, recurse, file, line) do {	\
 	if (LOCK_LOG_TEST((lo), (flags)))				\
@@ -175,7 +191,7 @@ struct lock_class {
 
 #define	LOCK_LOG_DESTROY(lo, flags)	LOCK_LOG_INIT(lo, flags)
 
-#define	lock_initalized(lo)	((lo)->lo_flags & LO_INITIALIZED)
+#define	lock_initialized(lo)	((lo)->lo_flags & LO_INITIALIZED)
 
 /*
  * Helpful macros for quickly coming up with assertions with informative
@@ -192,13 +208,49 @@ extern struct lock_class lock_class_mtx_spin;
 extern struct lock_class lock_class_sx;
 extern struct lock_class lock_class_rw;
 extern struct lock_class lock_class_rm;
+extern struct lock_class lock_class_rm_sleepable;
 extern struct lock_class lock_class_lockmgr;
 
 extern struct lock_class *lock_classes[];
 
+struct lock_delay_config {
+	u_int base;
+	u_int max;
+};
+
+struct lock_delay_arg {
+	struct lock_delay_config *config;
+	u_int delay;
+	u_int spin_cnt;
+};
+
+static inline void
+lock_delay_arg_init(struct lock_delay_arg *la, struct lock_delay_config *lc)
+{
+	la->config = lc;
+	la->delay = lc->base;
+	la->spin_cnt = 0;
+}
+
+#define lock_delay_spin(n)	do {	\
+	u_int _i;			\
+					\
+	for (_i = (n); _i > 0; _i--)	\
+		cpu_spinwait();		\
+} while (0)
+
+#define	LOCK_DELAY_SYSINIT(func) \
+	SYSINIT(func##_ld, SI_SUB_LOCK, SI_ORDER_ANY, func, NULL)
+
+#define	LOCK_DELAY_SYSINIT_DEFAULT(lc) \
+	SYSINIT(lock_delay_##lc##_ld, SI_SUB_LOCK, SI_ORDER_ANY, \
+	    lock_delay_default_init, &lc)
+
 void	lock_init(struct lock_object *, struct lock_class *,
 	    const char *, const char *, int);
 void	lock_destroy(struct lock_object *);
+void	lock_delay(struct lock_delay_arg *);
+void	lock_delay_default_init(struct lock_delay_config *);
 void	spinlock_enter(void);
 void	spinlock_exit(void);
 void	witness_init(struct lock_object *, const char *);
@@ -225,6 +277,8 @@ const char *witness_file(struct lock_object *);
 void	witness_thread_exit(struct thread *);
 
 #ifdef	WITNESS
+int	witness_startup_count(void);
+void	witness_startup(void *);
 
 /* Flags for witness_warn(). */
 #define	WARN_GIANTOK	0x01	/* Giant is exempt from this check. */

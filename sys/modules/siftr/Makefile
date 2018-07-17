@@ -1,8 +1,6 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
-
-.PATH:  ${.CURDIR}/../../netinet
+.PATH:  ${SRCTOP}/sys/netinet
 KMOD=	siftr
 SRCS=	siftr.c
 

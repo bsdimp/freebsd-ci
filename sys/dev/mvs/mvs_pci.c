@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Alexander Motin <mav@FreeBSD.org>
  * All rights reserved.
  *
@@ -88,7 +90,7 @@ mvs_probe(device_t dev)
 			snprintf(buf, sizeof(buf), "%s SATA controller",
 			    mvs_ids[i].name);
 			device_set_desc_copy(dev, buf);
-			return (BUS_PROBE_VENDOR);
+			return (BUS_PROBE_DEFAULT);
 		}
 	}
 	return (ENXIO);
@@ -111,6 +113,7 @@ mvs_attach(device_t dev)
 		i++;
 	ctlr->channels = mvs_ids[i].ports;
 	ctlr->quirks = mvs_ids[i].quirks;
+	ctlr->ccc = 0;
 	resource_int_value(device_get_name(dev),
 	    device_get_unit(dev), "ccc", &ctlr->ccc);
 	ctlr->cccc = 8;
@@ -315,7 +318,7 @@ mvs_setup_interrupt(device_t dev)
 		device_printf(dev, "unable to setup interrupt\n");
 		bus_release_resource(dev, SYS_RES_IRQ,
 		    ctlr->irq.r_irq_rid, ctlr->irq.r_irq);
-		ctlr->irq.r_irq = 0;
+		ctlr->irq.r_irq = NULL;
 		return (ENXIO);
 	}
 	return (0);
@@ -335,7 +338,7 @@ mvs_intr(void *data)
 
 	ic = ATA_INL(ctlr->r_mem, CHIP_MIC);
 	if (ctlr->msi) {
-		/* We have to to mask MSI during processing. */
+		/* We have to mask MSI during processing. */
 		mtx_lock(&ctlr->mtx);
 		ATA_OUTL(ctlr->r_mem, CHIP_MIM, 0);
 		ctlr->msia = 1; /* Deny MIM update during processing. */
@@ -388,13 +391,14 @@ mvs_intr(void *data)
 
 static struct resource *
 mvs_alloc_resource(device_t dev, device_t child, int type, int *rid,
-		       u_long start, u_long end, u_long count, u_int flags)
+		       rman_res_t start, rman_res_t end, rman_res_t count,
+		       u_int flags)
 {
 	struct mvs_controller *ctlr = device_get_softc(dev);
 	int unit = ((struct mvs_channel *)device_get_softc(child))->unit;
 	struct resource *res = NULL;
 	int offset = HC_BASE(unit >> 2) + PORT_BASE(unit & 0x03);
-	long st;
+	rman_res_t st;
 
 	switch (type) {
 	case SYS_RES_MEMORY:
@@ -488,6 +492,13 @@ mvs_child_location_str(device_t dev, device_t child, char *buf,
 	return (0);
 }
 
+static bus_dma_tag_t
+mvs_get_dma_tag(device_t bus, device_t child)
+{
+
+	return (bus_get_dma_tag(bus));
+}
+
 static device_method_t mvs_methods[] = {
 	DEVMETHOD(device_probe,     mvs_probe),
 	DEVMETHOD(device_attach,    mvs_attach),
@@ -500,6 +511,7 @@ static device_method_t mvs_methods[] = {
 	DEVMETHOD(bus_setup_intr,   mvs_setup_intr),
 	DEVMETHOD(bus_teardown_intr,mvs_teardown_intr),
 	DEVMETHOD(bus_child_location_str, mvs_child_location_str),
+	DEVMETHOD(bus_get_dma_tag,  mvs_get_dma_tag),
 	DEVMETHOD(mvs_edma,         mvs_edma),
 	{ 0, 0 }
 };

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  * (c) UNIX System Laboratories, Inc.
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -44,7 +46,7 @@
  * quantity to keep down the cost of doing lookup on a 32-bit machine.
  */
 #define	doff_t		int32_t
-#define MAXDIRSIZE	(0x7fffffff)
+#define	MAXDIRSIZE	(0x7fffffff)
 
 /*
  * A directory consists of some number of blocks of DIRBLKSIZ
@@ -57,7 +59,7 @@
  * the length of the entry, and the length of the name contained in
  * the entry.  These are followed by the name padded to a 4 byte boundary
  * with null bytes.  All names are guaranteed null terminated.
- * The maximum length of a name in a directory is MAXNAMLEN.
+ * The maximum length of a name in a directory is UFS_MAXNAMLEN.
  *
  * The macro DIRSIZ(fmt, dp) gives the amount of space required to represent
  * a directory entry.  Free space in a directory is represented by
@@ -71,15 +73,16 @@
  * Entries other than the first in a directory do not normally have
  * dp->d_ino set to 0.
  */
-#define DIRBLKSIZ	DEV_BSIZE
-#define	MAXNAMLEN	255
+#define	DIRBLKSIZ	DEV_BSIZE
+#define	UFS_MAXNAMLEN	255
 
 struct	direct {
 	u_int32_t d_ino;		/* inode number of entry */
 	u_int16_t d_reclen;		/* length of this record */
 	u_int8_t  d_type; 		/* file type, see below */
 	u_int8_t  d_namlen;		/* length of string in d_name */
-	char	  d_name[MAXNAMLEN + 1];/* name with length <= MAXNAMLEN */
+	char	  d_name[UFS_MAXNAMLEN + 1];
+					/* name with length <= UFS_MAXNAMLEN */
 };
 
 /*
@@ -110,21 +113,21 @@ struct	direct {
  * 
  */
 #define	DIRECTSIZ(namlen)						\
-	(((uintptr_t)&((struct direct *)0)->d_name +			\
+	((__offsetof(struct direct, d_name) +				\
 	  ((namlen)+1)*sizeof(((struct direct *)0)->d_name[0]) + 3) & ~3)
 #if (BYTE_ORDER == LITTLE_ENDIAN)
-#define DIRSIZ(oldfmt, dp) \
+#define	DIRSIZ(oldfmt, dp) \
     ((oldfmt) ? DIRECTSIZ((dp)->d_type) : DIRECTSIZ((dp)->d_namlen))
 #else
-#define DIRSIZ(oldfmt, dp) \
+#define	DIRSIZ(oldfmt, dp) \
     DIRECTSIZ((dp)->d_namlen)
 #endif
-#define OLDDIRFMT	1
-#define NEWDIRFMT	0
+#define	OLDDIRFMT	1
+#define	NEWDIRFMT	0
 
 /*
  * Template for manipulating directories.  Should use struct direct's,
- * but the name field is MAXNAMLEN - 1, and this just won't do.
+ * but the name field is UFS_MAXNAMLEN - 1, and this just won't do.
  */
 struct dirtemplate {
 	u_int32_t	dot_ino;

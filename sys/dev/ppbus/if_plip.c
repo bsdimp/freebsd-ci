@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1997 Poul-Henning Kamp
  * All rights reserved.
  *
@@ -97,6 +99,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/netisr.h>
 #include <net/route.h>
@@ -173,7 +176,7 @@ static u_char *ctxmith;
 /* Functions for the lp# interface */
 static int lpinittables(void);
 static int lpioctl(struct ifnet *, u_long, caddr_t);
-static int lpoutput(struct ifnet *, struct mbuf *, struct sockaddr *,
+static int lpoutput(struct ifnet *, struct mbuf *, const struct sockaddr *,
        struct route *);
 static void lpstop(struct lp_data *);
 static void lp_intr(void *);
@@ -244,7 +247,7 @@ lp_attach(device_t dev)
 	 */
 	lp->res_irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &rid,
 	    RF_SHAREABLE);
-	if (lp->res_irq == 0) {
+	if (lp->res_irq == NULL) {
 		device_printf(dev, "cannot reserve interrupt, failed.\n");
 		return (ENXIO);
 	}
@@ -410,7 +413,6 @@ lpioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	int error;
 
 	switch (cmd) {
-	case SIOCSIFDSTADDR:
 	case SIOCAIFADDR:
 	case SIOCSIFADDR:
 		if (ifa->ifa_addr->sa_family != AF_INET)
@@ -453,7 +455,7 @@ lpioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
-		if (ifr == 0) {
+		if (ifr == NULL) {
 			return (EAFNOSUPPORT);		/* XXX */
 		}
 		switch (ifr->ifr_addr.sa_family) {
@@ -576,8 +578,8 @@ lp_intr(void *arg)
 		sc->sc_iferrs = 0;
 
 		len -= CLPIPHDRLEN;
-		sc->sc_ifp->if_ipackets++;
-		sc->sc_ifp->if_ibytes += len;
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IPACKETS, 1);
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, len);
 		top = m_devget(sc->sc_ifbuf + CLPIPHDRLEN, len, 0, sc->sc_ifp,
 		    0);
 		if (top) {
@@ -630,8 +632,8 @@ lp_intr(void *arg)
 		sc->sc_iferrs = 0;
 
 		len -= LPIPHDRLEN;
-		sc->sc_ifp->if_ipackets++;
-		sc->sc_ifp->if_ibytes += len;
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IPACKETS, 1);
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IBYTES, len);
 		top = m_devget(sc->sc_ifbuf + LPIPHDRLEN, len, 0, sc->sc_ifp,
 		    0);
 		if (top) {
@@ -651,7 +653,7 @@ lp_intr(void *arg)
 err:
 	ppb_wdtr(ppbus, 0);
 	lprintf("R");
-	sc->sc_ifp->if_ierrors++;
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_IERRORS, 1);
 	sc->sc_iferrs++;
 
 	/*
@@ -682,7 +684,7 @@ lpoutbyte(u_char byte, int spin, device_t ppbus)
 }
 
 static int
-lpoutput(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst,
+lpoutput(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
     struct route *ro)
 {
 	struct lp_data *sc = ifp->if_softc;
@@ -768,11 +770,11 @@ lpoutput(struct ifnet *ifp, struct mbuf *m, struct sockaddr *dst,
 	nend:
 		ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 		if (err)  {			/* if we didn't timeout... */
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 			lprintf("X");
 		} else {
-			ifp->if_opackets++;
-			ifp->if_obytes += m->m_pkthdr.len;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
+			if_inc_counter(ifp, IFCOUNTER_OBYTES, m->m_pkthdr.len);
 			if (bpf_peers_present(ifp->if_bpf))
 				lptap(ifp, m);
 		}
@@ -814,11 +816,11 @@ end:
 
 	ifp->if_drv_flags &= ~IFF_DRV_OACTIVE;
 	if (err)  {			/* if we didn't timeout... */
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		lprintf("X");
 	} else {
-		ifp->if_opackets++;
-		ifp->if_obytes += m->m_pkthdr.len;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
+		if_inc_counter(ifp, IFCOUNTER_OBYTES, m->m_pkthdr.len);
 		if (bpf_peers_present(ifp->if_bpf))
 			lptap(ifp, m);
 	}

@@ -8,6 +8,7 @@
 . /etc/rc.subr
 
 name="sysctl"
+desc="Set sysctl variables from /etc/sysctl.conf and /etc/sysctl.conf.local"
 command="/sbin/sysctl"
 stop_cmd=":"
 start_cmd="sysctl_start"
@@ -27,7 +28,9 @@ sysctl_start()
 	esac
 
 	for _f in /etc/sysctl.conf /etc/sysctl.conf.local; do
-		[ -r ${_f} ] && ${command} ${command_args} ${_f} > /dev/null
+		if [ -r ${_f} ]; then
+			${command} ${command_args} ${_f} > /dev/null
+		fi
 	done
 }
 

@@ -2,9 +2,10 @@
 # $FreeBSD$
 
 # machine-independent gen sources
-.PATH: ${.CURDIR}/${LIBC_ARCH}/gen ${.CURDIR}/gen
+.PATH: ${LIBC_SRCTOP}/${LIBC_ARCH}/gen ${LIBC_SRCTOP}/gen
 
 SRCS+=	__getosreldate.c \
+	__pthread_mutex_init_calloc_cb_stub.c \
 	__xuname.c \
 	_once_stub.c \
 	_pthread_stubs.c \
@@ -16,6 +17,7 @@ SRCS+=	__getosreldate.c \
 	assert.c \
 	auxv.c \
 	basename.c \
+	basename_compat.c \
 	cap_sandboxed.c \
 	check_utility_compat.c \
 	clock.c \
@@ -28,15 +30,18 @@ SRCS+=	__getosreldate.c \
 	devname.c \
 	dirfd.c \
 	dirname.c \
+	dirname_compat.c \
 	disklabel.c \
 	dlfcn.c \
 	drand48.c \
+	dup3.c \
 	elf_utils.c \
 	erand48.c \
 	err.c \
 	errlst.c \
 	errno.c \
 	exec.c \
+	exect.c \
 	fdevname.c \
 	feature_present.c \
 	fmtcheck.c \
@@ -47,13 +52,13 @@ SRCS+=	__getosreldate.c \
 	fstab.c \
 	ftok.c \
 	fts.c \
-	fts-compat.c \
 	ftw.c \
 	getbootfile.c \
 	getbsize.c \
 	getcap.c \
 	getcwd.c \
 	getdomainname.c \
+	getentropy.c \
 	getgrent.c \
 	getgrouplist.c \
 	gethostname.c \
@@ -97,11 +102,13 @@ SRCS+=	__getosreldate.c \
 	raise.c \
 	readdir.c \
 	readpassphrase.c \
+	recvmmsg.c \
 	rewinddir.c \
 	scandir.c \
 	seed48.c \
 	seekdir.c \
 	semctl.c \
+	sendmmsg.c \
 	setdomainname.c \
 	sethostname.c \
 	setjmperr.c \
@@ -133,7 +140,6 @@ SRCS+=	__getosreldate.c \
 	ualarm.c \
 	ulimit.c \
 	uname.c \
-	unvis-compat.c \
 	usleep.c \
 	utime.c \
 	utxdb.c \
@@ -143,12 +149,24 @@ SRCS+=	__getosreldate.c \
 	waitpid.c \
 	waitid.c \
 	wordexp.c
+.if ${MK_SYMVER} == yes
+SRCS+=	devname-compat11.c \
+	fts-compat.c \
+	fts-compat11.c \
+	ftw-compat11.c \
+	getmntinfo-compat11.c \
+	glob-compat11.c \
+	nftw-compat11.c \
+	readdir-compat11.c \
+	scandir-compat11.c \
+	unvis-compat.c
+.endif
 
-.PATH: ${.CURDIR}/../../contrib/libc-pwcache
+.PATH: ${SRCTOP}/contrib/libc-pwcache
 SRCS+=	pwcache.c pwcache.h
 
-.PATH: ${.CURDIR}/../../contrib/libc-vis
-CFLAGS+=	-I${.CURDIR}/../../contrib/libc-vis
+.PATH: ${SRCTOP}/contrib/libc-vis
+CFLAGS+=	-I${SRCTOP}/contrib/libc-vis
 SRCS+=	unvis.c vis.c
 
 MISRCS+=modf.c
@@ -157,18 +175,19 @@ CANCELPOINTS_SRCS=sem.c sem_new.c
 .for src in ${CANCELPOINTS_SRCS}
 SRCS+=cancelpoints_${src}
 CLEANFILES+=cancelpoints_${src}
-cancelpoints_${src}:
-	ln -sf ${.CURDIR}/gen/${src} ${.TARGET}
+cancelpoints_${src}: ${LIBC_SRCTOP}/gen/${src} .NOMETA
+	ln -sf ${.ALLSRC} ${.TARGET}
 .endfor
 
-SYM_MAPS+=${.CURDIR}/gen/Symbol.map
+SYM_MAPS+=${LIBC_SRCTOP}/gen/Symbol.map
 
 # machine-dependent gen sources
-.sinclude "${.CURDIR}/${LIBC_ARCH}/gen/Makefile.inc"
+.sinclude "${LIBC_SRCTOP}/${LIBC_ARCH}/gen/Makefile.inc"
 
 MAN+=	alarm.3 \
 	arc4random.3 \
 	basename.3 \
+	cap_rights_get.3 \
 	cap_sandboxed.3 \
 	check_utility_compat.3 \
 	clock.3 \
@@ -184,6 +203,7 @@ MAN+=	alarm.3 \
 	dlinfo.3 \
 	dllockinit.3 \
 	dlopen.3 \
+	dup3.3 \
 	err.3 \
 	exec.3 \
 	feature_present.3 \
@@ -202,6 +222,7 @@ MAN+=	alarm.3 \
 	getcwd.3 \
 	getdiskbyname.3 \
 	getdomainname.3 \
+	getentropy.3 \
 	getfsent.3 \
 	getgrent.3 \
 	getgrouplist.3 \
@@ -294,15 +315,15 @@ MLINKS+=arc4random.3 arc4random_addrandom.3 \
 	arc4random.3 arc4random_stir.3 \
 	arc4random.3 arc4random_buf.3 \
 	arc4random.3 arc4random_uniform.3
-MLINKS+=basename.3 basename_r.3
 MLINKS+=ctermid.3 ctermid_r.3
 MLINKS+=devname.3 devname_r.3
 MLINKS+=devname.3 fdevname.3
 MLINKS+=devname.3 fdevname_r.3
 MLINKS+=directory.3 closedir.3 \
 	directory.3 dirfd.3 \
-	directory.3 opendir.3 \
+	directory.3 fdclosedir.3 \
 	directory.3 fdopendir.3 \
+	directory.3 opendir.3 \
 	directory.3 readdir.3 \
 	directory.3 readdir_r.3 \
 	directory.3 rewinddir.3 \
@@ -381,6 +402,7 @@ MLINKS+=getgrent.3 endgrent.3 \
 	getgrent.3 getgrgid_r.3
 MLINKS+=gethostname.3 sethostname.3
 MLINKS+=getnetgrent.3 endnetgrent.3 \
+	getnetgrent.3 getnetgrent_r.3 \
 	getnetgrent.3 innetgr.3 \
 	getnetgrent.3 setnetgrent.3
 MLINKS+=getprogname.3 setprogname.3
@@ -446,10 +468,13 @@ MLINKS+=rand48.3 _rand48.3 \
 	rand48.3 nrand48.3 \
 	rand48.3 seed48.3 \
 	rand48.3 srand48.3
+MLINKS+=recv.2 recvmmsg.2
 MLINKS+=scandir.3 alphasort.3
 MLINKS+=sem_open.3 sem_close.3 \
 	sem_open.3 sem_unlink.3
 MLINKS+=sem_wait.3 sem_trywait.3
+MLINKS+=sem_timedwait.3 sem_clockwait_np.3
+MLINKS+=send.2 sendmmsg.2
 MLINKS+=setjmp.3 _longjmp.3 \
 	setjmp.3 _setjmp.3 \
 	setjmp.3 longjmp.3 \

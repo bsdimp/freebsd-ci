@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -47,7 +49,6 @@ struct	arphdr {
 	u_short	ar_hrd;		/* format of hardware address */
 #define ARPHRD_ETHER 	1	/* ethernet hardware format */
 #define ARPHRD_IEEE802	6	/* token-ring hardware format */
-#define ARPHRD_ARCNET	7	/* arcnet hardware format */
 #define ARPHRD_FRELAY 	15	/* frame relay hardware format */
 #define ARPHRD_IEEE1394	24	/* firewire hardware format */
 #define ARPHRD_INFINIBAND 32	/* infiniband hardware format */
@@ -97,43 +98,37 @@ struct arpreq {
 #define	ATF_PUBL	0x08	/* publish entry (respond for other host) */
 #define	ATF_USETRAILERS	0x10	/* has requested trailers */
 
-#ifdef _KERNEL
-/*
- * Structure shared between the ethernet driver modules and
- * the address resolution code.
- */
-struct	arpcom {
-	struct 	ifnet *ac_ifp;		/* network-visible interface */
-	void	*ac_netgraph;		/* ng_ether(4) netgraph node info */
-};
-#define IFP2AC(ifp) ((struct arpcom *)(ifp->if_l2com))
-#define AC2IFP(ac) ((ac)->ac_ifp)
-
-#endif /* _KERNEL */
-
 struct arpstat {
 	/* Normal things that happen: */
-	u_long txrequests;	/* # of ARP requests sent by this host. */
-	u_long txreplies;	/* # of ARP replies sent by this host. */
-	u_long rxrequests;	/* # of ARP requests received by this host. */
-	u_long rxreplies;	/* # of ARP replies received by this host. */
-	u_long received;	/* # of ARP packets received by this host. */
+	uint64_t txrequests;	/* # of ARP requests sent by this host. */
+	uint64_t txreplies;	/* # of ARP replies sent by this host. */
+	uint64_t rxrequests;	/* # of ARP requests received by this host. */
+	uint64_t rxreplies;	/* # of ARP replies received by this host. */
+	uint64_t received;	/* # of ARP packets received by this host. */
 
-	u_long arp_spares[4];	/* For either the upper or lower half. */
+	uint64_t arp_spares[4];	/* For either the upper or lower half. */
 	/* Abnormal event and error  counting: */
-	u_long dropped;		/* # of packets dropped waiting for a reply. */
-	u_long timeouts;	/* # of times with entries removed */
+	uint64_t dropped;	/* # of packets dropped waiting for a reply. */
+	uint64_t timeouts;	/* # of times with entries removed */
 				/* due to timeout. */
-	u_long dupips;		/* # of duplicate IPs detected. */
+	uint64_t dupips;	/* # of duplicate IPs detected. */
 };
 
+#ifdef _KERNEL
+#include <sys/counter.h>
+#include <net/vnet.h>
+
+VNET_PCPUSTAT_DECLARE(struct arpstat, arpstat);
 /*
  * In-kernel consumers can use these accessor macros directly to update
  * stats.
  */
-#define	ARPSTAT_ADD(name, val)	V_arpstat.name += (val)
-#define	ARPSTAT_SUB(name, val)	V_arpstat.name -= (val)
+#define	ARPSTAT_ADD(name, val)	\
+    VNET_PCPUSTAT_ADD(struct arpstat, arpstat, name, (val))
+#define	ARPSTAT_SUB(name, val)	ARPSTAT_ADD(name, -(val))
 #define	ARPSTAT_INC(name)	ARPSTAT_ADD(name, 1)
 #define	ARPSTAT_DEC(name)	ARPSTAT_SUB(name, 1)
+
+#endif /* _KERNEL */
 
 #endif /* !_NET_IF_ARP_H_ */

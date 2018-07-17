@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: Beerware
+ *
  * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42):
  * <phk@FreeBSD.org> wrote this file.  As long as you retain this notice you
@@ -18,7 +20,7 @@
  *	inflate isn't quite reentrant yet...
  *	error-handling is a mess...
  *	so is the rest...
- *	tidy up unnecesary includes
+ *	tidy up unnecessary includes
  */
 
 #include <sys/cdefs.h>
@@ -67,8 +69,7 @@ static int do_aout_hdr(struct imgact_gzip *);
 static int Flush(void *vp, u_char *, u_long siz);
 
 static int
-exec_gzip_imgact(imgp)
-	struct image_params *imgp;
+exec_gzip_imgact(struct image_params *imgp)
 {
 	int             error;
 	const u_char   *p = (const u_char *) imgp->image_header;
@@ -137,7 +138,7 @@ exec_gzip_imgact(imgp)
 	}
 
 	if (igz.inbuf)
-		kmem_free_wakeup(exec_map, (vm_offset_t)igz.inbuf, PAGE_SIZE);
+		kmap_free_wakeup(exec_map, (vm_offset_t)igz.inbuf, PAGE_SIZE);
 	if (igz.error || error) {
 		printf("Output=%lu ", igz.output);
 		printf("Inflate_error=%d igz.error=%d where=%d\n",
@@ -212,7 +213,7 @@ do_aout_hdr(struct imgact_gzip * gz)
 
 	/* data + bss can't exceed rlimit */
 	    gz->a_out.a_data + gz->bss_size >
-	    lim_cur(gz->ip->proc, RLIMIT_DATA) ||
+	    lim_cur_proc(gz->ip->proc, RLIMIT_DATA) ||
 	    racct_set(gz->ip->proc, RACCT_DATA,
 	    gz->a_out.a_data + gz->bss_size) != 0) {
 		PROC_UNLOCK(gz->ip->proc);
@@ -269,12 +270,9 @@ do_aout_hdr(struct imgact_gzip * gz)
 		 */
 		vmaddr = gz->virtual_offset + gz->a_out.a_text + 
 			gz->a_out.a_data;
-		error = vm_map_find(&vmspace->vm_map,
-				NULL,
-				0,
-				&vmaddr, 
-				gz->bss_size,
-				FALSE, VM_PROT_ALL, VM_PROT_ALL, 0);
+		error = vm_map_find(&vmspace->vm_map, NULL, 0, &vmaddr,
+		    gz->bss_size, 0, VMFS_NO_SPACE, VM_PROT_ALL, VM_PROT_ALL,
+		    0);
 		if (error) {
 			gz->where = __LINE__;
 			return (error);
@@ -310,7 +308,7 @@ NextByte(void *vp)
 		return igz->inbuf[(igz->idx++) - igz->offset];
 	}
 	if (igz->inbuf)
-		kmem_free_wakeup(exec_map, (vm_offset_t)igz->inbuf, PAGE_SIZE);
+		kmap_free_wakeup(exec_map, (vm_offset_t)igz->inbuf, PAGE_SIZE);
 	igz->offset = igz->idx & ~PAGE_MASK;
 
 	error = vm_mmap(exec_map,	/* map */
@@ -389,5 +387,8 @@ Flush(void *vp, u_char * ptr, u_long siz)
 /*
  * Tell kern_execve.c about it, with a little help from the linker.
  */
-static struct execsw gzip_execsw = {exec_gzip_imgact, "gzip"};
+static struct execsw gzip_execsw = {
+	.ex_imgact = exec_gzip_imgact,
+	.ex_name = "gzip"
+};
 EXEC_SET(execgzip, gzip_execsw);

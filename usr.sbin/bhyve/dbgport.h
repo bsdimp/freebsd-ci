@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 NetApp, Inc.
  * All rights reserved.
  *
@@ -28,8 +30,6 @@
 
 #ifndef _DBGPORT_H_
 #define	_DBGPORT_H_
-
-#define	DEFAULT_GDB_PORT	6466
 
 void	init_dbgport(int port);
 

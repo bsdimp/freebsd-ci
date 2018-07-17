@@ -1,5 +1,7 @@
-/*
- * Copyright (c) 2012 Oleksandr Tymoshenko <gonzo@freebsd.org>
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2012-2017 Oleksandr Tymoshenko <gonzo@freebsd.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -35,9 +37,12 @@ __FBSDID("$FreeBSD$");
 #include <sys/malloc.h>
 #include <sys/rman.h>
 #include <sys/watchdog.h>
+
+#include <vm/vm.h>
+#include <vm/pmap.h>
+
 #include <machine/bus.h>
 #include <machine/cpu.h>
-#include <machine/frame.h>
 #include <machine/intr.h>
 
 #include <dev/pci/pcivar.h>
@@ -46,23 +51,20 @@ __FBSDID("$FreeBSD$");
 #include <dev/pci/pcib_private.h>
 #include "pcib_if.h"
 
-#include <dev/fdt/fdt_common.h>
 #include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
+#include <dev/ofw/ofw_pci.h>
+
+#include <arm/versatile/versatile_scm.h>
 
 #include <machine/bus.h>
 #include <machine/fdt.h>
 
-#include <arm/versatile/versatile_pci_bus_space.h>
-
-#define	MEM_SYS		0
-#define	MEM_CORE	1
-#define	MEM_BASE	2
-#define	MEM_CONF_BASE	3
-#define MEM_REGIONS	4
-
-#define	SYS_PCICTL		0x00
+#define	MEM_CORE	0
+#define	MEM_BASE	1
+#define	MEM_CONF_BASE	2
+#define MEM_REGIONS	3
 
 #define	PCI_CORE_IMAP0		0x00
 #define	PCI_CORE_IMAP1		0x04
@@ -91,12 +93,6 @@ __FBSDID("$FreeBSD$");
 #else
 #define dprintf(fmt, args...)
 #endif
-
-
-#define	versatile_pci_sys_read_4(reg)	\
-	bus_read_4(sc->mem_res[MEM_SYS], (reg))
-#define	versatile_pci_sys_write_4(reg, val)	\
-	bus_write_4(sc->mem_res[MEM_SYS], (reg), (val))
 
 #define	versatile_pci_core_read_4(reg)	\
 	bus_read_4(sc->mem_res[MEM_CORE], (reg))
@@ -131,13 +127,13 @@ struct versatile_pci_softc {
 	struct rman		mem_rman;
 
 	struct mtx		mtx;
+	struct ofw_bus_iinfo	pci_iinfo;
 };
 
 static struct resource_spec versatile_pci_mem_spec[] = {
 	{ SYS_RES_MEMORY, 0, RF_ACTIVE },
 	{ SYS_RES_MEMORY, 1, RF_ACTIVE },
 	{ SYS_RES_MEMORY, 2, RF_ACTIVE },
-	{ SYS_RES_MEMORY, 3, RF_ACTIVE },
 	{ -1, 0, 0 }
 };
 
@@ -145,7 +141,10 @@ static int
 versatile_pci_probe(device_t dev)
 {
 
-	if (ofw_bus_is_compatible(dev, "versatile,pci")) {
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
+
+	if (ofw_bus_is_compatible(dev, "arm,versatile-pci")) {
 		device_set_desc(dev, "Versatile PCI controller");
 		return (BUS_PROBE_DEFAULT);
 	}
@@ -161,6 +160,9 @@ versatile_pci_attach(device_t dev)
 	int slot;
 	uint32_t vendordev_id, class_id;
 	uint32_t val;
+	phandle_t node;
+
+	node = ofw_bus_get_node(dev);
 
 	/* Request memory resources */
 	err = bus_alloc_resources(dev, versatile_pci_mem_spec,
@@ -173,18 +175,19 @@ versatile_pci_attach(device_t dev)
 	/*
 	 * Setup memory windows
 	 */
-	versatile_pci_core_write_4(PCI_CORE_IMAP0, (PCI_IO_WINDOW >> 11));
-	versatile_pci_core_write_4(PCI_CORE_IMAP1, (PCI_NPREFETCH_WINDOW >> 11));
-	versatile_pci_core_write_4(PCI_CORE_IMAP2, (PCI_PREFETCH_WINDOW >> 11));
+	versatile_pci_core_write_4(PCI_CORE_IMAP0, (PCI_IO_WINDOW >> 28));
+	versatile_pci_core_write_4(PCI_CORE_IMAP1, (PCI_NPREFETCH_WINDOW >> 28));
+	versatile_pci_core_write_4(PCI_CORE_IMAP2, (PCI_PREFETCH_WINDOW >> 28));
 
 	/*
 	 * XXX: this is SDRAM offset >> 28
+	 * Unused as of QEMU 1.5
 	 */
-	versatile_pci_core_write_4(PCI_CORE_SMAP0, 0);
-	versatile_pci_core_write_4(PCI_CORE_SMAP1, 0);
-	versatile_pci_core_write_4(PCI_CORE_SMAP2, 0);
+	versatile_pci_core_write_4(PCI_CORE_SMAP0, (PCI_IO_WINDOW >> 28));
+	versatile_pci_core_write_4(PCI_CORE_SMAP1, (PCI_NPREFETCH_WINDOW >> 28));
+	versatile_pci_core_write_4(PCI_CORE_SMAP2, (PCI_NPREFETCH_WINDOW >> 28));
 
-	versatile_pci_sys_write_4(SYS_PCICTL, 1);
+	versatile_scm_reg_write_4(SCM_PCICTL, 1);
 
 	for (slot = 0; slot <= PCI_SLOTMAX; slot++) {
 		vendordev_id = versatile_pci_read_4((slot << 11) + PCIR_DEVVENDOR);
@@ -261,7 +264,9 @@ versatile_pci_attach(device_t dev)
 		versatile_pci_conf_write_4((slot << 11) + PCIR_COMMAND, val);
 	}
 
-	device_add_child(dev, "pci", 0);
+	ofw_bus_setup_iinfo(node, &sc->pci_iinfo, sizeof(cell_t));
+
+	device_add_child(dev, "pci", -1);
 	return (bus_generic_attach(dev));
 }
 
@@ -300,21 +305,21 @@ versatile_pci_write_ivar(device_t dev, device_t child, int which,
 
 static struct resource *
 versatile_pci_alloc_resource(device_t bus, device_t child, int type, int *rid,
-    u_long start, u_long end, u_long count, u_int flags)
+    rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 
 	struct versatile_pci_softc *sc = device_get_softc(bus);
 	struct resource *rv;
 	struct rman *rm;
 
-	printf("Alloc resources %d, %08lx..%08lx, %ld\n", type, start, end, count);
+	dprintf("Alloc resources %d, %08lx..%08lx, %ld\n", type, start, end, count);
 
 	switch (type) {
 	case SYS_RES_IOPORT:
 		rm = &sc->io_rman;
 		break;
 	case SYS_RES_IRQ:
-		rm = &sc->irq_rman;
+		rm = NULL;
 		break;
 	case SYS_RES_MEMORY:
 		rm = &sc->mem_rman;
@@ -323,8 +328,11 @@ versatile_pci_alloc_resource(device_t bus, device_t child, int type, int *rid,
 		return (NULL);
 	}
 
-	rv = rman_reserve_resource(rm, start, end, count, flags, child);
+	if (rm == NULL)
+		return (BUS_ALLOC_RESOURCE(device_get_parent(bus),
+		    child, type, rid, start, end, count, flags));
 
+	rv = rman_reserve_resource(rm, start, end, count, flags, child);
 	if (rv == NULL)
 		return (NULL);
 
@@ -344,20 +352,26 @@ versatile_pci_activate_resource(device_t bus, device_t child, int type, int rid,
     struct resource *r)
 {
 	vm_offset_t vaddr;
-	int res = (BUS_ACTIVATE_RESOURCE(device_get_parent(bus),
-	    child, type, rid, r));
+	int res;
 
-	if (!res) {
-		switch(type) {
-		case SYS_RES_MEMORY:
-		case SYS_RES_IOPORT:
-			vaddr = (vm_offset_t)pmap_mapdev(rman_get_start(r),
-					rman_get_size(r));
-			rman_set_bushandle(r, vaddr);
-			rman_set_bustag(r, versatile_bus_space_pcimem);
-			break;
-		}
+	switch(type) {
+	case SYS_RES_MEMORY:
+	case SYS_RES_IOPORT:
+		vaddr = (vm_offset_t)pmap_mapdev(rman_get_start(r),
+				rman_get_size(r));
+		rman_set_bushandle(r, vaddr);
+		rman_set_bustag(r, fdtbus_bs_tag);
+		res = rman_activate_resource(r);
+		break;
+	case SYS_RES_IRQ:
+		res = (BUS_ACTIVATE_RESOURCE(device_get_parent(bus),
+		    child, type, rid, r));
+		break;
+	default:
+		res = ENXIO;
+		break;
 	}
+
 	return (res);
 }
 
@@ -379,8 +393,6 @@ versatile_pci_teardown_intr(device_t dev, device_t child, struct resource *ires,
 	return BUS_TEARDOWN_INTR(device_get_parent(dev), dev, ires, cookie);
 }
 
-
-
 static int
 versatile_pci_maxslots(device_t dev)
 {
@@ -389,10 +401,33 @@ versatile_pci_maxslots(device_t dev)
 }
 
 static int
-versatile_pci_route_interrupt(device_t pcib, device_t device, int pin)
+versatile_pci_route_interrupt(device_t bus, device_t dev, int pin)
 {
+	struct versatile_pci_softc *sc;
+	struct ofw_pci_register reg;
+	uint32_t pintr, mintr[4];
+	phandle_t iparent;
+	int intrcells;
 
-	return (27 + ((pci_get_slot(device) + pin - 1) & 3));
+	sc = device_get_softc(bus);
+	pintr = pin;
+
+	bzero(&reg, sizeof(reg));
+	reg.phys_hi = (pci_get_bus(dev) << OFW_PCI_PHYS_HI_BUSSHIFT) |
+	    (pci_get_slot(dev) << OFW_PCI_PHYS_HI_DEVICESHIFT) |
+	    (pci_get_function(dev) << OFW_PCI_PHYS_HI_FUNCTIONSHIFT);
+
+	intrcells = ofw_bus_lookup_imap(ofw_bus_get_node(dev),
+	    &sc->pci_iinfo, &reg, sizeof(reg), &pintr, sizeof(pintr),
+	    mintr, sizeof(mintr), &iparent);
+	if (intrcells) {
+		pintr = ofw_bus_map_intr(dev, iparent, intrcells, mintr);
+		return (pintr);
+	}
+
+	device_printf(bus, "could not route pin %d for device %d.%d\n",
+	    pin, pci_get_slot(dev), pci_get_function(dev));
+	return (PCI_INVALID_IRQ);
 }
 
 static uint32_t
@@ -495,6 +530,7 @@ static device_method_t versatile_pci_methods[] = {
 	DEVMETHOD(pcib_read_config,	versatile_pci_read_config),
 	DEVMETHOD(pcib_write_config,	versatile_pci_write_config),
 	DEVMETHOD(pcib_route_interrupt,	versatile_pci_route_interrupt),
+	DEVMETHOD(pcib_request_feature,	pcib_request_feature_allow),
 
 	DEVMETHOD_END
 };

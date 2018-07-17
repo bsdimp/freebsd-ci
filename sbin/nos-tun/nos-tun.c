@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1996, Nickolay Dudorov
  * All rights reserved.
  *
@@ -96,7 +98,7 @@ Set_address(char *addr, struct sockaddr_in *sin)
 
   bzero((char *)sin, sizeof(struct sockaddr));
   sin->sin_family = AF_INET;
-  if((sin->sin_addr.s_addr = inet_addr(addr)) == (in_addr_t)-1) {
+  if((sin->sin_addr.s_addr = inet_addr(addr)) == INADDR_NONE) {
     hp = gethostbyname(addr);
     if (!hp) {
       syslog(LOG_ERR,"unknown host %s", addr);

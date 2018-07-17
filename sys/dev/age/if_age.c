@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008, Pyun YongHyeon <yongari@FreeBSD.org>
  * All rights reserved.
  *
@@ -47,6 +49,7 @@ __FBSDID("$FreeBSD$");
 
 #include <net/bpf.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <net/if_dl.h>
@@ -180,6 +183,8 @@ static driver_t age_driver = {
 static devclass_t age_devclass;
 
 DRIVER_MODULE(age, pci, age_driver, age_devclass, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, age, age_devs,
+    sizeof(age_devs[0]), nitems(age_devs));
 DRIVER_MODULE(miibus, age, miibus_driver, miibus_devclass, 0, 0);
 
 static struct resource_spec age_res_spec_mem[] = {
@@ -322,8 +327,7 @@ age_probe(device_t dev)
 	vendor = pci_get_vendor(dev);
 	devid = pci_get_device(dev);
 	sp = age_devs;
-	for (i = 0; i < sizeof(age_devs) / sizeof(age_devs[0]);
-	    i++, sp++) {
+	for (i = 0; i < nitems(age_devs); i++, sp++) {
 		if (vendor == sp->age_vendorid &&
 		    devid == sp->age_deviceid) {
 			device_set_desc(dev, sp->age_name);
@@ -587,7 +591,7 @@ age_attach(device_t dev)
 	/* Create device sysctl node. */
 	age_sysctl_node(sc);
 
-	if ((error = age_dma_alloc(sc) != 0))
+	if ((error = age_dma_alloc(sc)) != 0)
 		goto fail;
 
 	/* Load station address. */
@@ -634,7 +638,7 @@ age_attach(device_t dev)
 	ifp->if_capenable = ifp->if_capabilities;
 
 	/* Tell the upper layer(s) we support long frames. */
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 
 	/* Create local taskq. */
 	sc->age_tq = taskqueue_create_fast("age_taskq", M_WAITOK,
@@ -1228,76 +1232,71 @@ age_dma_free(struct age_softc *sc)
 	}
 	/* Tx ring. */
 	if (sc->age_cdata.age_tx_ring_tag != NULL) {
-		if (sc->age_cdata.age_tx_ring_map != NULL)
+		if (sc->age_rdata.age_tx_ring_paddr != 0)
 			bus_dmamap_unload(sc->age_cdata.age_tx_ring_tag,
 			    sc->age_cdata.age_tx_ring_map);
-		if (sc->age_cdata.age_tx_ring_map != NULL &&
-		    sc->age_rdata.age_tx_ring != NULL)
+		if (sc->age_rdata.age_tx_ring != NULL)
 			bus_dmamem_free(sc->age_cdata.age_tx_ring_tag,
 			    sc->age_rdata.age_tx_ring,
 			    sc->age_cdata.age_tx_ring_map);
+		sc->age_rdata.age_tx_ring_paddr = 0;
 		sc->age_rdata.age_tx_ring = NULL;
-		sc->age_cdata.age_tx_ring_map = NULL;
 		bus_dma_tag_destroy(sc->age_cdata.age_tx_ring_tag);
 		sc->age_cdata.age_tx_ring_tag = NULL;
 	}
 	/* Rx ring. */
 	if (sc->age_cdata.age_rx_ring_tag != NULL) {
-		if (sc->age_cdata.age_rx_ring_map != NULL)
+		if (sc->age_rdata.age_rx_ring_paddr != 0)
 			bus_dmamap_unload(sc->age_cdata.age_rx_ring_tag,
 			    sc->age_cdata.age_rx_ring_map);
-		if (sc->age_cdata.age_rx_ring_map != NULL &&
-		    sc->age_rdata.age_rx_ring != NULL)
+		if (sc->age_rdata.age_rx_ring != NULL)
 			bus_dmamem_free(sc->age_cdata.age_rx_ring_tag,
 			    sc->age_rdata.age_rx_ring,
 			    sc->age_cdata.age_rx_ring_map);
+		sc->age_rdata.age_rx_ring_paddr = 0;
 		sc->age_rdata.age_rx_ring = NULL;
-		sc->age_cdata.age_rx_ring_map = NULL;
 		bus_dma_tag_destroy(sc->age_cdata.age_rx_ring_tag);
 		sc->age_cdata.age_rx_ring_tag = NULL;
 	}
 	/* Rx return ring. */
 	if (sc->age_cdata.age_rr_ring_tag != NULL) {
-		if (sc->age_cdata.age_rr_ring_map != NULL)
+		if (sc->age_rdata.age_rr_ring_paddr != 0)
 			bus_dmamap_unload(sc->age_cdata.age_rr_ring_tag,
 			    sc->age_cdata.age_rr_ring_map);
-		if (sc->age_cdata.age_rr_ring_map != NULL &&
-		    sc->age_rdata.age_rr_ring != NULL)
+		if (sc->age_rdata.age_rr_ring != NULL)
 			bus_dmamem_free(sc->age_cdata.age_rr_ring_tag,
 			    sc->age_rdata.age_rr_ring,
 			    sc->age_cdata.age_rr_ring_map);
+		sc->age_rdata.age_rr_ring_paddr = 0;
 		sc->age_rdata.age_rr_ring = NULL;
-		sc->age_cdata.age_rr_ring_map = NULL;
 		bus_dma_tag_destroy(sc->age_cdata.age_rr_ring_tag);
 		sc->age_cdata.age_rr_ring_tag = NULL;
 	}
 	/* CMB block */
 	if (sc->age_cdata.age_cmb_block_tag != NULL) {
-		if (sc->age_cdata.age_cmb_block_map != NULL)
+		if (sc->age_rdata.age_cmb_block_paddr != 0)
 			bus_dmamap_unload(sc->age_cdata.age_cmb_block_tag,
 			    sc->age_cdata.age_cmb_block_map);
-		if (sc->age_cdata.age_cmb_block_map != NULL &&
-		    sc->age_rdata.age_cmb_block != NULL)
+		if (sc->age_rdata.age_cmb_block != NULL)
 			bus_dmamem_free(sc->age_cdata.age_cmb_block_tag,
 			    sc->age_rdata.age_cmb_block,
 			    sc->age_cdata.age_cmb_block_map);
+		sc->age_rdata.age_cmb_block_paddr = 0;
 		sc->age_rdata.age_cmb_block = NULL;
-		sc->age_cdata.age_cmb_block_map = NULL;
 		bus_dma_tag_destroy(sc->age_cdata.age_cmb_block_tag);
 		sc->age_cdata.age_cmb_block_tag = NULL;
 	}
 	/* SMB block */
 	if (sc->age_cdata.age_smb_block_tag != NULL) {
-		if (sc->age_cdata.age_smb_block_map != NULL)
+		if (sc->age_rdata.age_smb_block_paddr != 0)
 			bus_dmamap_unload(sc->age_cdata.age_smb_block_tag,
 			    sc->age_cdata.age_smb_block_map);
-		if (sc->age_cdata.age_smb_block_map != NULL &&
-		    sc->age_rdata.age_smb_block != NULL)
+		if (sc->age_rdata.age_smb_block != NULL)
 			bus_dmamem_free(sc->age_cdata.age_smb_block_tag,
 			    sc->age_rdata.age_smb_block,
 			    sc->age_cdata.age_smb_block_map);
+		sc->age_rdata.age_smb_block_paddr = 0;
 		sc->age_rdata.age_smb_block = NULL;
-		sc->age_cdata.age_smb_block_map = NULL;
 		bus_dma_tag_destroy(sc->age_cdata.age_smb_block_tag);
 		sc->age_cdata.age_smb_block_tag = NULL;
 	}
@@ -1796,7 +1795,7 @@ age_watchdog(struct age_softc *sc)
 	ifp = sc->age_ifp;
 	if ((sc->age_flags & AGE_FLAG_LINK) == 0) {
 		if_printf(sc->age_ifp, "watchdog timeout (missed link)\n");
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 		age_init_locked(sc);
 		return;
@@ -1809,7 +1808,7 @@ age_watchdog(struct age_softc *sc)
 		return;
 	}
 	if_printf(sc->age_ifp, "watchdog timeout\n");
-	ifp->if_oerrors++;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 	ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 	age_init_locked(sc);
 	if (!IFQ_DRV_IS_EMPTY(&ifp->if_snd))
@@ -2091,22 +2090,22 @@ age_stats_update(struct age_softc *sc)
 	stat->tx_mcast_bytes += smb->tx_mcast_bytes;
 
 	/* Update counters in ifnet. */
-	ifp->if_opackets += smb->tx_frames;
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, smb->tx_frames);
 
-	ifp->if_collisions += smb->tx_single_colls +
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, smb->tx_single_colls +
 	    smb->tx_multi_colls + smb->tx_late_colls +
-	    smb->tx_excess_colls * HDPX_CFG_RETRY_DEFAULT;
+	    smb->tx_excess_colls * HDPX_CFG_RETRY_DEFAULT);
 
-	ifp->if_oerrors += smb->tx_excess_colls +
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, smb->tx_excess_colls +
 	    smb->tx_late_colls + smb->tx_underrun +
-	    smb->tx_pkts_truncated;
+	    smb->tx_pkts_truncated);
 
-	ifp->if_ipackets += smb->rx_frames;
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, smb->rx_frames);
 
-	ifp->if_ierrors += smb->rx_crcerrs + smb->rx_lenerrs +
-	    smb->rx_runts + smb->rx_pkts_truncated +
+	if_inc_counter(ifp, IFCOUNTER_IERRORS, smb->rx_crcerrs +
+	    smb->rx_lenerrs + smb->rx_runts + smb->rx_pkts_truncated +
 	    smb->rx_fifo_oflows + smb->rx_desc_oflows +
-	    smb->rx_alignerrs;
+	    smb->rx_alignerrs);
 
 	/* Update done, clear. */
 	smb->updated = 0;
@@ -2166,11 +2165,6 @@ age_int_task(void *arg, int pending)
 	    sc->age_cdata.age_cmb_block_map,
 	    BUS_DMASYNC_PREREAD | BUS_DMASYNC_PREWRITE);
 
-#if 0
-	printf("INTR: 0x%08x\n", status);
-	status &= ~INTR_DIS_DMA;
-	CSR_WRITE_4(sc, AGE_INTR_STATUS, status | INTR_DIS_INT);
-#endif
 	ifp = sc->age_ifp;
 	if ((ifp->if_drv_flags & IFF_DRV_RUNNING) != 0) {
 		if ((status & INTR_CMB_RX) != 0)
@@ -2295,7 +2289,7 @@ age_fixup_rx(struct ifnet *ifp, struct mbuf *m)
 	 */
 	MGETHDR(n, M_NOWAIT, MT_DATA);
 	if (n == NULL) {
-		ifp->if_iqdrops++;
+		if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 		m_freem(m);
 		return (NULL);
 	}
@@ -2351,7 +2345,7 @@ age_rxeof(struct age_softc *sc, struct rx_rdesc *rxrd)
 		mp = rxd->rx_m;
 		/* Add a new receive buffer to the ring. */
 		if (age_newbuf(sc, rxd) != 0) {
-			ifp->if_iqdrops++;
+			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 			/* Reuse Rx buffers. */
 			if (sc->age_cdata.age_rxhead != NULL)
 				m_freem(sc->age_cdata.age_rxhead);
@@ -2478,7 +2472,7 @@ age_rxintr(struct age_softc *sc, int rr_prod, int count)
 	    sc->age_cdata.age_rx_ring_map, BUS_DMASYNC_POSTWRITE);
 
 	for (prog = 0; rr_cons != rr_prod; prog++) {
-		if (count <= 0)
+		if (count-- <= 0)
 			break;
 		rxrd = &sc->age_rdata.age_rr_ring[rr_cons];
 		nsegs = AGE_RX_NSEGS(le32toh(rxrd->index));
@@ -2491,7 +2485,7 @@ age_rxintr(struct age_softc *sc, int rr_prod, int count)
 		 * I'm not sure whether this check is really needed.
 		 */
 		pktlen = AGE_RX_BYTES(le32toh(rxrd->len));
-		if (nsegs != (pktlen + (AGE_RX_BUF_SIZE - 1)) / AGE_RX_BUF_SIZE)
+		if (nsegs != howmany(pktlen, AGE_RX_BUF_SIZE))
 			break;
 
 		/* Received a frame. */
@@ -3178,7 +3172,7 @@ age_rxfilter(struct age_softc *sc)
 	bzero(mchash, sizeof(mchash));
 
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(ifma, &sc->age_ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(ifma, &sc->age_ifp->if_multiaddrs, ifma_link) {
 		if (ifma->ifma_addr->sa_family != AF_LINK)
 			continue;
 		crc = ether_crc32_be(LLADDR((struct sockaddr_dl *)

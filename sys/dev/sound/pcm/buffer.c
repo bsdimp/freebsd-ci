@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2009 Ariff Abdullah <ariff@FreeBSD.org>
  * Portions Copyright (c) Ryan Beasley <ryan.beasley@gmail.com> - GSoC 2006
  * Copyright (c) 1999 Cameron Grant <cg@FreeBSD.org>
@@ -35,6 +37,7 @@
 #include "feeder_if.h"
 
 #define SND_USE_FXDIV
+#define	SND_DECLARE_FXDIV
 #include "snd_fxdiv_gen.h"
 
 SND_DECLARE_FILE("$FreeBSD$");
@@ -139,7 +142,7 @@ sndbuf_free(struct snd_dbuf *b)
 
 	if (b->buf) {
 		if (b->flags & SNDBUF_F_MANAGED) {
-			if (b->dmamap)
+			if (b->buf_addr)
 				bus_dmamap_unload(b->dmatag, b->dmamap);
 			if (b->dmatag)
 				bus_dmamem_free(b->dmatag, b->buf, b->dmamap);

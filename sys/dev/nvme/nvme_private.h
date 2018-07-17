@@ -1,5 +1,7 @@
 /*-
- * Copyright (C) 2012 Intel Corporation
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (C) 2012-2014 Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,17 +52,8 @@
 
 MALLOC_DECLARE(M_NVME);
 
-#define CHATHAM2
-
-#ifdef CHATHAM2
-#define CHATHAM_PCI_ID		0x20118086
-#define CHATHAM_CONTROL_BAR	0
-#endif
-
 #define IDT32_PCI_ID		0x80d0111d /* 32 channel board */
 #define IDT8_PCI_ID		0x80d2111d /* 8 channel board */
-
-#define NVME_MAX_PRP_LIST_ENTRIES	(32)
 
 /*
  * For commands requiring more than 2 PRP entries, one PRP will be
@@ -69,7 +62,7 @@ MALLOC_DECLARE(M_NVME);
  *  that real max number of PRP entries we support is 32+1, which
  *  results in a max xfer size of 32*PAGE_SIZE.
  */
-#define NVME_MAX_XFER_SIZE	NVME_MAX_PRP_LIST_ENTRIES * PAGE_SIZE
+#define NVME_MAX_PRP_LIST_ENTRIES	(NVME_MAX_XFER_SIZE / PAGE_SIZE)
 
 #define NVME_ADMIN_TRACKERS	(16)
 #define NVME_ADMIN_ENTRIES	(128)
@@ -111,6 +104,10 @@ MALLOC_DECLARE(M_NVME);
 /* Maximum log page size to fetch for AERs. */
 #define NVME_MAX_AER_LOG_SIZE		(4096)
 
+/*
+ * Define CACHE_LINE_SIZE here for older FreeBSD versions that do not define
+ *  it.
+ */
 #ifndef CACHE_LINE_SIZE
 #define CACHE_LINE_SIZE		(64)
 #endif
@@ -131,7 +128,7 @@ extern int32_t		nvme_retry_count;
 struct nvme_completion_poll_status {
 
 	struct nvme_completion	cpl;
-	boolean_t		done;
+	int			done;
 };
 
 #define NVME_REQUEST_VADDR	1
@@ -140,6 +137,7 @@ struct nvme_completion_poll_status {
 #ifdef NVME_UNMAPPED_BIO_SUPPORT
 #define NVME_REQUEST_BIO	4
 #endif
+#define NVME_REQUEST_CCB        5
 
 struct nvme_request {
 
@@ -147,7 +145,6 @@ struct nvme_request {
 	struct nvme_qpair		*qpair;
 	union {
 		void			*payload;
-		struct uio		*uio;
 		struct bio		*bio;
 	} u;
 	uint32_t			type;
@@ -178,9 +175,8 @@ struct nvme_tracker {
 	bus_dmamap_t			payload_dma_map;
 	uint16_t			cid;
 
-	uint64_t			prp[NVME_MAX_PRP_LIST_ENTRIES];
+	uint64_t			*prp;
 	bus_addr_t			prp_bus_addr;
-	bus_dmamap_t			prp_dma_map;
 };
 
 struct nvme_qpair {
@@ -194,7 +190,6 @@ struct nvme_qpair {
 	struct resource		*res;
 	void 			*tag;
 
-	uint32_t		max_xfer_size;
 	uint32_t		num_entries;
 	uint32_t		num_trackers;
 	uint32_t		sq_tdbl_off;
@@ -211,11 +206,10 @@ struct nvme_qpair {
 	struct nvme_completion	*cpl;
 
 	bus_dma_tag_t		dma_tag;
+	bus_dma_tag_t		dma_tag_payload;
 
-	bus_dmamap_t		cmd_dma_map;
+	bus_dmamap_t		queuemem_map;
 	uint64_t		cmd_bus_addr;
-
-	bus_dmamap_t		cpl_dma_map;
 	uint64_t		cpl_bus_addr;
 
 	TAILQ_HEAD(, nvme_tracker)	free_tr;
@@ -234,10 +228,11 @@ struct nvme_namespace {
 
 	struct nvme_controller		*ctrlr;
 	struct nvme_namespace_data	data;
-	uint16_t			id;
-	uint16_t			flags;
+	uint32_t			id;
+	uint32_t			flags;
 	struct cdev			*cdev;
 	void				*cons_cookie[NVME_MAX_CONSUMERS];
+	uint32_t			stripesize;
 	struct mtx			lock;
 };
 
@@ -251,6 +246,8 @@ struct nvme_controller {
 	struct mtx		lock;
 
 	uint32_t		ready_timeout_in_ms;
+	uint32_t		quirks;
+#define QUIRK_DELAY_B4_CHK_RDY 1		/* Can't touch MMIO on disable */
 
 	bus_space_tag_t		bus_tag;
 	bus_space_handle_t	bus_handle;
@@ -265,19 +262,13 @@ struct nvme_controller {
 	int			bar4_resource_id;
 	struct resource		*bar4_resource;
 
-#ifdef CHATHAM2
-	bus_space_tag_t		chatham_bus_tag;
-	bus_space_handle_t	chatham_bus_handle;
-	int			chatham_resource_id;
-	struct resource		*chatham_resource;
-#endif
-
 	uint32_t		msix_enabled;
 	uint32_t		force_intx;
 	uint32_t		enable_aborts;
 
 	uint32_t		num_io_queues;
-	boolean_t		per_cpu_io_queues;
+	uint32_t		num_cpus_per_ioq;
+	uint32_t		max_hw_pend_io;
 
 	/* Fields for tracking progress during controller initialization. */
 	struct intr_config_hook	config_hook;
@@ -321,20 +312,20 @@ struct nvme_controller {
 
 	struct cdev			*cdev;
 
+	/** bit mask of event types currently enabled for async events */
+	uint32_t			async_event_config;
+
 	uint32_t			num_aers;
 	struct nvme_async_event_request	aer[NVME_MAX_ASYNC_EVENTS];
 
 	void				*cons_cookie[NVME_MAX_CONSUMERS];
 
-	uint32_t		is_resetting;
+	uint32_t			is_resetting;
+	uint32_t			is_initialized;
+	uint32_t			notification_sent;
 
 	boolean_t			is_failed;
 	STAILQ_HEAD(, nvme_request)	fail_req;
-
-#ifdef CHATHAM2
-	uint64_t		chatham_size;
-	uint64_t		chatham_lbas;
-#endif
 };
 
 #define nvme_mmio_offsetof(reg)						       \
@@ -348,30 +339,14 @@ struct nvme_controller {
 	bus_space_write_4((sc)->bus_tag, (sc)->bus_handle,		       \
 	    nvme_mmio_offsetof(reg), val)
 
-#define nvme_mmio_write_8(sc, reg, val) \
+#define nvme_mmio_write_8(sc, reg, val)					       \
 	do {								       \
 		bus_space_write_4((sc)->bus_tag, (sc)->bus_handle,	       \
 		    nvme_mmio_offsetof(reg), val & 0xFFFFFFFF); 	       \
 		bus_space_write_4((sc)->bus_tag, (sc)->bus_handle,	       \
 		    nvme_mmio_offsetof(reg)+4,				       \
-		    (val & 0xFFFFFFFF00000000UL) >> 32);		       \
+		    (val & 0xFFFFFFFF00000000ULL) >> 32);		       \
 	} while (0);
-
-#ifdef CHATHAM2
-#define chatham_read_4(softc, reg) \
-	bus_space_read_4((softc)->chatham_bus_tag,			       \
-	    (softc)->chatham_bus_handle, reg)
-
-#define chatham_write_8(sc, reg, val)					       \
-	do {								       \
-		bus_space_write_4((sc)->chatham_bus_tag,		       \
-		    (sc)->chatham_bus_handle, reg, val & 0xffffffff);	       \
-		bus_space_write_4((sc)->chatham_bus_tag,		       \
-		    (sc)->chatham_bus_handle, reg+4,			       \
-		    (val & 0xFFFFFFFF00000000UL) >> 32);		       \
-	} while (0);
-
-#endif /* CHATHAM2 */
 
 #if __FreeBSD_version < 800054
 #define wmb()	__asm volatile("sfence" ::: "memory")
@@ -387,7 +362,7 @@ void	nvme_ctrlr_cmd_identify_controller(struct nvme_controller *ctrlr,
 					   void *payload,
 					   nvme_cb_fn_t cb_fn, void *cb_arg);
 void	nvme_ctrlr_cmd_identify_namespace(struct nvme_controller *ctrlr,
-					  uint16_t nsid, void *payload,
+					  uint32_t nsid, void *payload,
 					  nvme_cb_fn_t cb_fn, void *cb_arg);
 void	nvme_ctrlr_cmd_set_interrupt_coalescing(struct nvme_controller *ctrlr,
 						uint32_t microseconds,
@@ -424,7 +399,7 @@ void	nvme_ctrlr_cmd_set_num_queues(struct nvme_controller *ctrlr,
 				      uint32_t num_queues, nvme_cb_fn_t cb_fn,
 				      void *cb_arg);
 void	nvme_ctrlr_cmd_set_async_event_config(struct nvme_controller *ctrlr,
-					      union nvme_critical_warning_state state,
+					      uint32_t state,
 					      nvme_cb_fn_t cb_fn, void *cb_arg);
 void	nvme_ctrlr_cmd_abort(struct nvme_controller *ctrlr, uint16_t cid,
 			     uint16_t sqid, nvme_cb_fn_t cb_fn, void *cb_arg);
@@ -433,6 +408,7 @@ void	nvme_completion_poll_cb(void *arg, const struct nvme_completion *cpl);
 
 int	nvme_ctrlr_construct(struct nvme_controller *ctrlr, device_t dev);
 void	nvme_ctrlr_destruct(struct nvme_controller *ctrlr, device_t dev);
+void	nvme_ctrlr_shutdown(struct nvme_controller *ctrlr);
 int	nvme_ctrlr_hw_reset(struct nvme_controller *ctrlr);
 void	nvme_ctrlr_reset(struct nvme_controller *ctrlr);
 /* ctrlr defined as void * to allow use with config_intrhook. */
@@ -444,13 +420,13 @@ void	nvme_ctrlr_submit_io_request(struct nvme_controller *ctrlr,
 void	nvme_ctrlr_post_failed_request(struct nvme_controller *ctrlr,
 				       struct nvme_request *req);
 
-void	nvme_qpair_construct(struct nvme_qpair *qpair, uint32_t id,
+int	nvme_qpair_construct(struct nvme_qpair *qpair, uint32_t id,
 			     uint16_t vector, uint32_t num_entries,
-			     uint32_t num_trackers, uint32_t max_xfer_size,
+			     uint32_t num_trackers,
 			     struct nvme_controller *ctrlr);
 void	nvme_qpair_submit_tracker(struct nvme_qpair *qpair,
 				  struct nvme_tracker *tr);
-void	nvme_qpair_process_completions(struct nvme_qpair *qpair);
+bool	nvme_qpair_process_completions(struct nvme_qpair *qpair);
 void	nvme_qpair_submit_request(struct nvme_qpair *qpair,
 				  struct nvme_request *req);
 void	nvme_qpair_reset(struct nvme_qpair *qpair);
@@ -468,11 +444,9 @@ void	nvme_io_qpair_enable(struct nvme_qpair *qpair);
 void	nvme_io_qpair_disable(struct nvme_qpair *qpair);
 void	nvme_io_qpair_destroy(struct nvme_qpair *qpair);
 
-int	nvme_ns_construct(struct nvme_namespace *ns, uint16_t id,
+int	nvme_ns_construct(struct nvme_namespace *ns, uint32_t id,
 			  struct nvme_controller *ctrlr);
 void	nvme_ns_destruct(struct nvme_namespace *ns);
-
-int	nvme_ns_physio(struct cdev *dev, struct uio *uio, int ioflag);
 
 void	nvme_sysctl_initialize_ctrlr(struct nvme_controller *ctrlr);
 
@@ -484,6 +458,8 @@ nvme_single_map(void *arg, bus_dma_segment_t *seg, int nseg, int error)
 {
 	uint64_t *bus_addr = (uint64_t *)arg;
 
+	if (error != 0)
+		printf("nvme_single_map err %d\n", error);
 	*bus_addr = seg[0].ds_addr;
 }
 
@@ -528,19 +504,6 @@ nvme_allocate_request_null(nvme_cb_fn_t cb_fn, void *cb_arg)
 }
 
 static __inline struct nvme_request *
-nvme_allocate_request_uio(struct uio *uio, nvme_cb_fn_t cb_fn, void *cb_arg)
-{
-	struct nvme_request *req;
-
-	req = _nvme_allocate_request(cb_fn, cb_arg);
-	if (req != NULL) {
-		req->type = NVME_REQUEST_UIO;
-		req->u.uio = uio;
-	}
-	return (req);
-}
-
-static __inline struct nvme_request *
 nvme_allocate_request_bio(struct bio *bio, nvme_cb_fn_t cb_fn, void *cb_arg)
 {
 	struct nvme_request *req;
@@ -559,6 +522,20 @@ nvme_allocate_request_bio(struct bio *bio, nvme_cb_fn_t cb_fn, void *cb_arg)
 	return (req);
 }
 
+static __inline struct nvme_request *
+nvme_allocate_request_ccb(union ccb *ccb, nvme_cb_fn_t cb_fn, void *cb_arg)
+{
+	struct nvme_request *req;
+
+	req = _nvme_allocate_request(cb_fn, cb_arg);
+	if (req != NULL) {
+		req->type = NVME_REQUEST_CCB;
+		req->u.payload = ccb;
+	}
+
+	return (req);
+}
+
 #define nvme_free_request(req)	uma_zfree(nvme_request_zone, req)
 
 void	nvme_notify_async_consumers(struct nvme_controller *ctrlr,
@@ -566,5 +543,10 @@ void	nvme_notify_async_consumers(struct nvme_controller *ctrlr,
 				    uint32_t log_page_id, void *log_page_buffer,
 				    uint32_t log_page_size);
 void	nvme_notify_fail_consumers(struct nvme_controller *ctrlr);
+void	nvme_notify_new_controller(struct nvme_controller *ctrlr);
+void	nvme_notify_ns(struct nvme_controller *ctrlr, int nsid);
+
+void	nvme_ctrlr_intx_handler(void *arg);
+void	nvme_ctrlr_poll(struct nvme_controller *ctrlr);
 
 #endif /* __NVME_PRIVATE_H__ */

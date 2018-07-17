@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1980, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -58,6 +60,7 @@ __FBSDID("$FreeBSD$");
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <libufs.h>
 
 #include "fsck.h"
 
@@ -74,6 +77,25 @@ static struct bufarea cgblk;	/* backup buffer for cylinder group blocks */
 static TAILQ_HEAD(buflist, bufarea) bufhead;	/* head of buffer cache list */
 static int numbufs;				/* size of buffer cache */
 static char *buftype[BT_NUMBUFTYPES] = BT_NAMES;
+static struct bufarea *cgbufs;	/* header for cylinder group cache */
+static int flushtries;		/* number of tries to reclaim memory */
+
+void
+fsutilinit(void)
+{
+	diskreads = totaldiskreads = totalreads = 0;
+	bzero(&startpass, sizeof(struct timespec));
+	bzero(&finishpass, sizeof(struct timespec));
+	bzero(&slowio_starttime, sizeof(struct timeval));
+	slowio_delay_usec = 10000;
+	slowio_pollcnt = 0;
+	bzero(&cgblk, sizeof(struct bufarea));
+	TAILQ_INIT(&bufhead);
+	numbufs = 0;
+	/* buftype ? */
+	cgbufs = NULL;
+	flushtries = 0;
+}
 
 int
 ftypeok(union dinode *dp)
@@ -165,7 +187,7 @@ bufinit(void)
 
 	pbp = pdirbp = (struct bufarea *)0;
 	bufp = Malloc((unsigned int)sblock.fs_bsize);
-	if (bufp == 0)
+	if (bufp == NULL)
 		errx(EEXIT, "cannot allocate buffer pool");
 	cgblk.b_un.b_buf = bufp;
 	initbarea(&cgblk, BT_CYLGRP);
@@ -200,13 +222,13 @@ static struct bufarea *cgbufs;	/* header for cylinder group cache */
 static int flushtries;		/* number of tries to reclaim memory */
 
 struct bufarea *
-cgget(int cg)
+cglookup(int cg)
 {
 	struct bufarea *cgbp;
 	struct cg *cgp;
 
 	if (cgbufs == NULL) {
-		cgbufs = Calloc(sblock.fs_ncg, sizeof(struct bufarea));
+		cgbufs = calloc(sblock.fs_ncg, sizeof(struct bufarea));
 		if (cgbufs == NULL)
 			errx(EEXIT, "cannot allocate cylinder group buffers");
 	}
@@ -235,6 +257,8 @@ flushentry(void)
 {
 	struct bufarea *cgbp;
 
+	if (flushtries == sblock.fs_ncg || cgbufs == NULL)
+		return (0);
 	cgbp = &cgbufs[flushtries++];
 	if (cgbp->b_un.b_cg == NULL)
 		return (0);
@@ -324,7 +348,6 @@ getblk(struct bufarea *bp, ufs2_daddr_t blk, long size)
 void
 flush(int fd, struct bufarea *bp)
 {
-	int i, j;
 
 	if (!bp->b_dirty)
 		return;
@@ -338,14 +361,24 @@ flush(int fd, struct bufarea *bp)
 		    (bp->b_errs == bp->b_size / dev_bsize) ? "" : "PARTIALLY ",
 		    (long long)bp->b_bno);
 	bp->b_errs = 0;
-	blwrite(fd, bp->b_un.b_buf, bp->b_bno, bp->b_size);
-	if (bp != &sblk)
-		return;
-	for (i = 0, j = 0; i < sblock.fs_cssize; i += sblock.fs_bsize, j++) {
-		blwrite(fswritefd, (char *)sblock.fs_csp + i,
-		    fsbtodb(&sblock, sblock.fs_csaddr + j * sblock.fs_frag),
-		    sblock.fs_cssize - i < sblock.fs_bsize ?
-		    sblock.fs_cssize - i : sblock.fs_bsize);
+	/*
+	 * Write using the appropriate function.
+	 */
+	switch (bp->b_type) {
+	case BT_SUPERBLK:
+		if (bp != &sblk)
+			pfatal("BUFFER %p DOES NOT MATCH SBLK %p\n",
+			    bp, &sblk);
+		if (sbput(fd, (struct fs *)bp->b_un.b_buf, 0) == 0)
+			fsmodified = 1;
+		break;
+	case BT_CYLGRP:
+		if (cgput(&disk, (struct cg *)bp->b_un.b_buf) == 0)
+			fsmodified = 1;
+		break;
+	default:
+		blwrite(fd, bp->b_un.b_buf, bp->b_bno, bp->b_size);
+		break;
 	}
 }
 
@@ -399,6 +432,8 @@ ckfini(int markclean)
 	if (havesb && cursnapshot == 0 && sblock.fs_magic == FS_UFS2_MAGIC &&
 	    sblk.b_bno != sblock.fs_sblockloc / dev_bsize &&
 	    !preen && reply("UPDATE STANDARD SUPERBLOCK")) {
+		/* Change the write destination to standard superblock */
+		sblock.fs_sblockactualloc = sblock.fs_sblockloc;
 		sblk.b_bno = sblock.fs_sblockloc / dev_bsize;
 		sbdirty();
 		flush(fswritefd, &sblk);
@@ -415,13 +450,15 @@ ckfini(int markclean)
 	}
 	if (numbufs != cnt)
 		errx(EEXIT, "panic: lost %d buffers", numbufs - cnt);
-	for (cnt = 0; cnt < sblock.fs_ncg; cnt++) {
-		if (cgbufs[cnt].b_un.b_cg == NULL)
-			continue;
-		flush(fswritefd, &cgbufs[cnt]);
-		free(cgbufs[cnt].b_un.b_cg);
+	if (cgbufs != NULL) {
+		for (cnt = 0; cnt < sblock.fs_ncg; cnt++) {
+			if (cgbufs[cnt].b_un.b_cg == NULL)
+				continue;
+			flush(fswritefd, &cgbufs[cnt]);
+			free(cgbufs[cnt].b_un.b_cg);
+		}
+		free(cgbufs);
 	}
-	free(cgbufs);
 	pbp = pdirbp = (struct bufarea *)0;
 	if (cursnapshot == 0 && sblock.fs_clean != markclean) {
 		if ((sblock.fs_clean = markclean) != 0) {
@@ -549,7 +586,18 @@ blread(int fd, char *buf, ufs2_daddr_t blk, long size)
 			slowio_end();
 		return (0);
 	}
-	rwerror("READ BLK", blk);
+
+	/*
+	 * This is handled specially here instead of in rwerror because
+	 * rwerror is used for all sorts of errors, not just true read/write
+	 * errors.  It should be refactored and fixed.
+	 */
+	if (surrender) {
+		pfatal("CANNOT READ_BLK: %ld", (long)blk);
+		errx(EEXIT, "ABORTING DUE TO READ ERRORS");
+	} else
+		rwerror("READ BLK", blk);
+
 	if (lseek(fd, offset, 0) < 0)
 		rwerror("SEEK BLK", blk);
 	errs = 0;
@@ -619,6 +667,35 @@ blerase(int fd, ufs2_daddr_t blk, long size)
 }
 
 /*
+ * Fill a contiguous region with all-zeroes.  Note ZEROBUFSIZE is by
+ * definition a multiple of dev_bsize.
+ */
+void
+blzero(int fd, ufs2_daddr_t blk, long size)
+{
+	static char *zero;
+	off_t offset, len;
+
+	if (fd < 0)
+		return;
+	if (zero == NULL) {
+		zero = calloc(ZEROBUFSIZE, 1);
+		if (zero == NULL)
+			errx(EEXIT, "cannot allocate buffer pool");
+	}
+	offset = blk * dev_bsize;
+	if (lseek(fd, offset, 0) < 0)
+		rwerror("SEEK BLK", blk);
+	while (size > 0) {
+		len = MIN(ZEROBUFSIZE, size);
+		if (write(fd, zero, len) != len)
+			rwerror("WRITE BLK", blk);
+		blk += len / dev_bsize;
+		size -= len;
+	}
+}
+
+/*
  * Verify cylinder group's magic number and other parameters.  If the
  * test fails, offer an option to rebuild the whole cylinder group.
  */
@@ -655,8 +732,7 @@ check_cgmagic(int cg, struct bufarea *cgbp)
 	cgp->cg_magic = CG_MAGIC;
 	cgp->cg_cgx = cg;
 	cgp->cg_niblk = sblock.fs_ipg;
-	cgp->cg_initediblk = sblock.fs_ipg < 2 * INOPB(&sblock) ?
-	    sblock.fs_ipg : 2 * INOPB(&sblock);
+	cgp->cg_initediblk = MIN(sblock.fs_ipg, 2 * INOPB(&sblock));
 	if (cgbase(&sblock, cg) + sblock.fs_fpg < sblock.fs_size)
 		cgp->cg_ndblk = sblock.fs_fpg;
 	else
@@ -713,7 +789,7 @@ allocblk(long frags)
 				continue;
 			}
 			cg = dtog(&sblock, i + j);
-			cgbp = cgget(cg);
+			cgbp = cglookup(cg);
 			cgp = cgbp->b_un.b_cg;
 			if (!check_cgmagic(cg, cgbp))
 				return (0);
@@ -793,7 +869,7 @@ getpathname(char *namebuf, ino_t curdir, ino_t ino)
 	struct inodesc idesc;
 	static int busy = 0;
 
-	if (curdir == ino && ino == ROOTINO) {
+	if (curdir == ino && ino == UFS_ROOTINO) {
 		(void)strcpy(namebuf, "/");
 		return;
 	}
@@ -811,7 +887,7 @@ getpathname(char *namebuf, ino_t curdir, ino_t ino)
 		idesc.id_parent = curdir;
 		goto namelookup;
 	}
-	while (ino != ROOTINO) {
+	while (ino != UFS_ROOTINO) {
 		idesc.id_number = ino;
 		idesc.id_func = findino;
 		idesc.id_name = strdup("..");
@@ -828,12 +904,12 @@ getpathname(char *namebuf, ino_t curdir, ino_t ino)
 		cp -= len;
 		memmove(cp, namebuf, (size_t)len);
 		*--cp = '/';
-		if (cp < &namebuf[MAXNAMLEN])
+		if (cp < &namebuf[UFS_MAXNAMLEN])
 			break;
 		ino = idesc.id_number;
 	}
 	busy = 0;
-	if (ino != ROOTINO)
+	if (ino != UFS_ROOTINO)
 		*--cp = '?';
 	memmove(namebuf, cp, (size_t)(&namebuf[MAXPATHLEN] - cp));
 }

@@ -1,13 +1,9 @@
-Before the next release:
+- Fix try_first_pass / use_first_pass (pam_get_authtok() code &
+  documentation are slightly incorrect, OpenPAM's pam_unix(8) is
+  incorrect, all FreeBSD modules are broken)
 
- - Complete the transition from PAM_LOG_DEBUG to PAM_LOG_LIBDEBUG.
+- Add loop detection to openpam_load_chain().
 
-Whenever:
+- Complete unit tests for openpam_dispatch().
 
- - Implement mechanism to enable / disable optional features.  Use it
-   to disable strict error checking so pamtest and unit tests can do
-   things that we don't allow in production.
-
- - Rewrite the module-loading code.
-
-$Id: TODO 592 2012-04-08 13:19:51Z des $
+- Stop using PAM_SYMBOL_ERR incorrectly.

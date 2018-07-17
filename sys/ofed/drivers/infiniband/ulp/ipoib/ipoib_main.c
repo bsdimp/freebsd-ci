@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0
+ *
  * Copyright (c) 2004 Topspin Communications.  All rights reserved.
  * Copyright (c) 2005 Sun Microsystems, Inc. All rights reserved.
  * Copyright (c) 2004 Voltaire, Inc. All rights reserved.
@@ -32,6 +34,9 @@
  * SOFTWARE.
  */
 
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
+
 #include "ipoib.h"
 
 static	int ipoib_resolvemulti(struct ifnet *, struct sockaddr **,
@@ -40,7 +45,6 @@ static	int ipoib_resolvemulti(struct ifnet *, struct sockaddr **,
 
 #include <linux/module.h>
 
-#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/vmalloc.h>
@@ -85,10 +89,10 @@ struct workqueue_struct *ipoib_workqueue;
 struct ib_sa_client ipoib_sa_client;
 
 static void ipoib_add_one(struct ib_device *device);
-static void ipoib_remove_one(struct ib_device *device);
+static void ipoib_remove_one(struct ib_device *device, void *client_data);
 static void ipoib_start(struct ifnet *dev);
 static int ipoib_output(struct ifnet *ifp, struct mbuf *m,
-	    struct sockaddr *dst, struct route *ro);
+	    const struct sockaddr *dst, struct route *ro);
 static int ipoib_ioctl(struct ifnet *ifp, u_long command, caddr_t data);
 static void ipoib_input(struct ifnet *ifp, struct mbuf *m);
 
@@ -99,6 +103,31 @@ do {								\
 		ipoib_mtap_mb((_ifp), (_m));			\
 	}							\
 } while (0)
+
+static struct unrhdr *ipoib_unrhdr;
+
+static void
+ipoib_unrhdr_init(void *arg)
+{
+
+	ipoib_unrhdr = new_unrhdr(0, 65535, NULL);
+}
+SYSINIT(ipoib_unrhdr_init, SI_SUB_KLD - 1, SI_ORDER_ANY, ipoib_unrhdr_init, NULL);
+
+static void
+ipoib_unrhdr_uninit(void *arg)
+{
+
+	if (ipoib_unrhdr != NULL) {
+		struct unrhdr *hdr;
+
+		hdr = ipoib_unrhdr;
+		ipoib_unrhdr = NULL;
+
+		delete_unrhdr(hdr);
+	}
+}
+SYSUNINIT(ipoib_unrhdr_uninit, SI_SUB_KLD - 1, SI_ORDER_ANY, ipoib_unrhdr_uninit, NULL);
 
 /*
  * This is for clients that have an ipoib_header in the mbuf.
@@ -259,6 +288,10 @@ ipoib_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 	struct ifreq *ifr = (struct ifreq *) data;
 	int error = 0;
 
+	/* check if detaching */
+	if (priv == NULL || priv->gone != 0)
+		return (ENXIO);
+
 	switch (command) {
 	case SIOCSIFFLAGS:
 		if (ifp->if_flags & IFF_UP) {
@@ -290,13 +323,8 @@ ipoib_ioctl(struct ifnet *ifp, u_long command, caddr_t data)
 		break;
 
 	case SIOCGIFADDR:
-		{
-			struct sockaddr *sa;
-
-			sa = (struct sockaddr *) & ifr->ifr_data;
-			bcopy(IF_LLADDR(ifp),
-			      (caddr_t) sa->sa_data, INFINIBAND_ALEN);
-		}
+			bcopy(IF_LLADDR(ifp), &ifr->ifr_addr.sa_data[0],
+                            INFINIBAND_ALEN);
 		break;
 
 	case SIOCSIFMTU:
@@ -657,7 +685,13 @@ ipoib_unicast_send(struct mbuf *mb, struct ipoib_dev_priv *priv, struct ipoib_he
 			new_path = 1;
 		}
 		if (path) {
-			_IF_ENQUEUE(&path->queue, mb);
+			if (_IF_QLEN(&path->queue) < IPOIB_MAX_PATH_REC_QUEUE)
+				_IF_ENQUEUE(&path->queue, mb);
+			else {
+				if_inc_counter(priv->dev, IFCOUNTER_OERRORS, 1);
+				m_freem(mb);
+			}
+
 			if (!path->query && path_rec_start(priv, path)) {
 				spin_unlock_irqrestore(&priv->lock, flags);
 				if (new_path)
@@ -666,7 +700,7 @@ ipoib_unicast_send(struct mbuf *mb, struct ipoib_dev_priv *priv, struct ipoib_he
 			} else
 				__path_add(priv, path);
 		} else {
-			++priv->dev->if_oerrors;
+			if_inc_counter(priv->dev, IFCOUNTER_OERRORS, 1);
 			m_freem(mb);
 		}
 
@@ -681,7 +715,7 @@ ipoib_unicast_send(struct mbuf *mb, struct ipoib_dev_priv *priv, struct ipoib_he
 		    path->queue.ifq_len < IPOIB_MAX_PATH_REC_QUEUE) {
 		_IF_ENQUEUE(&path->queue, mb);
 	} else {
-		++priv->dev->if_oerrors;
+		if_inc_counter(priv->dev, IFCOUNTER_OERRORS, 1);
 		m_freem(mb);
 	}
 }
@@ -746,7 +780,7 @@ ipoib_vlan_start(struct ifnet *dev)
 		if (mb == NULL)
 			break;
 		m_freem(mb);
-		dev->if_oerrors++;
+		if_inc_counter(dev, IFCOUNTER_OERRORS, 1);
 	}
 }
 
@@ -795,9 +829,11 @@ ipoib_detach(struct ipoib_dev_priv *priv)
 
 	dev = priv->dev;
 	if (!test_bit(IPOIB_FLAG_SUBINTERFACE, &priv->flags)) {
+		priv->gone = 1;
 		bpfdetach(dev);
 		if_detach(dev);
 		if_free(dev);
+		free_unr(ipoib_unrhdr, priv->unit);
 	} else
 		VLAN_SETCOOKIE(priv->dev, NULL);
 
@@ -824,8 +860,6 @@ ipoib_dev_cleanup(struct ipoib_dev_priv *priv)
 	priv->tx_ring = NULL;
 }
 
-static volatile int ipoib_unit;
-
 static struct ipoib_dev_priv *
 ipoib_priv_alloc(void)
 {
@@ -833,6 +867,7 @@ ipoib_priv_alloc(void)
 
 	priv = malloc(sizeof(struct ipoib_dev_priv), M_TEMP, M_ZERO|M_WAITOK);
 	spin_lock_init(&priv->lock);
+	spin_lock_init(&priv->drain_lock);
 	mutex_init(&priv->vlan_mutex);
 	INIT_LIST_HEAD(&priv->path_list);
 	INIT_LIST_HEAD(&priv->child_intfs);
@@ -865,7 +900,13 @@ ipoib_intf_alloc(const char *name)
 		return NULL;
 	}
 	dev->if_softc = priv;
-	if_initname(dev, name, atomic_fetchadd_int(&ipoib_unit, 1));
+	priv->unit = alloc_unr(ipoib_unrhdr);
+	if (priv->unit == -1) {
+		if_free(dev);
+		free(priv, M_TEMP);
+		return NULL;
+	}
+	if_initname(dev, name, priv->unit);
 	dev->if_flags = IFF_BROADCAST | IFF_MULTICAST;
 	dev->if_addrlen = INFINIBAND_ALEN;
 	dev->if_hdrlen = IPOIB_HEADER_LEN;
@@ -876,7 +917,7 @@ ipoib_intf_alloc(const char *name)
 	dev->if_output = ipoib_output;
 	dev->if_input = ipoib_input;
 	dev->if_resolvemulti = ipoib_resolvemulti;
-	if_initbaudrate(dev, IF_Gbps(10));
+	dev->if_baudrate = IF_Gbps(10);
 	dev->if_broadcastaddr = priv->broadcastaddr;
 	dev->if_snd.ifq_maxlen = ipoib_sendq_size * 2;
 	sdl = (struct sockaddr_dl *)dev->if_addr->ifa_addr;
@@ -892,26 +933,9 @@ ipoib_intf_alloc(const char *name)
 int
 ipoib_set_dev_features(struct ipoib_dev_priv *priv, struct ib_device *hca)
 {
-	struct ib_device_attr *device_attr;
-	int result = -ENOMEM;
+	struct ib_device_attr *device_attr = &hca->attrs;
 
-	device_attr = kmalloc(sizeof *device_attr, GFP_KERNEL);
-	if (!device_attr) {
-		printk(KERN_WARNING "%s: allocation of %zu bytes failed\n",
-		       hca->name, sizeof *device_attr);
-		return result;
-	}
-
-	result = ib_query_device(hca, device_attr);
-	if (result) {
-		printk(KERN_WARNING "%s: ib_query_device failed (ret = %d)\n",
-		       hca->name, result);
-		kfree(device_attr);
-		return result;
-	}
 	priv->hca_caps = device_attr->device_cap_flags;
-
-	kfree(device_attr);
 
 	priv->dev->if_hwassist = 0;
 	priv->dev->if_capabilities = 0;
@@ -980,7 +1004,7 @@ ipoib_add_port(const char *format, struct ib_device *hca, u8 port)
 	priv->broadcastaddr[8] = priv->pkey >> 8;
 	priv->broadcastaddr[9] = priv->pkey & 0xff;
 
-	result = ib_query_gid(hca, port, 0, &priv->local_gid);
+	result = ib_query_gid(hca, port, 0, &priv->local_gid, NULL);
 	if (result) {
 		printk(KERN_WARNING "%s: ib_query_gid port %d failed (ret = %d)\n",
 		       hca->name, port, result);
@@ -1059,19 +1083,22 @@ ipoib_add_one(struct ib_device *device)
 }
 
 static void
-ipoib_remove_one(struct ib_device *device)
+ipoib_remove_one(struct ib_device *device, void *client_data)
 {
 	struct ipoib_dev_priv *priv, *tmp;
-	struct list_head *dev_list;
+	struct list_head *dev_list = client_data;
+
+	if (!dev_list)
+		return;
 
 	if (rdma_node_get_transport(device->node_type) != RDMA_TRANSPORT_IB)
 		return;
 
-	dev_list = ib_get_client_data(device, &ipoib_client);
-
 	list_for_each_entry_safe(priv, tmp, dev_list, list) {
 		if (rdma_port_get_link_layer(device, priv->port) != IB_LINK_LAYER_INFINIBAND)
 			continue;
+
+		ipoib_stop(priv);
 
 		ib_unregister_event_handler(&priv->event_handler);
 
@@ -1252,20 +1279,18 @@ ipoib_cleanup_module(void)
  */
 static int
 ipoib_output(struct ifnet *ifp, struct mbuf *m,
-	struct sockaddr *dst, struct route *ro)
+	const struct sockaddr *dst, struct route *ro)
 {
 	u_char edst[INFINIBAND_ALEN];
+#if defined(INET) || defined(INET6)
 	struct llentry *lle = NULL;
-	struct rtentry *rt0 = NULL;
+#endif
 	struct ipoib_header *eh;
-	int error = 0;
+	int error = 0, is_gw = 0;
 	short type;
 
-	if (ro != NULL) {
-		if (!(m->m_flags & (M_BCAST | M_MCAST)))
-			lle = ro->ro_lle;
-		rt0 = ro->ro_rt;
-	}
+	if (ro != NULL)
+		is_gw = (ro->ro_flags & RT_HAS_GW) != 0;
 #ifdef MAC
 	error = mac_ifnet_check_transmit(ifp, m);
 	if (error)
@@ -1287,11 +1312,11 @@ ipoib_output(struct ifnet *ifp, struct mbuf *m,
 #ifdef INET
 	case AF_INET:
 		if (lle != NULL && (lle->la_flags & LLE_VALID))
-			memcpy(edst, &lle->ll_addr.mac8, sizeof(edst));
+			memcpy(edst, lle->ll_addr, sizeof(edst));
 		else if (m->m_flags & M_MCAST)
 			ip_ib_mc_map(((struct sockaddr_in *)dst)->sin_addr.s_addr, ifp->if_broadcastaddr, edst);
 		else
-			error = arpresolve(ifp, rt0, m, dst, edst, &lle);
+			error = arpresolve(ifp, is_gw, m, dst, edst, NULL, NULL);
 		if (error)
 			return (error == EWOULDBLOCK ? 0 : error);
 		type = htons(ETHERTYPE_IP);
@@ -1325,11 +1350,11 @@ ipoib_output(struct ifnet *ifp, struct mbuf *m,
 #ifdef INET6
 	case AF_INET6:
 		if (lle != NULL && (lle->la_flags & LLE_VALID))
-			memcpy(edst, &lle->ll_addr.mac8, sizeof(edst));
+			memcpy(edst, lle->ll_addr, sizeof(edst));
 		else if (m->m_flags & M_MCAST)
 			ipv6_ib_mc_map(&((struct sockaddr_in6 *)dst)->sin6_addr, ifp->if_broadcastaddr, edst);
 		else
-			error = nd6_storelladdr(ifp, m, dst, (u_char *)edst, &lle);
+			error = nd6_resolve(ifp, is_gw, m, dst, edst, NULL, NULL);
 		if (error)
 			return error;
 		type = htons(ETHERTYPE_IPV6);
@@ -1442,7 +1467,7 @@ ipoib_input(struct ifnet *ifp, struct mbuf *m)
 	 * Strip off Infiniband header.
 	 */
 	m->m_flags &= ~M_VLANTAG;
-	m->m_flags &= ~(M_PROTOFLAGS);
+	m_clrprotoflags(m);
 	m_adj(m, IPOIB_HEADER_LEN);
 
 	if (IPOIB_IS_MULTICAST(eh->hwaddr)) {
@@ -1451,7 +1476,7 @@ ipoib_input(struct ifnet *ifp, struct mbuf *m)
 			m->m_flags |= M_BCAST;
 		else
 			m->m_flags |= M_MCAST;
-		ifp->if_imcasts++;
+		if_inc_counter(ifp, IFCOUNTER_IMCASTS, 1);
 	}
 
 	ipoib_demux(ifp, m, ntohs(eh->proto));
@@ -1480,7 +1505,7 @@ ipoib_resolvemulti(struct ifnet *ifp, struct sockaddr **llsa,
 		e_addr = LLADDR(sdl);
 		if (!IPOIB_IS_MULTICAST(e_addr))
 			return EADDRNOTAVAIL;
-		*llsa = 0;
+		*llsa = NULL;
 		return 0;
 
 #ifdef INET
@@ -1488,14 +1513,7 @@ ipoib_resolvemulti(struct ifnet *ifp, struct sockaddr **llsa,
 		sin = (struct sockaddr_in *)sa;
 		if (!IN_MULTICAST(ntohl(sin->sin_addr.s_addr)))
 			return EADDRNOTAVAIL;
-		sdl = malloc(sizeof *sdl, M_IFMADDR,
-		       M_NOWAIT|M_ZERO);
-		if (sdl == NULL)
-			return ENOMEM;
-		sdl->sdl_len = sizeof *sdl;
-		sdl->sdl_family = AF_LINK;
-		sdl->sdl_index = ifp->if_index;
-		sdl->sdl_type = IFT_INFINIBAND;
+		sdl = link_init_sdl(ifp, *llsa, IFT_INFINIBAND);
 		sdl->sdl_alen = INFINIBAND_ALEN;
 		e_addr = LLADDR(sdl);
 		ip_ib_mc_map(sin->sin_addr.s_addr, ifp->if_broadcastaddr,
@@ -1515,14 +1533,7 @@ ipoib_resolvemulti(struct ifnet *ifp, struct sockaddr **llsa,
 			return EADDRNOTAVAIL;
 		if (!IN6_IS_ADDR_MULTICAST(&sin6->sin6_addr))
 			return EADDRNOTAVAIL;
-		sdl = malloc(sizeof *sdl, M_IFMADDR,
-		       M_NOWAIT|M_ZERO);
-		if (sdl == NULL)
-			return (ENOMEM);
-		sdl->sdl_len = sizeof *sdl;
-		sdl->sdl_family = AF_LINK;
-		sdl->sdl_index = ifp->if_index;
-		sdl->sdl_type = IFT_INFINIBAND;
+		sdl = link_init_sdl(ifp, *llsa, IFT_INFINIBAND);
 		sdl->sdl_alen = INFINIBAND_ALEN;
 		e_addr = LLADDR(sdl);
 		ipv6_ib_mc_map(&sin6->sin6_addr, ifp->if_broadcastaddr, e_addr);
@@ -1537,3 +1548,18 @@ ipoib_resolvemulti(struct ifnet *ifp, struct sockaddr **llsa,
 
 module_init(ipoib_init_module);
 module_exit(ipoib_cleanup_module);
+
+static int
+ipoib_evhand(module_t mod, int event, void *arg)
+{
+	                return (0);
+}
+
+static moduledata_t ipoib_mod = {
+	                .name = "ipoib",
+			                .evhand = ipoib_evhand,
+};
+
+DECLARE_MODULE(ipoib, ipoib_mod, SI_SUB_LAST, SI_ORDER_ANY);
+MODULE_DEPEND(ipoib, ibcore, 1, 1, 1);
+MODULE_DEPEND(ipoib, linuxkpi, 1, 1, 1);

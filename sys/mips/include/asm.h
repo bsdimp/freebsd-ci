@@ -1,6 +1,8 @@
 /*	$NetBSD: asm.h,v 1.29 2000/12/14 21:29:51 jeffs Exp $	*/
 
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -56,9 +58,8 @@
 #ifndef _MACHINE_ASM_H_
 #define	_MACHINE_ASM_H_
 
-#ifndef NO_REG_DEFS
+#include <machine/abi.h>
 #include <machine/regdef.h>
-#endif
 #include <machine/endian.h>
 #include <machine/cdefs.h>
 
@@ -110,26 +111,6 @@
  */
 #define	WARN_REFERENCES(_sym,_msg)				\
 	.section .gnu.warning. ## _sym ; .ascii _msg ; .text
-
-/*
- * These are temp registers whose names can be used in either the old
- * or new ABI, although they map to different physical registers.  In
- * the old ABI, they map to t4-t7, and in the new ABI, they map to a4-a7.
- *
- * Because they overlap with the last 4 arg regs in the new ABI, ta0-ta3
- * should be used only when we need more than t0-t3.
- */
-#if defined(__mips_n32) || defined(__mips_n64)
-#define ta0     $8
-#define ta1     $9
-#define ta2     $10
-#define ta3     $11
-#else
-#define ta0     $12
-#define ta1     $13
-#define ta2     $14
-#define ta3     $15
-#endif /* __mips_n32 || __mips_n64 */
 
 #ifdef __ELF__
 # define _C_LABEL(x)    x
@@ -283,52 +264,6 @@ _C_LABEL(x):
 	.asciiz str;			\
 	.align	3
 
-/*
- * Call ast if required
- *
- * XXX Do we really need to disable interrupts?
- */
-#define DO_AST				             \
-44:				                     \
-	mfc0	t0, MIPS_COP_0_STATUS               ;\
-	and	a0, t0, MIPS_SR_INT_IE              ;\
-	xor	t0, a0, t0                          ;\
-	mtc0	t0, MIPS_COP_0_STATUS               ;\
-	COP0_SYNC                                   ;\
-	GET_CPU_PCPU(s1)                            ;\
-	PTR_L	s3, PC_CURPCB(s1)                   ;\
-	PTR_L	s1, PC_CURTHREAD(s1)                ;\
-	lw	s2, TD_FLAGS(s1)                    ;\
-	li	s0, TDF_ASTPENDING | TDF_NEEDRESCHED;\
-	and	s2, s0                              ;\
-	mfc0	t0, MIPS_COP_0_STATUS               ;\
-	or	t0, a0, t0                          ;\
-	mtc0	t0, MIPS_COP_0_STATUS               ;\
-	COP0_SYNC                                   ;\
-	beq	s2, zero, 4f                        ;\
-	nop                                         ;\
-	PTR_LA	s0, _C_LABEL(ast)                   ;\
-	jalr	s0                                  ;\
-	PTR_ADDU a0, s3, U_PCB_REGS                 ;\
-	j	44b		                    ;\
-        nop                                         ;\
-4:
-
-
-/*
- * XXX retain dialects XXX
- */
-#define	ALEAF(x)			XLEAF(x)
-#define	NLEAF(x)			LEAF_NOPROFILE(x)
-#define	NON_LEAF(x, fsize, retpc)	NESTED(x, fsize, retpc)
-#define	NNON_LEAF(x, fsize, retpc)	NESTED_NOPROFILE(x, fsize, retpc)
-
-#if defined(__mips_o32)
-#define	SZREG	4
-#else
-#define	SZREG	8
-#endif
-
 #if defined(__mips_o32) || defined(__mips_o64)
 #define	ALSK	7		/* stack alignment */
 #define	ALMASK	-7		/* stack alignment */
@@ -342,28 +277,6 @@ _C_LABEL(x):
 #define	FP_L	ldc1
 #define	FP_S	sdc1
 #endif
-
-/*
- *  standard callframe {
- *	register_t cf_pad[N];		o32/64 (N=0), n32 (N=1) n64 (N=1)
- *  	register_t cf_args[4];		arg0 - arg3 (only on o32 and o64)
- *  	register_t cf_gp;		global pointer (only on n32 and n64)
- *  	register_t cf_sp;		frame pointer
- *  	register_t cf_ra;		return address
- *  };
- */
-#if defined(__mips_o32) || defined(__mips_o64)
-#define	CALLFRAME_SIZ	(SZREG * (4 + 2))
-#define	CALLFRAME_S0	0
-#elif defined(__mips_n32) || defined(__mips_n64)
-#define	CALLFRAME_SIZ	(SZREG * 4)
-#define	CALLFRAME_S0	(CALLFRAME_SIZ - 4 * SZREG)
-#endif
-#ifndef _KERNEL
-#define	CALLFRAME_GP	(CALLFRAME_SIZ - 3 * SZREG)
-#endif
-#define	CALLFRAME_SP	(CALLFRAME_SIZ - 2 * SZREG)
-#define	CALLFRAME_RA	(CALLFRAME_SIZ - 1 * SZREG)
 
 /*
  *   Endian-independent assembly-code aliases for unaligned memory accesses.
@@ -674,97 +587,6 @@ _C_LABEL(x):
 #define	USE_ALT_CP(a)		.cplocal a
 #endif	/* __mips_n32 || __mips_n64 */
 
-#define	mfc0_macro(data, spr)						\
-	__asm __volatile ("mfc0 %0, $%1"				\
-			: "=r" (data)	/* outputs */			\
-			: "i" (spr));	/* inputs */
-
-#define	mtc0_macro(data, spr)						\
-	__asm __volatile ("mtc0 %0, $%1"				\
-			:				/* outputs */	\
-			: "r" (data), "i" (spr));	/* inputs */
-
-#define	cfc0_macro(data, spr)						\
-	__asm __volatile ("cfc0 %0, $%1"				\
-			: "=r" (data)	/* outputs */			\
-			: "i" (spr));	/* inputs */
-
-#define	ctc0_macro(data, spr)						\
-	__asm __volatile ("ctc0 %0, $%1"				\
-			:				/* outputs */	\
-			: "r" (data), "i" (spr));	/* inputs */
-
-
-#define	lbu_macro(data, addr)						\
-	__asm __volatile ("lbu %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
-			: "r" (addr));	/* inputs */
-
-#define	lb_macro(data, addr)						\
-	__asm __volatile ("lb %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
-			: "r" (addr));	/* inputs */
-
-#define	lwl_macro(data, addr)						\
-	__asm __volatile ("lwl %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
-			: "r" (addr));	/* inputs */
-
-#define	lwr_macro(data, addr)						\
-	__asm __volatile ("lwr %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
-			: "r" (addr));	/* inputs */
-
-#define	ldl_macro(data, addr)						\
-	__asm __volatile ("ldl %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
-			: "r" (addr));	/* inputs */
-
-#define	ldr_macro(data, addr)						\
-	__asm __volatile ("ldr %0, 0x0(%1)"				\
-			: "=r" (data)	/* outputs */			\
-			: "r" (addr));	/* inputs */
-
-#define	sb_macro(data, addr)						\
-	__asm __volatile ("sb %0, 0x0(%1)"				\
-			:				/* outputs */	\
-			: "r" (data), "r" (addr));	/* inputs */
-
-#define	swl_macro(data, addr)						\
-	__asm __volatile ("swl %0, 0x0(%1)"				\
-			: 				/* outputs */	\
-			: "r" (data), "r" (addr));	/* inputs */
-
-#define	swr_macro(data, addr)						\
-	__asm __volatile ("swr %0, 0x0(%1)"				\
-			: 				/* outputs */	\
-			: "r" (data), "r" (addr));	/* inputs */
-
-#define	sdl_macro(data, addr)						\
-	__asm __volatile ("sdl %0, 0x0(%1)"				\
-			: 				/* outputs */	\
-			: "r" (data), "r" (addr));	/* inputs */
-
-#define	sdr_macro(data, addr)						\
-	__asm __volatile ("sdr %0, 0x0(%1)"				\
-			:				/* outputs */	\
-			: "r" (data), "r" (addr));	/* inputs */
-
-#define	mfgr_macro(data, gr)						\
-	__asm __volatile ("move %0, $%1"				\
-			: "=r" (data)	/* outputs */			\
-			: "i" (gr));	/* inputs */
-
-#define	dmfc0_macro(data, spr)						\
-	__asm __volatile ("dmfc0 %0, $%1"				\
-			: "=r" (data)	/* outputs */			\
-			: "i" (spr));	/* inputs */
-
-#define	dmtc0_macro(data, spr, sel)					\
-	__asm __volatile ("dmtc0	%0, $%1, %2"			\
-			:			/* no  outputs */	\
-			: "r" (data), "i" (spr), "i" (sel)); /* inputs */
-
 #define	GET_CPU_PCPU(reg)		\
 	PTR_L	reg, _C_LABEL(pcpup);
 
@@ -819,6 +641,21 @@ _C_LABEL(x):
 /* Only valid with the _JB_MAGIC_SETJMP magic */
 
 #define _JB_SIGMASK		13
+#define	__JB_SIGMASK_REMAINDER	14	/* sigmask_t is 128-bits */
+
+#define _JB_FPREG_F20		15
+#define _JB_FPREG_F21		16
+#define _JB_FPREG_F22		17
+#define _JB_FPREG_F23		18
+#define _JB_FPREG_F24		19
+#define _JB_FPREG_F25		20
+#define _JB_FPREG_F26		21
+#define _JB_FPREG_F27		22
+#define _JB_FPREG_F28		23
+#define _JB_FPREG_F29		24
+#define _JB_FPREG_F30		25
+#define _JB_FPREG_F31		26
+#define _JB_FPREG_FCSR		27
 
 /*
  * Various macros for dealing with TLB hazards
@@ -838,9 +675,12 @@ _C_LABEL(x):
 #elif defined(CPU_RMI)
 #define	HAZARD_DELAY
 #define	ITLBNOPFIX
+#elif defined(CPU_MIPS74K)
+#define	HAZARD_DELAY	sll $0,$0,3
+#define	ITLBNOPFIX	sll $0,$0,3
 #else
-#define	ITLBNOPFIX	nop;nop;nop;nop;nop;nop;nop;nop;nop;nop;
-#define	HAZARD_DELAY	nop;nop;nop;nop;nop;
+#define	ITLBNOPFIX	nop;nop;nop;nop;nop;nop;nop;nop;nop;sll $0,$0,3;
+#define	HAZARD_DELAY	nop;nop;nop;nop;sll $0,$0,3;
 #endif
 
 #endif /* !_MACHINE_ASM_H_ */

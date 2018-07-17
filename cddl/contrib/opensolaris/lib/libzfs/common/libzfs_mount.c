@@ -20,7 +20,12 @@
  */
 
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+ * Copyright 2017 Joyent, Inc.
+ * Copyright 2017 RackTop Systems.
  */
 
 /*
@@ -62,6 +67,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <libgen.h>
 #include <libintl.h>
 #include <stdio.h>
@@ -72,6 +78,7 @@
 #include <sys/mntent.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 
 #include <libzfs.h>
 
@@ -85,7 +92,7 @@ zfs_share_type_t zfs_is_shared_proto(zfs_handle_t *, char **,
     zfs_share_proto_t);
 
 /*
- * The share protocols table must be in the same order as the zfs_share_prot_t
+ * The share protocols table must be in the same order as the zfs_share_proto_t
  * enum in libzfs_impl.h
  */
 typedef struct {
@@ -138,7 +145,7 @@ is_shared(libzfs_handle_t *hdl, const char *mountpoint, zfs_share_proto_t proto)
 
 		*tab = '\0';
 		if (strcmp(buf, mountpoint) == 0) {
-#ifdef sun
+#ifdef illumos
 			/*
 			 * the protocol field is the third field
 			 * skip over second field
@@ -171,20 +178,47 @@ is_shared(libzfs_handle_t *hdl, const char *mountpoint, zfs_share_proto_t proto)
 	return (SHARED_NOT_SHARED);
 }
 
-#ifdef sun
-/*
- * Returns true if the specified directory is empty.  If we can't open the
- * directory at all, return true so that the mount can fail with a more
- * informative error message.
- */
+#ifdef illumos
 static boolean_t
-dir_is_empty(const char *dirname)
+dir_is_empty_stat(const char *dirname)
+{
+	struct stat st;
+
+	/*
+	 * We only want to return false if the given path is a non empty
+	 * directory, all other errors are handled elsewhere.
+	 */
+	if (stat(dirname, &st) < 0 || !S_ISDIR(st.st_mode)) {
+		return (B_TRUE);
+	}
+
+	/*
+	 * An empty directory will still have two entries in it, one
+	 * entry for each of "." and "..".
+	 */
+	if (st.st_size > 2) {
+		return (B_FALSE);
+	}
+
+	return (B_TRUE);
+}
+
+static boolean_t
+dir_is_empty_readdir(const char *dirname)
 {
 	DIR *dirp;
 	struct dirent64 *dp;
+	int dirfd;
 
-	if ((dirp = opendir(dirname)) == NULL)
+	if ((dirfd = openat(AT_FDCWD, dirname,
+	    O_RDONLY | O_NDELAY | O_LARGEFILE | O_CLOEXEC, 0)) < 0) {
 		return (B_TRUE);
+	}
+
+	if ((dirp = fdopendir(dirfd)) == NULL) {
+		(void) close(dirfd);
+		return (B_TRUE);
+	}
 
 	while ((dp = readdir64(dirp)) != NULL) {
 
@@ -198,6 +232,42 @@ dir_is_empty(const char *dirname)
 
 	(void) closedir(dirp);
 	return (B_TRUE);
+}
+
+/*
+ * Returns true if the specified directory is empty.  If we can't open the
+ * directory at all, return true so that the mount can fail with a more
+ * informative error message.
+ */
+static boolean_t
+dir_is_empty(const char *dirname)
+{
+	struct statvfs64 st;
+
+	/*
+	 * If the statvfs call fails or the filesystem is not a ZFS
+	 * filesystem, fall back to the slow path which uses readdir.
+	 */
+	if ((statvfs64(dirname, &st) != 0) ||
+	    (strcmp(st.f_basetype, "zfs") != 0)) {
+		return (dir_is_empty_readdir(dirname));
+	}
+
+	/*
+	 * At this point, we know the provided path is on a ZFS
+	 * filesystem, so we can use stat instead of readdir to
+	 * determine if the directory is empty or not. We try to avoid
+	 * using readdir because that requires opening "dirname"; this
+	 * open file descriptor can potentially end up in a child
+	 * process if there's a concurrent fork, thus preventing the
+	 * zfs_mount() from otherwise succeeding (the open file
+	 * descriptor inherited by the child process will cause the
+	 * parent's mount to fail with EBUSY). The performance
+	 * implications of replacing the open, read, and close with a
+	 * single stat is nice; but is not the main motivation for the
+	 * added complexity.
+	 */
+	return (dir_is_empty_stat(dirname));
 }
 #endif
 
@@ -234,7 +304,7 @@ static boolean_t
 zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
     zprop_source_t *source)
 {
-	char sourceloc[ZFS_MAXNAMELEN];
+	char sourceloc[MAXNAMELEN];
 	zprop_source_t sourcetype;
 
 	if (!zfs_prop_valid_for_type(ZFS_PROP_MOUNTPOINT, zhp->zfs_type))
@@ -296,7 +366,7 @@ zfs_mount(zfs_handle_t *zhp, const char *options, int flags)
 		}
 	}
 
-#ifdef sun	/* FreeBSD: overlay mounts are not checked. */
+#ifdef illumos	/* FreeBSD: overlay mounts are not checked. */
 	/*
 	 * Determine if the mountpoint is empty.  If so, refuse to perform the
 	 * mount.  We don't perform this check if MS_OVERLAY is specified, which
@@ -474,7 +544,8 @@ zfs_is_shared_proto(zfs_handle_t *zhp, char **where, zfs_share_proto_t proto)
 	if (!zfs_is_mounted(zhp, &mountpoint))
 		return (SHARED_NOT_SHARED);
 
-	if (rc = is_shared(zhp->zfs_hdl, mountpoint, proto)) {
+	if ((rc = is_shared(zhp->zfs_hdl, mountpoint, proto))
+	    != SHARED_NOT_SHARED) {
 		if (where != NULL)
 			*where = mountpoint;
 		else
@@ -506,7 +577,7 @@ zfs_is_shared_smb(zfs_handle_t *zhp, char **where)
  * initialized in _zfs_init_libshare() are actually present.
  */
 
-#ifdef sun
+#ifdef illumos
 static sa_handle_t (*_sa_init)(int);
 static void (*_sa_fini)(sa_handle_t);
 static sa_share_t (*_sa_find_share)(sa_handle_t, char *);
@@ -533,7 +604,7 @@ static void (*_sa_update_sharetab_ts)(sa_handle_t);
 static void
 _zfs_init_libshare(void)
 {
-#ifdef sun
+#ifdef illumos
 	void *libshare;
 	char path[MAXPATHLEN];
 	char isa[MAXISALEN];
@@ -602,37 +673,38 @@ _zfs_init_libshare(void)
 int
 zfs_init_libshare(libzfs_handle_t *zhandle, int service)
 {
-	int ret = SA_OK;
-
-#ifdef sun
+#ifdef illumos
+	/*
+	 * libshare is either not installed or we're in a branded zone. The
+	 * rest of the wrapper functions around the libshare calls already
+	 * handle NULL function pointers, but we don't want the callers of
+	 * zfs_init_libshare() to fail prematurely if libshare is not available.
+	 */
 	if (_sa_init == NULL)
-		ret = SA_CONFIG_ERR;
+		return (SA_OK);
 
-	if (ret == SA_OK && zhandle->libzfs_shareflags & ZFSSHARE_MISS) {
-		/*
-		 * We had a cache miss. Most likely it is a new ZFS
-		 * dataset that was just created. We want to make sure
-		 * so check timestamps to see if a different process
-		 * has updated any of the configuration. If there was
-		 * some non-ZFS change, we need to re-initialize the
-		 * internal cache.
-		 */
-		zhandle->libzfs_shareflags &= ~ZFSSHARE_MISS;
-		if (_sa_needs_refresh != NULL &&
-		    _sa_needs_refresh(zhandle->libzfs_sharehdl)) {
-			zfs_uninit_libshare(zhandle);
-			zhandle->libzfs_sharehdl = _sa_init(service);
-		}
+	/*
+	 * Attempt to refresh libshare. This is necessary if there was a cache
+	 * miss for a new ZFS dataset that was just created, or if state of the
+	 * sharetab file has changed since libshare was last initialized. We
+	 * want to make sure so check timestamps to see if a different process
+	 * has updated any of the configuration. If there was some non-ZFS
+	 * change, we need to re-initialize the internal cache.
+	 */
+	if (_sa_needs_refresh != NULL &&
+	    _sa_needs_refresh(zhandle->libzfs_sharehdl)) {
+		zfs_uninit_libshare(zhandle);
+		zhandle->libzfs_sharehdl = _sa_init(service);
 	}
 
-	if (ret == SA_OK && zhandle && zhandle->libzfs_sharehdl == NULL)
+	if (zhandle && zhandle->libzfs_sharehdl == NULL)
 		zhandle->libzfs_sharehdl = _sa_init(service);
 
-	if (ret == SA_OK && zhandle->libzfs_sharehdl == NULL)
-		ret = SA_NO_MEMORY;
+	if (zhandle->libzfs_sharehdl == NULL)
+		return (SA_NO_MEMORY);
 #endif
 
-	return (ret);
+	return (SA_OK);
 }
 
 /*
@@ -645,7 +717,7 @@ void
 zfs_uninit_libshare(libzfs_handle_t *zhandle)
 {
 	if (zhandle != NULL && zhandle->libzfs_sharehdl != NULL) {
-#ifdef sun
+#ifdef illumos
 		if (_sa_fini != NULL)
 			_sa_fini(zhandle->libzfs_sharehdl);
 #endif
@@ -662,7 +734,7 @@ zfs_uninit_libshare(libzfs_handle_t *zhandle)
 int
 zfs_parse_options(char *options, zfs_share_proto_t proto)
 {
-#ifdef sun
+#ifdef illumos
 	if (_sa_parse_legacy_options != NULL) {
 		return (_sa_parse_legacy_options(NULL, options,
 		    proto_table[proto].p_name));
@@ -673,7 +745,7 @@ zfs_parse_options(char *options, zfs_share_proto_t proto)
 #endif
 }
 
-#ifdef sun
+#ifdef illumos
 /*
  * zfs_sa_find_share(handle, path)
  *
@@ -715,7 +787,7 @@ zfs_sa_disable_share(sa_share_t share, char *proto)
 		return (_sa_disable_share(share, proto));
 	return (SA_CONFIG_ERR);
 }
-#endif	/* sun */
+#endif	/* illumos */
 
 /*
  * Share the given filesystem according to the options in the specified
@@ -736,16 +808,6 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
 		return (0);
 
-#ifdef sun
-	if ((ret = zfs_init_libshare(hdl, SA_INIT_SHARE_API)) != SA_OK) {
-		(void) zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
-		    dgettext(TEXT_DOMAIN, "cannot share '%s': %s"),
-		    zfs_get_name(zhp), _sa_errorstr != NULL ?
-		    _sa_errorstr(ret) : "");
-		return (-1);
-	}
-#endif
-
 	for (curr_proto = proto; *curr_proto != PROTO_END; curr_proto++) {
 		/*
 		 * Return success if there are no share options.
@@ -756,6 +818,17 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 		    strcmp(shareopts, "off") == 0)
 			continue;
 
+#ifdef illumos
+		ret = zfs_init_libshare(hdl, SA_INIT_SHARE_API);
+		if (ret != SA_OK) {
+			(void) zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
+			    dgettext(TEXT_DOMAIN, "cannot share '%s': %s"),
+			    zfs_get_name(zhp), _sa_errorstr != NULL ?
+			    _sa_errorstr(ret) : "");
+			return (-1);
+		}
+#endif
+
 		/*
 		 * If the 'zoned' property is set, then zfs_is_mountable()
 		 * will have already bailed out if we are in the global zone.
@@ -765,7 +838,7 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 		if (zfs_prop_get_int(zhp, ZFS_PROP_ZONED))
 			continue;
 
-#ifdef sun
+#ifdef illumos
 		share = zfs_sa_find_share(hdl->libzfs_sharehdl, mountpoint);
 		if (share == NULL) {
 			/*
@@ -787,7 +860,6 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 				    zfs_get_name(zhp));
 				return (-1);
 			}
-			hdl->libzfs_shareflags |= ZFSSHARE_MISS;
 			share = zfs_sa_find_share(hdl->libzfs_sharehdl,
 			    mountpoint);
 		}
@@ -854,7 +926,7 @@ static int
 unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
     zfs_share_proto_t proto)
 {
-#ifdef sun
+#ifdef illumos
 	sa_share_t share;
 	int err;
 	char *mntpt;
@@ -868,7 +940,7 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	/* make sure libshare initialized */
 	if ((err = zfs_init_libshare(hdl, SA_INIT_SHARE_API)) != SA_OK) {
 		free(mntpt);	/* don't need the copy anymore */
-		return (zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
+		return (zfs_error_fmt(hdl, proto_table[proto].p_unshare_err,
 		    dgettext(TEXT_DOMAIN, "cannot unshare '%s': %s"),
 		    name, _sa_errorstr(err)));
 	}
@@ -879,12 +951,13 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	if (share != NULL) {
 		err = zfs_sa_disable_share(share, proto_table[proto].p_name);
 		if (err != SA_OK) {
-			return (zfs_error_fmt(hdl, EZFS_UNSHARENFSFAILED,
+			return (zfs_error_fmt(hdl,
+			    proto_table[proto].p_unshare_err,
 			    dgettext(TEXT_DOMAIN, "cannot unshare '%s': %s"),
 			    name, _sa_errorstr(err)));
 		}
 	} else {
-		return (zfs_error_fmt(hdl, EZFS_UNSHARENFSFAILED,
+		return (zfs_error_fmt(hdl, proto_table[proto].p_unshare_err,
 		    dgettext(TEXT_DOMAIN, "cannot unshare '%s': not found"),
 		    name));
 	}
@@ -1066,6 +1139,17 @@ mount_cb(zfs_handle_t *zhp, void *data)
 	}
 
 	if (zfs_prop_get_int(zhp, ZFS_PROP_CANMOUNT) == ZFS_CANMOUNT_NOAUTO) {
+		zfs_close(zhp);
+		return (0);
+	}
+
+	/*
+	 * If this filesystem is inconsistent and has a receive resume
+	 * token, we can not mount it.
+	 */
+	if (zfs_prop_get_int(zhp, ZFS_PROP_INCONSISTENT) &&
+	    zfs_prop_get(zhp, ZFS_PROP_RECEIVE_RESUME_TOKEN,
+	    NULL, 0, NULL, NULL, 0, B_TRUE) == 0) {
 		zfs_close(zhp);
 		return (0);
 	}

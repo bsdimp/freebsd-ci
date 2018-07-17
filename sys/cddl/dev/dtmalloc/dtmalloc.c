@@ -28,12 +28,16 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/conf.h>
+#include <sys/ctype.h>
 #include <sys/kernel.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 
 #include <sys/dtrace.h>
 #include <sys/dtrace_bsd.h>
+
+extern bool dtrace_malloc_enabled;
+static uint32_t dtrace_malloc_enabled_count;
 
 static d_open_t	dtmalloc_open;
 static int	dtmalloc_unload(void);
@@ -59,16 +63,16 @@ static dtrace_pattr_t dtmalloc_attr = {
 };
 
 static dtrace_pops_t dtmalloc_pops = {
-	dtmalloc_provide,
-	NULL,
-	dtmalloc_enable,
-	dtmalloc_disable,
-	NULL,
-	NULL,
-	dtmalloc_getargdesc,
-	NULL,
-	NULL,
-	dtmalloc_destroy
+	.dtps_provide =		dtmalloc_provide,
+	.dtps_provide_module =	NULL,
+	.dtps_enable =		dtmalloc_enable,
+	.dtps_disable =		dtmalloc_disable,
+	.dtps_suspend =		NULL,
+	.dtps_resume =		NULL,
+	.dtps_getargdesc =	dtmalloc_getargdesc,
+	.dtps_getargval =	NULL,
+	.dtps_usermode =	NULL,
+	.dtps_destroy =		dtmalloc_destroy
 };
 
 static struct cdev		*dtmalloc_cdev;
@@ -111,8 +115,17 @@ dtmalloc_type_cb(struct malloc_type *mtp, void *arg __unused)
 {
 	char name[DTRACE_FUNCNAMELEN];
 	struct malloc_type_internal *mtip = mtp->ks_handle;
+	int i;
 
+	/*
+	 * malloc_type descriptions are allowed to contain whitespace, but
+	 * DTrace probe identifiers are not, so replace the whitespace with
+	 * underscores.
+	 */
 	strlcpy(name, mtp->ks_shortdesc, sizeof(name));
+	for (i = 0; name[i] != 0; i++)
+		if (isspace(name[i]))
+			name[i] = '_';
 
 	if (dtrace_probe_lookup(dtmalloc_id, NULL, name, "malloc") != 0)
 		return;
@@ -142,6 +155,9 @@ dtmalloc_enable(void *arg, dtrace_id_t id, void *parg)
 {
 	uint32_t *p = parg;
 	*p = id;
+	dtrace_malloc_enabled_count++;
+	if (dtrace_malloc_enabled_count == 1)
+		dtrace_malloc_enabled = true;
 }
 
 static void
@@ -149,6 +165,9 @@ dtmalloc_disable(void *arg, dtrace_id_t id, void *parg)
 {
 	uint32_t *p = parg;
 	*p = 0;
+	dtrace_malloc_enabled_count--;
+	if (dtrace_malloc_enabled_count == 0)
+		dtrace_malloc_enabled = false;
 }
 
 static void

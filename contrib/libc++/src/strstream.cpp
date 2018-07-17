@@ -11,6 +11,9 @@
 #include "algorithm"
 #include "climits"
 #include "cstring"
+#include "cstdlib"
+#include "__debug"
+#include "__undef_macros"
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
@@ -61,7 +64,7 @@ strstreambuf::strstreambuf(const char* __gnext, streamsize __n)
       __palloc_(nullptr),
       __pfree_(nullptr)
 {
-    __init((char*)__gnext, __n, nullptr);
+    __init(const_cast<char *>(__gnext), __n, nullptr);
 }
 
 strstreambuf::strstreambuf(signed char* __gnext, streamsize __n, signed char* __pbeg)
@@ -70,7 +73,7 @@ strstreambuf::strstreambuf(signed char* __gnext, streamsize __n, signed char* __
       __palloc_(nullptr),
       __pfree_(nullptr)
 {
-    __init((char*)__gnext, __n, (char*)__pbeg);
+    __init(const_cast<char *>(reinterpret_cast<const char*>(__gnext)), __n, reinterpret_cast<char*>(__pbeg));
 }
 
 strstreambuf::strstreambuf(const signed char* __gnext, streamsize __n)
@@ -79,7 +82,7 @@ strstreambuf::strstreambuf(const signed char* __gnext, streamsize __n)
       __palloc_(nullptr),
       __pfree_(nullptr)
 {
-    __init((char*)__gnext, __n, nullptr);
+    __init(const_cast<char *>(reinterpret_cast<const char*>(__gnext)), __n, nullptr);
 }
 
 strstreambuf::strstreambuf(unsigned char* __gnext, streamsize __n, unsigned char* __pbeg)
@@ -88,7 +91,7 @@ strstreambuf::strstreambuf(unsigned char* __gnext, streamsize __n, unsigned char
       __palloc_(nullptr),
       __pfree_(nullptr)
 {
-    __init((char*)__gnext, __n, (char*)__pbeg);
+    __init(const_cast<char *>(reinterpret_cast<const char*>(__gnext)), __n, reinterpret_cast<char*>(__pbeg));
 }
 
 strstreambuf::strstreambuf(const unsigned char* __gnext, streamsize __n)
@@ -97,7 +100,7 @@ strstreambuf::strstreambuf(const unsigned char* __gnext, streamsize __n)
       __palloc_(nullptr),
       __pfree_(nullptr)
 {
-    __init((char*)__gnext, __n, nullptr);
+    __init(const_cast<char *>(reinterpret_cast<const char*>(__gnext)), __n, nullptr);
 }
 
 strstreambuf::~strstreambuf()
@@ -156,20 +159,24 @@ strstreambuf::overflow(int_type __c)
     {
         if ((__strmode_ & __dynamic) == 0 || (__strmode_ & __frozen) != 0)
             return int_type(EOF);
-        streamsize old_size = (epptr() ? epptr() : egptr()) - eback();
-        streamsize new_size = max<streamsize>(__alsize_, 2*old_size);
+        size_t old_size = static_cast<size_t> ((epptr() ? epptr() : egptr()) - eback());
+        size_t new_size = max<size_t>(static_cast<size_t>(__alsize_), 2*old_size);
+        if (new_size == 0)
+            new_size = __default_alsize;
         char* buf = nullptr;
         if (__palloc_)
-            buf = static_cast<char*>(__palloc_(static_cast<size_t>(new_size)));
+            buf = static_cast<char*>(__palloc_(new_size));
         else
             buf = new char[new_size];
         if (buf == nullptr)
             return int_type(EOF);
-        memcpy(buf, eback(), static_cast<size_t>(old_size));
+        if (old_size != 0) {
+            _LIBCPP_ASSERT(eback(), "overflow copying from NULL");
+            memcpy(buf, eback(), static_cast<size_t>(old_size));
+        }
         ptrdiff_t ninp = gptr()  - eback();
         ptrdiff_t einp = egptr() - eback();
         ptrdiff_t nout = pptr()  - pbase();
-        ptrdiff_t eout = epptr() - pbase();
         if (__strmode_ & __allocated)
         {
             if (__pfree_)
@@ -178,13 +185,13 @@ strstreambuf::overflow(int_type __c)
                 delete [] eback();
         }
         setg(buf, buf + ninp, buf + einp);
-        setp(buf + einp, buf + einp + eout);
-        pbump(static_cast<int>(nout));
+        setp(buf + einp, buf + new_size);
+        __pbump(nout);
         __strmode_ |= __allocated;
     }
     *pptr() = static_cast<char>(__c);
     pbump(1);
-    return int_type((unsigned char)__c);
+    return int_type(static_cast<unsigned char>(__c));
 }
 
 strstreambuf::int_type
@@ -220,15 +227,15 @@ strstreambuf::underflow()
             return EOF;
         setg(eback(), gptr(), pptr());
     }
-    return int_type((unsigned char)*gptr());
+    return int_type(static_cast<unsigned char>(*gptr()));
 }
 
 strstreambuf::pos_type
 strstreambuf::seekoff(off_type __off, ios_base::seekdir __way, ios_base::openmode __which)
 {
     off_type __p(-1);
-    bool pos_in = __which & ios::in;
-    bool pos_out = __which & ios::out;
+    bool pos_in = (__which & ios::in) != 0;
+    bool pos_out = (__which & ios::out) != 0;
     bool legal = false;
     switch (__way)
     {
@@ -261,6 +268,8 @@ strstreambuf::seekoff(off_type __off, ios_base::seekdir __way, ios_base::openmod
         case ios::end:
             newoff = seekhigh - eback();
             break;
+        default:
+            _LIBCPP_UNREACHABLE();
         }
         newoff += __off;
         if (0 <= newoff && newoff <= seekhigh - eback())
@@ -273,7 +282,7 @@ strstreambuf::seekoff(off_type __off, ios_base::seekdir __way, ios_base::openmod
                 // min(pbase, newpos), newpos, epptr()
                 __off = epptr() - newpos;
                 setp(min(pbase(), newpos), epptr());
-                pbump(static_cast<int>((epptr() - pbase()) - __off));
+                __pbump((epptr() - pbase()) - __off);
             }
             __p = newoff;
         }
@@ -285,8 +294,8 @@ strstreambuf::pos_type
 strstreambuf::seekpos(pos_type __sp, ios_base::openmode __which)
 {
     off_type __p(-1);
-    bool pos_in = __which & ios::in;
-    bool pos_out = __which & ios::out;
+    bool pos_in = (__which & ios::in) != 0;
+    bool pos_out = (__which & ios::out) != 0;
     if (pos_in || pos_out)
     {
         if (!((pos_in && gptr() == nullptr) || (pos_out && pptr() == nullptr)))
@@ -303,7 +312,7 @@ strstreambuf::seekpos(pos_type __sp, ios_base::openmode __which)
                     // min(pbase, newpos), newpos, epptr()
                     off_type temp = epptr() - newpos;
                     setp(min(pbase(), newpos), epptr());
-                    pbump(static_cast<int>((epptr() - pbase()) - temp));
+                    __pbump((epptr() - pbase()) - temp);
                 }
                 __p = newoff;
             }

@@ -2,6 +2,8 @@
 /* $NetBSD: citrus_zw.c,v 1.4 2008/06/14 16:01:08 tnozaki Exp $ */
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c)2004, 2006 Citrus Project,
  * All rights reserved.
  *
@@ -85,6 +87,7 @@ _citrus_ZW_init_state(_ZWEncodingInfo * __restrict ei __unused,
 	psenc->charset = NONE;
 }
 
+#if 0
 static __inline void
 /*ARGSUSED*/
 _citrus_ZW_pack_state(_ZWEncodingInfo * __restrict ei __unused,
@@ -102,6 +105,7 @@ _citrus_ZW_unpack_state(_ZWEncodingInfo * __restrict ei __unused,
 
 	memcpy((void *)psenc, pspriv, sizeof(*psenc));
 }
+#endif
 
 static int
 _citrus_ZW_mbrtowc_priv(_ZWEncodingInfo * __restrict ei,

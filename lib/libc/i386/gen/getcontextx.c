@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 Konstantin Belousov <kib@FreeBSD.org>
  * All rights reserved.
  *
@@ -89,14 +91,12 @@ __getcontextx_size(void)
 }
 
 int
-__fillcontextx(char *ctx)
+__fillcontextx2(char *ctx)
 {
 	struct i386_get_xfpustate xfpu;
 	ucontext_t *ucp;
 
 	ucp = (ucontext_t *)ctx;
-	if (getcontext(ucp) == -1)
-		return (-1);
 	if (xstate_sz != 0) {
 		xfpu.addr = (char *)(ucp + 1);
 		xfpu.len = xstate_sz;
@@ -109,6 +109,18 @@ __fillcontextx(char *ctx)
 		ucp->uc_mcontext.mc_xfpustate = 0;
 		ucp->uc_mcontext.mc_xfpustate_len = 0;
 	}
+	return (0);
+}
+
+int
+__fillcontextx(char *ctx)
+{
+	ucontext_t *ucp;
+
+	ucp = (ucontext_t *)ctx;
+	if (getcontext(ucp) == -1)
+		return (-1);
+	__fillcontextx2(ctx);
 	return (0);
 }
 

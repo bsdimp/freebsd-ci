@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 1995, 1996, 1997 Wolfgang Solfrank
  * Copyright (c) 1995 Martin Husemann
  *
@@ -72,7 +74,7 @@ checkfilesys(const char *fname)
 		return 8;
 	}
 
-	if (readboot(dosfs, &boot) != FSOK) {
+	if (readboot(dosfs, &boot) == FSFATAL) {
 		close(dosfs);
 		printf("\n");
 		return 8;
@@ -142,7 +144,7 @@ checkfilesys(const char *fname)
 		goto out;
 
 	/* now write the FATs */
-	if (mod & FSFATMOD) {
+	if (mod & (FSFATMOD|FSFIXFAT)) {
 		if (ask(1, "Update FATs")) {
 			mod |= writefat(dosfs, &boot, fat, mod & FSFIXFAT);
 			if (mod & FSFATAL)

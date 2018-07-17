@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -117,7 +119,7 @@
  * are created as a result of vnode operations on
  * this or other null vnode stacks.
  *
- * New vnode stacks come into existance as a result of
+ * New vnode stacks come into existence as a result of
  * an operation which returns a vnode.
  * The bypass routine stacks a null-node above the new
  * vnode before returning it to the caller.
@@ -361,9 +363,11 @@ null_lookup(struct vop_lookup_args *ap)
 	struct vnode *dvp = ap->a_dvp;
 	int flags = cnp->cn_flags;
 	struct vnode *vp, *ldvp, *lvp;
+	struct mount *mp;
 	int error;
 
-	if ((flags & ISLASTCN) && (dvp->v_mount->mnt_flag & MNT_RDONLY) &&
+	mp = dvp->v_mount;
+	if ((flags & ISLASTCN) != 0 && (mp->mnt_flag & MNT_RDONLY) != 0 &&
 	    (cnp->cn_nameiop == DELETE || cnp->cn_nameiop == RENAME))
 		return (EROFS);
 	/*
@@ -372,9 +376,47 @@ null_lookup(struct vop_lookup_args *ap)
 	 */
 	ldvp = NULLVPTOLOWERVP(dvp);
 	vp = lvp = NULL;
+	KASSERT((ldvp->v_vflag & VV_ROOT) == 0 ||
+	    ((dvp->v_vflag & VV_ROOT) != 0 && (flags & ISDOTDOT) == 0),
+	    ("ldvp %p fl %#x dvp %p fl %#x flags %#x", ldvp, ldvp->v_vflag,
+	     dvp, dvp->v_vflag, flags));
+
+	/*
+	 * Hold ldvp.  The reference on it, owned by dvp, is lost in
+	 * case of dvp reclamation, and we need ldvp to move our lock
+	 * from ldvp to dvp.
+	 */
+	vhold(ldvp);
+
 	error = VOP_LOOKUP(ldvp, &lvp, cnp);
-	if (error == EJUSTRETURN && (flags & ISLASTCN) &&
-	    (dvp->v_mount->mnt_flag & MNT_RDONLY) &&
+
+	/*
+	 * VOP_LOOKUP() on lower vnode may unlock ldvp, which allows
+	 * dvp to be reclaimed due to shared v_vnlock.  Check for the
+	 * doomed state and return error.
+	 */
+	if ((error == 0 || error == EJUSTRETURN) &&
+	    (dvp->v_iflag & VI_DOOMED) != 0) {
+		error = ENOENT;
+		if (lvp != NULL)
+			vput(lvp);
+
+		/*
+		 * If vgone() did reclaimed dvp before curthread
+		 * relocked ldvp, the locks of dvp and ldpv are no
+		 * longer shared.  In this case, relock of ldvp in
+		 * lower fs VOP_LOOKUP() does not restore the locking
+		 * state of dvp.  Compensate for this by unlocking
+		 * ldvp and locking dvp, which is also correct if the
+		 * locks are still shared.
+		 */
+		VOP_UNLOCK(ldvp, 0);
+		vn_lock(dvp, LK_EXCLUSIVE | LK_RETRY);
+	}
+	vdrop(ldvp);
+
+	if (error == EJUSTRETURN && (flags & ISLASTCN) != 0 &&
+	    (mp->mnt_flag & MNT_RDONLY) != 0 &&
 	    (cnp->cn_nameiop == CREATE || cnp->cn_nameiop == RENAME))
 		error = EROFS;
 
@@ -384,7 +426,7 @@ null_lookup(struct vop_lookup_args *ap)
 			VREF(dvp);
 			vrele(lvp);
 		} else {
-			error = null_nodeget(dvp->v_mount, lvp, &vp);
+			error = null_nodeget(mp, lvp, &vp);
 			if (error == 0)
 				*ap->a_vpp = vp;
 		}
@@ -528,14 +570,16 @@ static int
 null_remove(struct vop_remove_args *ap)
 {
 	int retval, vreleit;
-	struct vnode *lvp;
+	struct vnode *lvp, *vp;
 
-	if (vrefcnt(ap->a_vp) > 1) {
-		lvp = NULLVPTOLOWERVP(ap->a_vp);
+	vp = ap->a_vp;
+	if (vrefcnt(vp) > 1) {
+		lvp = NULLVPTOLOWERVP(vp);
 		VREF(lvp);
 		vreleit = 1;
 	} else
 		vreleit = 0;
+	VTONULL(vp)->null_flags |= NULLV_DROP;
 	retval = null_bypass(&ap->a_gen);
 	if (vreleit != 0)
 		vrele(lvp);
@@ -554,6 +598,7 @@ null_rename(struct vop_rename_args *ap)
 	struct vnode *fvp = ap->a_fvp;
 	struct vnode *fdvp = ap->a_fdvp;
 	struct vnode *tvp = ap->a_tvp;
+	struct null_node *tnn;
 
 	/* Check for cross-device rename. */
 	if ((fvp->v_mount != tdvp->v_mount) ||
@@ -568,8 +613,20 @@ null_rename(struct vop_rename_args *ap)
 		vrele(fvp);
 		return (EXDEV);
 	}
-	
+
+	if (tvp != NULL) {
+		tnn = VTONULL(tvp);
+		tnn->null_flags |= NULLV_DROP;
+	}
 	return (null_bypass((struct vop_generic_args *)ap));
+}
+
+static int
+null_rmdir(struct vop_rmdir_args *ap)
+{
+
+	VTONULL(ap->a_vp)->null_flags |= NULLV_DROP;
+	return (null_bypass(&ap->a_gen));
 }
 
 /*
@@ -594,7 +651,7 @@ null_lock(struct vop_lock1_args *ap)
 	nn = VTONULL(vp);
 	/*
 	 * If we're still active we must ask the lower layer to
-	 * lock as ffs has special lock considerations in it's
+	 * lock as ffs has special lock considerations in its
 	 * vop lock.
 	 */
 	if (nn != NULL && (lvp = NULLVPTOLOWERVP(vp)) != NULL) {
@@ -607,7 +664,7 @@ null_lock(struct vop_lock1_args *ap)
 		 * the lowervp's vop_lock routine.  When we vgone we will
 		 * drop our last ref to the lowervp, which would allow it
 		 * to be reclaimed.  The lowervp could then be recycled,
-		 * in which case it is not legal to be sleeping in it's VOP.
+		 * in which case it is not legal to be sleeping in its VOP.
 		 * We prevent it from being recycled by holding the vnode
 		 * here.
 		 */
@@ -692,18 +749,24 @@ null_unlock(struct vop_unlock_args *ap)
 static int
 null_inactive(struct vop_inactive_args *ap __unused)
 {
-	struct vnode *vp;
+	struct vnode *vp, *lvp;
+	struct null_node *xp;
 	struct mount *mp;
 	struct null_mount *xmp;
 
 	vp = ap->a_vp;
+	xp = VTONULL(vp);
+	lvp = NULLVPTOLOWERVP(vp);
 	mp = vp->v_mount;
 	xmp = MOUNTTONULLMOUNT(mp);
-	if ((xmp->nullm_flags & NULLM_CACHE) == 0) {
+	if ((xmp->nullm_flags & NULLM_CACHE) == 0 ||
+	    (xp->null_flags & NULLV_DROP) != 0 ||
+	    (lvp->v_vflag & VV_NOSYNC) != 0) {
 		/*
 		 * If this is the last reference and caching of the
-		 * nullfs vnodes is not enabled, then free up the
-		 * vnode so as not to tie up the lower vnodes.
+		 * nullfs vnodes is not enabled, or the lower vnode is
+		 * deleted, then free up the vnode so as not to tie up
+		 * the lower vnodes.
 		 */
 		vp->v_object = NULL;
 		vrecycle(vp);
@@ -727,7 +790,7 @@ null_reclaim(struct vop_reclaim_args *ap)
 	lowervp = xp->null_lowervp;
 
 	KASSERT(lowervp != NULL && vp->v_vnlock != &vp->v_lock,
-	    ("Reclaiming inclomplete null vnode %p", vp));
+	    ("Reclaiming incomplete null vnode %p", vp));
 
 	null_hashrem(xp);
 	/*
@@ -748,7 +811,10 @@ null_reclaim(struct vop_reclaim_args *ap)
 	 */
 	if (vp->v_writecount > 0)
 		VOP_ADD_WRITECOUNT(lowervp, -1);
-	vput(lowervp);
+	if ((xp->null_flags & NULLV_NOUNLOCK) != 0)
+		vunref(lowervp);
+	else
+		vput(lowervp);
 	free(xp, M_NULLFSNODE);
 
 	return (0);
@@ -806,9 +872,6 @@ null_vptocnp(struct vop_vptocnp_args *ap)
 	struct ucred *cred = ap->a_cred;
 	int error, locked;
 
-	if (vp->v_type == VDIR)
-		return (vop_stdvptocnp(ap));
-
 	locked = VOP_ISLOCKED(vp);
 	lvp = NULLVPTOLOWERVP(vp);
 	vhold(lvp);
@@ -832,7 +895,6 @@ null_vptocnp(struct vop_vptocnp_args *ap)
 		vn_lock(vp, locked | LK_RETRY);
 		return (ENOENT);
 	}
-	vref(ldvp);
 	error = null_nodeget(vp->v_mount, ldvp, dvp);
 	if (error == 0) {
 #ifdef DIAGNOSTIC
@@ -864,6 +926,7 @@ struct vop_vector null_vnodeops = {
 	.vop_reclaim =		null_reclaim,
 	.vop_remove =		null_remove,
 	.vop_rename =		null_rename,
+	.vop_rmdir =		null_rmdir,
 	.vop_setattr =		null_setattr,
 	.vop_strategy =		VOP_EOPNOTSUPP,
 	.vop_unlock =		null_unlock,

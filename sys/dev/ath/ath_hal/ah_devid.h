@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -91,7 +93,10 @@
 #define	AR9300_DEVID_AR9580_PCIE	0x0033
 #define	AR9300_DEVID_AR946X_PCIE	0x0034
 #define	AR9300_DEVID_AR9330		0x0035
+#define	AR9300_DEVID_QCA9565		0x0036
+#define	AR9300_DEVID_AR1111_PCIE	0x0037
 #define	AR9300_DEVID_QCA955X		0x0039
+#define	AR9300_DEVID_QCA953X		0x003d        /* Honey Bee */
 
 #define	AR_SUBVENDOR_ID_NOG	0x0e11		/* No 11G subvendor ID */
 #define AR_SUBVENDOR_ID_NEW_A	0x7065		/* Update device to new RD */

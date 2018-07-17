@@ -5,6 +5,8 @@
  *  University of Utah, Department of Computer Science
  */
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -46,16 +48,14 @@
 #include <sys/ucred.h>
 #include <sys/vnode.h>
 
-#include <fs/ext2fs/inode.h>
-#include <fs/ext2fs/ext2_extern.h>
-#include <fs/ext2fs/ext2fs.h>
 #include <fs/ext2fs/fs.h>
-
-#ifdef KDB
+#include <fs/ext2fs/inode.h>
+#include <fs/ext2fs/ext2fs.h>
+#include <fs/ext2fs/ext2_extern.h>
+#include <fs/ext2fs/fs.h>
+#include <fs/ext2fs/ext2_extents.h>
 #include <fs/ext2fs/ext2_mount.h>
-
-void	ext2_checkoverlap(struct buf *, struct inode *);
-#endif
+#include <fs/ext2fs/ext2_dinode.h>
 
 /*
  * Return buffer with the contents of block "offset" from the beginning of
@@ -68,52 +68,30 @@ ext2_blkatoff(struct vnode *vp, off_t offset, char **res, struct buf **bpp)
 	struct inode *ip;
 	struct m_ext2fs *fs;
 	struct buf *bp;
-	int32_t lbn;
-	int bsize, error;
+	e2fs_lbn_t lbn;
+	int error, bsize;
 
 	ip = VTOI(vp);
 	fs = ip->i_e2fs;
 	lbn = lblkno(fs, offset);
 	bsize = blksize(fs, ip, lbn);
 
-	*bpp = NULL;
 	if ((error = bread(vp, lbn, bsize, NOCRED, &bp)) != 0) {
+		brelse(bp);
+		return (error);
+	}
+	error = ext2_dir_blk_csum_verify(ip, bp);
+	if (error != 0) {
 		brelse(bp);
 		return (error);
 	}
 	if (res)
 		*res = (char *)bp->b_data + blkoff(fs, offset);
+
 	*bpp = bp;
+
 	return (0);
 }
-
-#ifdef KDB
-void
-ext2_checkoverlap(struct buf *bp, struct inode *ip)
-{
-	struct buf *ebp, *ep;
-	int32_t start, last;
-	struct vnode *vp;
-
-	ebp = &buf[nbuf];
-	start = bp->b_blkno;
-	last = start + btodb(bp->b_bcount) - 1;
-	for (ep = buf; ep < ebp; ep++) {
-		if (ep == bp || (ep->b_flags & B_INVAL))
-			continue;
-		vp = ip->i_ump->um_devvp;
-		/* look for overlap */
-		if (ep->b_bcount == 0 || ep->b_blkno > last ||
-		    ep->b_blkno + btodb(ep->b_bcount) <= start)
-			continue;
-		vprint("Disk overlap", vp);
-		(void)printf("\tstart %d, end %d overlap start %lld, end %ld\n",
-			start, last, (long long)ep->b_blkno,
-			(long)(ep->b_blkno + btodb(ep->b_bcount) - 1));
-		panic("Disk buffer overlap");
-	}
-}
-#endif /* KDB */
 
 /*
  * Update the cluster map because of an allocation of free like ffs.
@@ -121,15 +99,17 @@ ext2_checkoverlap(struct buf *bp, struct inode *ip)
  * Cnt == 1 means free; cnt == -1 means allocating.
  */
 void
-ext2_clusteracct(struct m_ext2fs *fs, char *bbp, int cg, daddr_t bno, int cnt)
+ext2_clusteracct(struct m_ext2fs *fs, char *bbp, int cg, e4fs_daddr_t bno, int cnt)
 {
 	int32_t *sump = fs->e2fs_clustersum[cg].cs_sum;
 	int32_t *lp;
-	int back, bit, end, forw, i, loc, start;
+	e4fs_daddr_t start, end, loc, forw, back;
+	int bit, i;
 
 	/* Initialize the cluster summary array. */
 	if (fs->e2fs_clustersum[cg].cs_init == 0) {
 		int run = 0;
+
 		bit = 1;
 		loc = 0;
 

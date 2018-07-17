@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2012 Semihalf.
  * All rights reserved.
  *
@@ -80,15 +82,18 @@ struct file_info {
 	struct nandfs_inode *inode;
 };
 
-struct file_info user_files[] =
-{
-	{NANDFS_ROOT_INO, NULL, S_IFDIR | 0755, 0, 1, NULL, NULL},
+static struct file_info user_files[] = {
+	{ NANDFS_ROOT_INO, NULL, S_IFDIR | 0755, 0, 1, NULL, NULL },
 };
 
-struct file_info ifile = {NANDFS_IFILE_INO, NULL, 0, 0, -1, NULL, NULL};
-struct file_info sufile = {NANDFS_SUFILE_INO, NULL, 0, 0, -1, NULL, NULL};
-struct file_info cpfile = {NANDFS_CPFILE_INO, NULL, 0, 0, -1, NULL, NULL};
-struct file_info datfile = {NANDFS_DAT_INO, NULL, 0, 0, -1, NULL, NULL};
+static struct file_info ifile =
+	{ NANDFS_IFILE_INO, NULL, 0, 0, -1, NULL, NULL };
+static struct file_info sufile =
+	{ NANDFS_SUFILE_INO, NULL, 0, 0, -1, NULL, NULL };
+static struct file_info cpfile =
+	{ NANDFS_CPFILE_INO, NULL, 0, 0, -1, NULL, NULL };
+static struct file_info datfile =
+	{ NANDFS_DAT_INO, NULL, 0, 0, -1, NULL, NULL };
 
 struct nandfs_block {
 	LIST_ENTRY(nandfs_block) block_link;
@@ -97,7 +102,8 @@ struct nandfs_block {
 	void	*data;
 };
 
-static LIST_HEAD(, nandfs_block) block_head = LIST_HEAD_INITIALIZER(&block_head);
+static LIST_HEAD(, nandfs_block) block_head =
+	LIST_HEAD_INITIALIZER(&block_head);
 
 /* Storage geometry */
 static off_t mediasize;
@@ -106,8 +112,8 @@ static uint64_t nsegments;
 static uint64_t erasesize;
 static uint64_t segsize;
 
-struct nandfs_fsdata fsdata;
-struct nandfs_super_block super_block;
+static struct nandfs_fsdata fsdata;
+static struct nandfs_super_block super_block;
 
 static int is_nand;
 
@@ -120,16 +126,15 @@ static uint32_t bad_segments_count = 0;
 static uint32_t *bad_segments = NULL;
 static uint8_t fsdata_blocks_state[NANDFS_NFSAREAS];
 
-u_char *volumelabel = NULL;
+static u_char *volumelabel = NULL;
 
-struct nandfs_super_root *sr;
+static struct nandfs_super_root *sr;
 
-uint32_t nuserfiles;
-uint32_t seg_segsum_size;
-uint32_t seg_nblocks;
-uint32_t seg_endblock;
+static uint32_t nuserfiles;
+static uint32_t seg_nblocks;
+static uint32_t seg_endblock;
 
-#define SIZE_TO_BLOCK(size) (((size) + (blocksize - 1)) / blocksize)
+#define SIZE_TO_BLOCK(size) howmany(size, blocksize)
 
 static uint32_t
 nandfs_first_block(void)
@@ -311,8 +316,8 @@ count_su_blocks(void)
 	}
 
 	debug("bad segment needs %#jx", blk);
-	if (blk >= NDADDR) {
-		printf("nandfs: file too big (%jd > %d)\n", blk, NDADDR);
+	if (blk >= NANDFS_NDADDR) {
+		printf("nandfs: file too big (%jd > %d)\n", blk, NANDFS_NDADDR);
 		exit(2);
 	}
 
@@ -517,6 +522,7 @@ save_segsum(struct nandfs_segment_summary *ss)
 static void
 create_fsdata(void)
 {
+	struct uuid tmp;
 
 	memset(&fsdata, 0, sizeof(struct nandfs_fsdata));
 
@@ -537,7 +543,8 @@ create_fsdata(void)
 	fsdata.f_checkpoint_size = sizeof(struct nandfs_checkpoint);
 	fsdata.f_segment_usage_size = sizeof(struct nandfs_segment_usage);
 
-	uuidgen(&fsdata.f_uuid, 1);
+	uuidgen(&tmp, 1);
+	fsdata.f_uuid = tmp;
 
 	if (volumelabel)
 		memcpy(fsdata.f_volume_name, volumelabel, 16);
@@ -805,7 +812,7 @@ create_fs(void)
 	char *data;
 	int i;
 
-	nuserfiles = (sizeof(user_files) / sizeof(user_files[0]));
+	nuserfiles = nitems(user_files);
 
 	/* Count and assign blocks */
 	count_seg_blocks();
@@ -894,7 +901,7 @@ check_parameters(void)
 		    NANDFS_SEG_MIN_BLOCKS);
 
 	/* check reserved segment percentage */
-	if ((rsv_segment_percent < 1) && (rsv_segment_percent > 99))
+	if ((rsv_segment_percent < 1) || (rsv_segment_percent > 99))
 		errx(1, "Bad reserved segment percentage. "
 		    "Must in range 1..99.");
 
@@ -985,10 +992,10 @@ calculate_geometry(int fd)
 	/* Get storage erase unit size */
 	if (!is_nand)
 		erasesize = NANDFS_DEF_ERASESIZE;
-	else if (ioctl(fd, NAND_IO_GET_CHIP_PARAM, &chip_params) == -1)
-		errx(1, "Cannot ioctl(NAND_IO_GET_CHIP_PARAM)");
-	else
+	else if (ioctl(fd, NAND_IO_GET_CHIP_PARAM, &chip_params) != -1)
 		erasesize = chip_params.page_size * chip_params.pages_per_block;
+	else
+		errx(1, "Cannot ioctl(NAND_IO_GET_CHIP_PARAM)");
 
 	debug("erasesize: %#jx", (uintmax_t)erasesize);
 
@@ -1085,7 +1092,7 @@ static void
 print_summary(void)
 {
 
-	printf("filesystem created succesfully\n");
+	printf("filesystem was created successfully\n");
 	printf("total segments: %#jx valid segments: %#jx\n", nsegments,
 	    nsegments - bad_segments_count);
 	printf("total space: %ju MB free: %ju MB\n",

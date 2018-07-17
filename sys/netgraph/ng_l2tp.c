@@ -98,7 +98,7 @@ static MALLOC_DEFINE(M_NETGRAPH_L2TP, "netgraph_l2tp", "netgraph l2tp node");
 #define L2TP_ENABLE_DSEQ	1			/* enable data seq # */
 
 /* Compare sequence numbers using circular math */
-#define L2TP_SEQ_DIFF(x, y)	((int)((int16_t)(x) - (int16_t)(y)))
+#define L2TP_SEQ_DIFF(x, y)	((int16_t)((x) - (y)))
 
 #define SESSHASHSIZE		0x0020
 #define SESSHASH(x)		(((x) ^ ((x) >> 8)) & (SESSHASHSIZE - 1))
@@ -1540,6 +1540,16 @@ ng_l2tp_xmit_ctrl(priv_p priv, struct mbuf *m, u_int16_t ns)
 
 		/* Make room for L2TP header */
 		M_PREPEND(m, 10, M_NOWAIT);	/* - 2 + 12 = 10 */
+		if (m == NULL) {
+			priv->stats.memoryFailures++;
+			return (ENOBUFS);
+		}
+
+		/*
+		 * The below requires 12 contiguous bytes for the L2TP header
+		 * to be written into.
+		 */
+		m = m_pullup(m, 12);
 		if (m == NULL) {
 			priv->stats.memoryFailures++;
 			return (ENOBUFS);

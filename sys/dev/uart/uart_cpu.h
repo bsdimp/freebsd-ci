@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003, 2004 Marcel Moolenaar
  * All rights reserved.
  *
@@ -33,6 +35,8 @@
 #include <sys/lock.h>
 #include <sys/mutex.h>
 
+struct uart_softc;
+
 /*
  * Low-level operations for use by console and/or debug port support.
  */
@@ -51,7 +55,6 @@ extern bus_space_tag_t uart_bus_space_mem;
 /*
  * Console and debug port device info.
  */
-struct uart_softc;
 struct uart_devinfo {
 	SLIST_ENTRY(uart_devinfo) next;
 	struct uart_ops *ops;
@@ -68,6 +71,7 @@ struct uart_devinfo {
 	int	(*detach)(struct uart_softc*);
 	void	*cookie;		/* Type dependent use. */
 	struct mtx *hwmtx;
+	struct uart_softc *sc;		/* valid only from start of attach */
 };
 
 int uart_cpu_eqres(struct uart_bas *, struct uart_bas *);
@@ -77,6 +81,8 @@ int uart_getenv(int, struct uart_devinfo *, struct uart_class *);
 const char *uart_getname(struct uart_class *);
 struct uart_ops *uart_getops(struct uart_class *);
 int uart_getrange(struct uart_class *);
+u_int uart_getregshift(struct uart_class *);
+u_int uart_getregiowidth(struct uart_class *);
 
 void uart_add_sysdev(struct uart_devinfo *);
 
@@ -166,5 +172,8 @@ uart_getc(struct uart_devinfo *di)
 
 	return (di->ops->getc(&di->bas, di->hwmtx));
 }
+
+void uart_grab(struct uart_devinfo *di);
+void uart_ungrab(struct uart_devinfo *di);
 
 #endif /* _DEV_UART_CPU_H_ */

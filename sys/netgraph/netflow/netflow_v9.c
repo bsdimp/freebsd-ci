@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Alexander V. Chernikov <melifaro@ipfw.ru>
  * All rights reserved.
  *
@@ -26,22 +28,22 @@
  * 	$FreeBSD$
  */
 
-static const char rcs_id[] =
-    "@(#) $FreeBSD$";
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include "opt_inet6.h"
 #include "opt_route.h"
 #include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/counter.h>
 #include <sys/kernel.h>
+#include <sys/ktr.h>
 #include <sys/limits.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
-#include <sys/systm.h>
 #include <sys/socket.h>
-#include <sys/endian.h>
-
-#include <machine/atomic.h>
-#include <machine/stdarg.h>
+#include <vm/uma.h>
 
 #include <net/if.h>
 #include <net/route.h>

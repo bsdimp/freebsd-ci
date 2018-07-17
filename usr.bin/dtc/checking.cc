@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 David Chisnall
  * All rights reserved.
  *
@@ -33,6 +35,8 @@
 #include "checking.hh"
 #include <stdio.h>
 
+using std::string;
+
 namespace dtc
 {
 namespace fdt
@@ -40,8 +44,79 @@ namespace fdt
 namespace checking
 {
 
+namespace
+{
+	struct deleted_node_checker : public checker
+	{
+		deleted_node_checker(const char *name) : checker(name) {}
+		virtual bool check_node(device_tree *, const node_ptr &n)
+		{
+			auto &deleted = n->deleted_child_nodes();
+			if (deleted.empty())
+			{
+				return true;
+			}
+			bool plural = deleted.size() > 1;
+			string errmsg("Attempts to delete ");
+			errmsg += plural ? "nodes" : "node";
+			errmsg += " that ";
+			errmsg += plural ? "were" : "was";
+			errmsg += " not added in merge: ";
+			for (auto &d : deleted)
+			{
+				errmsg += d;
+			}
+			report_error(errmsg.c_str());
+			return false;
+		}
+	};
+	/**
+	 * Checker that verifies that every node that has children has
+	 * #address-cells and #size-cells properties.
+	 */
+	struct address_cells_checker : public checker
+	{
+		address_cells_checker(const char *name) : checker(name) {}
+		virtual bool check_node(device_tree *, const node_ptr &n)
+		{
+			// If this has no children, it trivially meets the
+			// conditions.
+			if (n->child_begin() == n->child_end())
+			{
+				return true;
+			}
+			bool found_address = false;
+			bool found_size = false;
+			for (auto i=n->property_begin(), e=n->property_end() ; i!=e ; ++i)
+			{
+				if (!found_address)
+				{
+					found_address = ((*i)->get_key() == "#address-cells");
+				}
+				if (!found_size)
+				{
+					found_size = ((*i)->get_key() == "#size-cells");
+				}
+				if (found_size && found_address)
+				{
+						break;
+				}
+			}
+			if (!found_address)
+			{
+					report_error("Missing #address-cells property");
+			}
+			if (!found_size)
+			{
+					report_error("Missing #size-cells property");
+			}
+			return found_address && found_size;
+		}
+	};
+} // anonymous namespace
+
 bool
-checker::visit_node(device_tree *tree, node *n)
+checker::visit_node(device_tree *tree, const node_ptr &n)
 {
 	path.push_back(std::make_pair(n->name, n->unit_address));
 	// Check this node
@@ -50,8 +125,7 @@ checker::visit_node(device_tree *tree, node *n)
 		return false;
 	}
 	// Now check its properties
-	for (node::property_iterator i=n->property_begin(), e=n->property_end()
-	     ; i!=e ; ++i)
+	for (auto i=n->property_begin(), e=n->property_end() ; i!=e ; ++i)
 	{
 		if (!check_property(tree, n, *i))
 		{
@@ -75,22 +149,21 @@ void
 checker::report_error(const char *errmsg)
 {
 	fprintf(stderr, "Error: %s, while checking node: ", errmsg);
-	for (device_tree::node_path::iterator p=path.begin()+1, pe=path.end() ;
-	     p!=pe ; ++p)
+	for (auto &p : path)
 	{
 		putc('/', stderr);
-		p->first.dump();
-		if (!(p->second.empty()))
+		puts(p.first.c_str());
+		if (!(p.second.empty()))
 		{
 			putc('@', stderr);
-			p->second.dump();
+			puts(p.second.c_str());
 		}
 	}
 	fprintf(stderr, " [-W%s]\n", checker_name);
 }
 
 bool
-property_checker::check_property(device_tree *tree, node *n, property *p)
+property_checker::check_property(device_tree *tree, const node_ptr &n, property_ptr p)
 {
 	if (p->get_key() == key)
 	{
@@ -104,7 +177,7 @@ property_checker::check_property(device_tree *tree, node *n, property *p)
 }
 
 bool
-property_size_checker::check(device_tree *tree, node *n, property *p)
+property_size_checker::check(device_tree *, const node_ptr &, property_ptr p)
 {
 	uint32_t psize = 0;
 	for (property::value_iterator i=p->begin(),e=p->end() ; i!=e ; ++i)
@@ -120,7 +193,7 @@ property_size_checker::check(device_tree *tree, node *n, property *p)
 
 template<property_value::value_type T>
 void
-check_manager::add_property_type_checker(const char *name, string prop)
+check_manager::add_property_type_checker(const char *name, const string &prop)
 {
 	checkers.insert(std::make_pair(string(name),
 		new property_type_checker<T>(name, prop)));
@@ -128,7 +201,7 @@ check_manager::add_property_type_checker(const char *name, string prop)
 
 void
 check_manager::add_property_size_checker(const char *name,
-                                         string prop,
+                                         const string &prop,
                                          uint32_t size)
 {
 	checkers.insert(std::make_pair(string(name),
@@ -145,6 +218,7 @@ check_manager::~check_manager()
 	while (disabled_checkers.begin() != disabled_checkers.end())
 	{
 		delete disabled_checkers.begin()->second;
+		disabled_checkers.erase(disabled_checkers.begin());
 	}
 }
 
@@ -157,16 +231,19 @@ check_manager::check_manager()
 	add_property_type_checker<property_value::STRING>(
 			"type-model", string("model"));
 	add_property_size_checker("type-phandle", string("phandle"), 4);
+	disabled_checkers.insert(std::make_pair(string("cells-attributes"),
+		new address_cells_checker("cells-attributes")));
+	checkers.insert(std::make_pair(string("deleted-nodes"),
+		new deleted_node_checker("deleted-nodes")));
 }
 
 bool
 check_manager::run_checks(device_tree *tree, bool keep_going)
 {
 	bool success = true;
-	for (std::map<string, checker*>::iterator i=checkers.begin(),
-	     e=checkers.end() ; i!=e ; ++i)
+	for (auto &i : checkers)
 	{
-		success &= i->second->check_tree(tree);
+		success &= i.second->check_tree(tree);
 		if (!(success || keep_going))
 		{
 			break;
@@ -176,9 +253,9 @@ check_manager::run_checks(device_tree *tree, bool keep_going)
 }
 
 bool
-check_manager::disable_checker(string name)
+check_manager::disable_checker(const string &name)
 {
-	std::map<string, checker*>::iterator checker = checkers.find(name);
+	auto checker = checkers.find(name);
 	if (checker != checkers.end())
 	{
 		disabled_checkers.insert(std::make_pair(name,
@@ -190,10 +267,9 @@ check_manager::disable_checker(string name)
 }
 
 bool
-check_manager::enable_checker(string name)
+check_manager::enable_checker(const string &name)
 {
-	std::map<string, checker*>::iterator checker =
-		disabled_checkers.find(name);
+	auto checker = disabled_checkers.find(name);
 	if (checker != disabled_checkers.end())
 	{
 		checkers.insert(std::make_pair(name, checker->second));

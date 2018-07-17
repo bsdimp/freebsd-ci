@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)dumpfs.8	8.1 (Berkeley) 6/5/93
 .\" $FreeBSD$
 .\"
-.Dd Jul 14, 2011
+.Dd May 16, 2013
 .Dt DUMPFS 8
 .Os
 .Sh NAME
@@ -76,11 +76,31 @@ is specified, a
 .Xr newfs 8
 command is printed that can be used to generate a new file system
 with equivalent settings.
+Please note that
+.Xr newfs 8
+options
+.Fl E ,
+.Fl R ,
+.Fl S ,
+and
+.Fl T
+are not handled and
+.Fl p
+is not useful in this case so is omitted.
+.Xr Newfs 8
+options
+.Fl n
+and
+.Fl r
+are neither checked for nor output but should be.
+The
+.Fl r
+flag is needed if the filesystem uses
+.Xr gjournal 8 .
 .Sh SEE ALSO
-.Xr disktab 5 ,
 .Xr fs 5 ,
-.Xr disklabel 8 ,
 .Xr fsck 8 ,
+.Xr gpart 8 ,
 .Xr newfs 8 ,
 .Xr tunefs 8
 .Sh HISTORY

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Matthew Jacob
  * All rights reserved.
  *
@@ -166,6 +168,9 @@ struct enc_softc {
 	struct enc_fsm_state 	*enc_fsm_states;
 
 	struct intr_config_hook  enc_boot_hold_ch;
+
+#define 	ENC_ANNOUNCE_SZ		400
+	char			announce_buf[ENC_ANNOUNCE_SZ];
 };
 
 static inline enc_cache_t *
@@ -192,7 +197,6 @@ struct ses_mgmt_mode_page {
 /* Enclosure core interface for sub-drivers */
 int  enc_runcmd(struct enc_softc *, char *, int, char *, int *);
 void enc_log(struct enc_softc *, const char *, ...);
-void enc_done(struct cam_periph *, union ccb *);
 int  enc_error(union ccb *, uint32_t, uint32_t);
 void enc_update_request(enc_softc_t *, uint32_t);
 

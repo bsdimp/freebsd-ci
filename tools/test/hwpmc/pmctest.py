@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# SPDX-License-Identifier: BSD-3-Clause
+#
 # Copyright (c) 2012, Neville-Neil Consulting
 # All rights reserved.
 #
@@ -51,6 +53,10 @@ import sys
 import subprocess
 from subprocess import PIPE
 
+# Use input() for Python version 3
+if sys.version_info[0] == 3:
+    raw_input = input
+
 # A list of strings that are not really counters, just
 # name tags that are output by pmccontrol -L
 notcounter = ["IAF", "IAP", "TSC", "UNC", "UCF", "UCP", "SOFT" ]
@@ -87,7 +93,7 @@ def main():
         print(result)
         if (options.wait == True):
             try:
-                value = input("next?")
+                value = raw_input("next?")
             except EOFError:
                 sys.exit()
 

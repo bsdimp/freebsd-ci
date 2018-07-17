@@ -71,8 +71,17 @@ namespace std
 }
 
 
+#if __cplusplus < 201103L
+#define NOEXCEPT throw()
+#define BADALLOC throw(std::bad_alloc)
+#else
+#define NOEXCEPT noexcept
+#define BADALLOC
+#endif
+
+
 __attribute__((weak))
-void* operator new(size_t size)
+void* operator new(size_t size) BADALLOC
 {
 	if (0 == size)
 	{
@@ -97,56 +106,47 @@ void* operator new(size_t size)
 }
 
 __attribute__((weak))
-void* operator new(size_t size, const std::nothrow_t &) throw()
+void* operator new(size_t size, const std::nothrow_t &) NOEXCEPT
 {
-	if (0 == size)
-	{
-		size = 1;
+	try {
+		return :: operator new(size);
+	} catch (...) {
+		// nothrow operator new should return NULL in case of
+		// std::bad_alloc exception in new handler
+		return NULL;
 	}
-	void *mem = malloc(size);
-	while (0 == mem)
-	{
-		new_handler h = std::get_new_handler();
-		if (0 != h)
-		{
-			try
-			{
-				h();
-			}
-			catch (...)
-			{
-				// nothrow operator new should return NULL in case of
-				// std::bad_alloc exception in new handler
-				return NULL;
-			}
-		}
-		else
-		{
-			return NULL;
-		}
-		mem = malloc(size);
-	}
-
-	return mem;
 }
 
 
 __attribute__((weak))
-void operator delete(void * ptr)
+void operator delete(void * ptr) NOEXCEPT
 {
 	free(ptr);
 }
 
 
 __attribute__((weak))
-void * operator new[](size_t size)
+void * operator new[](size_t size) BADALLOC
 {
 	return ::operator new(size);
 }
 
 
 __attribute__((weak))
-void operator delete[](void * ptr) throw()
+void * operator new[](size_t size, const std::nothrow_t &) NOEXCEPT
+{
+	try {
+		return ::operator new[](size);
+	} catch (...) {
+		// nothrow operator new should return NULL in case of
+		// std::bad_alloc exception in new handler
+		return NULL;
+	}
+}
+
+
+__attribute__((weak))
+void operator delete[](void * ptr) NOEXCEPT
 {
 	::operator delete(ptr);
 }

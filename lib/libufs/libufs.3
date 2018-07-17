@@ -7,7 +7,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd June 4, 2003
+.Dd January 19, 2018
 .Dt LIBUFS 3
 .Os
 .Sh NAME
@@ -55,8 +55,11 @@ to a string describing the error.
 .Sh SEE ALSO
 .Xr bread 3 ,
 .Xr bwrite 3 ,
+.Xr cgget 3 ,
+.Xr cgput 3 ,
 .Xr cgread 3 ,
 .Xr cgread1 3 ,
+.Xr cgwrite 3 ,
 .Xr cgwrite1 3 ,
 .Xr sbread 3 ,
 .Xr sbwrite 3 ,
@@ -71,8 +74,8 @@ The
 library first appeared in
 .Fx 5.0 .
 .Sh AUTHORS
-.An Juli Mallett Aq jmallett@FreeBSD.org
+.An Juli Mallett Aq Mt jmallett@FreeBSD.org
 .Pp
 .An -nosplit
 Additional design, feedback, and ideas were provided by
-.An Poul-Henning Kamp Aq phk@FreeBSD.org .
+.An Poul-Henning Kamp Aq Mt phk@FreeBSD.org .

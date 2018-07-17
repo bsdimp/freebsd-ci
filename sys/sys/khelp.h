@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010 Lawrence Stewart <lstewart@freebsd.org>
  * Copyright (c) 2010 The FreeBSD Foundation
  * All rights reserved.
@@ -55,6 +57,7 @@ struct osd;
 
 /* Helper classes. */
 #define	HELPER_CLASS_TCP	0x00000001
+#define	HELPER_CLASS_SOCKET	0x00000002
 
 /* Public KPI functions. */
 int	khelp_register_helper(struct helper *h);

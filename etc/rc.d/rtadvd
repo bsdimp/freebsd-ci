@@ -6,14 +6,17 @@
 # PROVIDE: rtadvd
 # REQUIRE: DAEMON
 # BEFORE:  LOGIN
-# KEYWORD: nojail shutdown
+# KEYWORD: nojailvnet shutdown
 
 . /etc/rc.subr
 . /etc/network.subr
 
 name="rtadvd"
+desc="Router advertisement daemon"
 rcvar="rtadvd_enable"
 command="/usr/sbin/${name}"
+extra_commands="reload"
+reload_cmd="rtadvd_reload"
 start_precmd="rtadvd_precmd"
 
 rtadvd_precmd()
@@ -60,6 +63,10 @@ rtadvd_precmd()
 	# (use correct src addr)
 	# rtadvd -R "in ipsec ah/transport/ff05::2-fec0:0:0:10::1/require" ${ipv6_network_interfaces}
 	return 0
+}
+
+rtadvd_reload() {
+	/usr/sbin/rtadvctl reload
 }
 
 load_rc_config $name

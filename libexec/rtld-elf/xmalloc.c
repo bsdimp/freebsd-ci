@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
  *
@@ -66,4 +68,32 @@ xstrdup(const char *str)
 	copy = xmalloc(len);
 	memcpy(copy, str, len);
 	return (copy);
+}
+
+void *
+malloc_aligned(size_t size, size_t align)
+{
+	void *mem, *res;
+
+	if (align < sizeof(void *))
+		align = sizeof(void *);
+
+	mem = xmalloc(size + sizeof(void *) + align - 1);
+	res = (void *)round((uintptr_t)mem + sizeof(void *), align);
+	*(void **)((uintptr_t)res - sizeof(void *)) = mem;
+	return (res);
+}
+
+void
+free_aligned(void *ptr)
+{
+	void *mem;
+	uintptr_t x;
+
+	if (ptr == NULL)
+		return;
+	x = (uintptr_t)ptr;
+	x -= sizeof(void *);
+	mem = *(void **)x;
+	free(mem);
 }

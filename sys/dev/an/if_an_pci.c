@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999
  *	Bill Paul <wpaul@ctr.columbia.edu>.  All rights reserved.
  *
@@ -119,16 +121,16 @@ static int
 an_probe_pci(device_t dev)
 {
 	struct an_type		*t;
-	struct an_softc *sc = device_get_softc(dev);
+	uint16_t vid, did;
 
-	bzero(sc, sizeof(struct an_softc));
 	t = an_devs;
+	vid = pci_get_vendor(dev);
+	did = pci_get_device(dev);
 
 	while (t->an_name != NULL) {
-		if (pci_get_vendor(dev) == t->an_vid &&
-		    pci_get_device(dev) == t->an_did) {
+		if (vid == t->an_vid &&
+		    did == t->an_did) {
 			device_set_desc(dev, t->an_name);
-			an_pci_probe(dev);
 			return(BUS_PROBE_DEFAULT);
 		}
 		t++;
@@ -141,31 +143,25 @@ static int
 an_attach_pci(dev)
 	device_t		dev;
 {
-	u_int32_t		command;
 	struct an_softc		*sc;
 	int 			flags, error = 0;
 
 	sc = device_get_softc(dev);
+	bzero(sc, sizeof(struct an_softc));
 	flags = device_get_flags(dev);
+
+	/*
+	 * Setup the lock in PCI attachment since it skips the an_probe
+	 * function.
+	 */
+	mtx_init(&sc->an_mtx, device_get_nameunit(dev), MTX_NETWORK_LOCK,
+	    MTX_DEF);
 
 	if (pci_get_vendor(dev) == AIRONET_VENDORID &&
 	    pci_get_device(dev) == AIRONET_DEVICEID_MPI350) {
 		sc->mpi350 = 1;
 		sc->port_rid = PCIR_BAR(0);
 	} else {
-		/*
-		 * Map control/status registers.
-	 	 */
-		command = pci_read_config(dev, PCIR_COMMAND, 4);
-		command |= PCIM_CMD_PORTEN;
-		pci_write_config(dev, PCIR_COMMAND, command, 4);
-		command = pci_read_config(dev, PCIR_COMMAND, 4);
-
-		if (!(command & PCIM_CMD_PORTEN)) {
-			device_printf(dev, "failed to enable I/O ports!\n");
-			error = ENXIO;
-			goto fail;
-		}
 		sc->port_rid = AN_PCI_LOIO;
 	}
 	error = an_alloc_port(dev, sc->port_rid, 1);
@@ -277,5 +273,7 @@ static driver_t an_pci_driver = {
 static devclass_t an_devclass;
 
 DRIVER_MODULE(an, pci, an_pci_driver, an_devclass, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device;D:#", pci, an,
+    an_devs, sizeof(an_devs[0]), nitems(an_devs) - 1);
 MODULE_DEPEND(an, pci, 1, 1, 1);
 MODULE_DEPEND(an, wlan, 1, 1, 1);

@@ -1,4 +1,4 @@
-/*	$OpenBSD: arc4random.c,v 1.22 2010/12/22 08:23:42 otto Exp $	*/
+/*	$OpenBSD: arc4random.c,v 1.24 2013/06/11 16:59:50 deraadt Exp $	*/
 
 /*
  * Copyright (c) 1996, David Mazieres <dm@uun.org>
@@ -37,7 +37,6 @@ __FBSDID("$FreeBSD$");
 #include <limits.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/types.h>
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
@@ -60,7 +59,6 @@ struct arc4_stream {
 
 static pthread_mutex_t	arc4random_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-#define	RANDOMDEV	"/dev/random"
 #define	KEYSIZE		128
 #define	_ARC4_LOCK()						\
 	do {							\
@@ -113,8 +111,8 @@ arc4_addrandom(u_char *dat, int datlen)
 	rs.j = rs.i;
 }
 
-static size_t
-arc4_sysctl(u_char *buf, size_t size)
+size_t
+__arc4_sysctl(u_char *buf, size_t size)
 {
 	int mib[2];
 	size_t len, done;
@@ -138,41 +136,30 @@ arc4_sysctl(u_char *buf, size_t size)
 static void
 arc4_stir(void)
 {
-	int done, fd, i;
-	struct {
-		struct timeval	tv;
-		pid_t		pid;
-		u_char	 	rnd[KEYSIZE];
-	} rdat;
+	u_char rdat[KEYSIZE];
+	int i;
 
 	if (!rs_initialized) {
 		arc4_init();
 		rs_initialized = 1;
 	}
-	done = 0;
-	if (arc4_sysctl((u_char *)&rdat, KEYSIZE) == KEYSIZE)
-		done = 1;
-	if (!done) {
-		fd = _open(RANDOMDEV, O_RDONLY | O_CLOEXEC, 0);
-		if (fd >= 0) {
-			if (_read(fd, &rdat, KEYSIZE) == KEYSIZE)
-				done = 1;
-			(void)_close(fd);
-		}
-	}
-	if (!done) {
-		(void)gettimeofday(&rdat.tv, NULL);
-		rdat.pid = getpid();
-		/* We'll just take whatever was on the stack too... */
+	if (__arc4_sysctl(rdat, KEYSIZE) != KEYSIZE) {
+		/*
+		 * The sysctl cannot fail. If it does fail on some FreeBSD
+		 * derivative or after some future change, just abort so that
+		 * the problem will be found and fixed. abort is not normally
+		 * suitable for a library but makes sense here.
+		 */
+		abort();
 	}
 
-	arc4_addrandom((u_char *)&rdat, KEYSIZE);
+	arc4_addrandom(rdat, KEYSIZE);
 
 	/*
 	 * Discard early keystream, as per recommendations in:
 	 * "(Not So) Random Shuffles of RC4" by Ilya Mironov.
 	 */
-	for (i = 0; i < 1024; i++)
+	for (i = 0; i < 3072; i++)
 		(void)arc4_getbyte();
 	arc4_count = 1600000;
 }
@@ -182,8 +169,7 @@ arc4_stir_if_needed(void)
 {
 	pid_t pid = getpid();
 
-	if (arc4_count <= 0 || !rs_initialized || arc4_stir_pid != pid)
-	{
+	if (arc4_count <= 0 || !rs_initialized || arc4_stir_pid != pid) {
 		arc4_stir_pid = pid;
 		arc4_stir();
 	}
@@ -276,18 +262,8 @@ arc4random_uniform(u_int32_t upper_bound)
 	if (upper_bound < 2)
 		return 0;
 
-#if (ULONG_MAX > 0xffffffffUL)
-	min = 0x100000000UL % upper_bound;
-#else
-	/* Calculate (2**32 % upper_bound) avoiding 64-bit math */
-	if (upper_bound > 0x80000000)
-		min = 1 + ~upper_bound;		/* 2**32 - upper_bound */
-	else {
-		/* (2**32 - (x * 2)) % x == 2**32 % x when x <= 2**31 */
-		min = ((0xffffffff - (upper_bound * 2)) + 1) % upper_bound;
-	}
-#endif
-
+	/* 2**32 % x == (2**32 - x) % x */
+	min = -upper_bound % upper_bound;
 	/*
 	 * This could theoretically loop forever but each retry has
 	 * p > 0.5 (worst case, usually far better) of selecting a

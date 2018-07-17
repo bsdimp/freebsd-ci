@@ -1,6 +1,8 @@
 /*	$NetBSD: ibcs2_ioctl.c,v 1.6 1995/03/14 15:12:28 scottb Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 1994, 1995 Scott Bartram
  * All rights reserved.
  *
@@ -31,7 +33,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/consio.h>
 #include <sys/fcntl.h>
 #include <sys/file.h>
@@ -331,10 +333,12 @@ ibcs2_ioctl(td, uap)
 	struct ibcs2_ioctl_args *uap;
 {
 	struct proc *p = td->td_proc;
+	cap_rights_t rights;
 	struct file *fp;
 	int error;
 
-	if ((error = fget(td, uap->fd, CAP_IOCTL, &fp)) != 0) {
+	error = fget(td, uap->fd, cap_rights_init(&rights, CAP_IOCTL), &fp);
+	if (error != 0) {
 		DPRINTF(("ibcs2_ioctl(%d): bad fd %d ", p->p_pid,
 			 uap->fd));
 		return EBADF;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2006 Juniper Networks.
  * All rights reserved.
  *
@@ -74,6 +76,9 @@ quicc_fdt_probe(device_t dev)
 {
 	phandle_t par;
 	pcell_t clock;
+
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
 
 	if (!ofw_bus_is_compatible(dev, "fsl,cpm2"))
 		return (ENXIO);

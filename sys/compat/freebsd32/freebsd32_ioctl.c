@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2008 David E. O'Brien
  * All rights reserved.
  *
@@ -30,17 +32,14 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include "opt_compat.h"
-
 #include <sys/param.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/cdio.h>
 #include <sys/fcntl.h>
 #include <sys/filio.h>
 #include <sys/file.h>
 #include <sys/ioccom.h>
 #include <sys/malloc.h>
-#include <sys/mdioctl.h>
 #include <sys/memrange.h>
 #include <sys/pciio.h>
 #include <sys/proc.h>
@@ -50,112 +49,17 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/systm.h>
+#include <sys/uio.h>
 
 #include <compat/freebsd32/freebsd32.h>
 #include <compat/freebsd32/freebsd32_ioctl.h>
 #include <compat/freebsd32/freebsd32_proto.h>
 
-/* Cannot get exact size in 64-bit due to alignment issue of entire struct. */
-CTASSERT((sizeof(struct md_ioctl32)+4) == 436);
 CTASSERT(sizeof(struct ioc_read_toc_entry32) == 8);
-CTASSERT(sizeof(struct ioc_toc_header32) == 4);
 CTASSERT(sizeof(struct mem_range_op32) == 12);
 CTASSERT(sizeof(struct pci_conf_io32) == 36);
 CTASSERT(sizeof(struct pci_match_conf32) == 44);
 CTASSERT(sizeof(struct pci_conf32) == 44);
-
-
-static int
-freebsd32_ioctl_md(struct thread *td, struct freebsd32_ioctl_args *uap,
-    struct file *fp)
-{
-	struct md_ioctl mdv;
-	struct md_ioctl32 md32;
-	u_long com = 0;
-	int i, error;
-
-	if (uap->com & IOC_IN) {
-		if ((error = copyin(uap->data, &md32, sizeof(md32)))) {
-			return (error);
-		}
-		CP(md32, mdv, md_version);
-		CP(md32, mdv, md_unit);
-		CP(md32, mdv, md_type);
-		PTRIN_CP(md32, mdv, md_file);
-		CP(md32, mdv, md_mediasize);
-		CP(md32, mdv, md_sectorsize);
-		CP(md32, mdv, md_options);
-		CP(md32, mdv, md_base);
-		CP(md32, mdv, md_fwheads);
-		CP(md32, mdv, md_fwsectors);
-	} else if (uap->com & IOC_OUT) {
-		/*
-		 * Zero the buffer so the user always
-		 * gets back something deterministic.
-		 */
-		bzero(&mdv, sizeof mdv);
-	}
-
-	switch (uap->com) {
-	case MDIOCATTACH_32:
-		com = MDIOCATTACH;
-		break;
-	case MDIOCDETACH_32:
-		com = MDIOCDETACH;
-		break;
-	case MDIOCQUERY_32:
-		com = MDIOCQUERY;
-		break;
-	case MDIOCLIST_32:
-		com = MDIOCLIST;
-		break;
-	default:
-		panic("%s: unknown MDIOC %#x", __func__, uap->com);
-	}
-	error = fo_ioctl(fp, com, (caddr_t)&mdv, td->td_ucred, td);
-	if (error == 0 && (com & IOC_OUT)) {
-		CP(mdv, md32, md_version);
-		CP(mdv, md32, md_unit);
-		CP(mdv, md32, md_type);
-		PTROUT_CP(mdv, md32, md_file);
-		CP(mdv, md32, md_mediasize);
-		CP(mdv, md32, md_sectorsize);
-		CP(mdv, md32, md_options);
-		CP(mdv, md32, md_base);
-		CP(mdv, md32, md_fwheads);
-		CP(mdv, md32, md_fwsectors);
-		if (com == MDIOCLIST) {
-			/*
-			 * Use MDNPAD, and not MDNPAD32.  Padding is
-			 * allocated and used by compat32 ABI.
-			 */
-			for (i = 0; i < MDNPAD; i++)
-				CP(mdv, md32, md_pad[i]);
-		}
-		error = copyout(&md32, uap->data, sizeof(md32));
-	}
-	return error;
-}
-
-
-static int
-freebsd32_ioctl_ioc_toc_header(struct thread *td,
-    struct freebsd32_ioctl_args *uap, struct file *fp)
-{
-	struct ioc_toc_header toch;
-	struct ioc_toc_header32 toch32;
-	int error;
-
-	if ((error = copyin(uap->data, &toch32, sizeof(toch32))))
-		return (error);
-	CP(toch32, toch, len);
-	CP(toch32, toch, starting_track);
-	CP(toch32, toch, ending_track);
-	error = fo_ioctl(fp, CDIOREADTOCHEADER, (caddr_t)&toch,
-	    td->td_ucred, td);
-	return (error);
-}
-
 
 static int
 freebsd32_ioctl_ioc_read_toc(struct thread *td,
@@ -344,6 +248,71 @@ cleanup:
 	return (error);
 }
 
+static int
+freebsd32_ioctl_sg(struct thread *td,
+    struct freebsd32_ioctl_args *uap, struct file *fp)
+{
+	struct sg_io_hdr io;
+	struct sg_io_hdr32 io32;
+	int error;
+
+	if ((error = copyin(uap->data, &io32, sizeof(io32))) != 0)
+		return (error);
+
+	CP(io32, io, interface_id);
+	CP(io32, io, dxfer_direction);
+	CP(io32, io, cmd_len);
+	CP(io32, io, mx_sb_len);
+	CP(io32, io, iovec_count);
+	CP(io32, io, dxfer_len);
+	PTRIN_CP(io32, io, dxferp);
+	PTRIN_CP(io32, io, cmdp);
+	PTRIN_CP(io32, io, sbp);
+	CP(io32, io, timeout);
+	CP(io32, io, flags);
+	CP(io32, io, pack_id);
+	PTRIN_CP(io32, io, usr_ptr);
+	CP(io32, io, status);
+	CP(io32, io, masked_status);
+	CP(io32, io, msg_status);
+	CP(io32, io, sb_len_wr);
+	CP(io32, io, host_status);
+	CP(io32, io, driver_status);
+	CP(io32, io, resid);
+	CP(io32, io, duration);
+	CP(io32, io, info);
+
+	if ((error = fo_ioctl(fp, SG_IO, (caddr_t)&io, td->td_ucred, td)) != 0)
+		return (error);
+
+	CP(io, io32, interface_id);
+	CP(io, io32, dxfer_direction);
+	CP(io, io32, cmd_len);
+	CP(io, io32, mx_sb_len);
+	CP(io, io32, iovec_count);
+	CP(io, io32, dxfer_len);
+	PTROUT_CP(io, io32, dxferp);
+	PTROUT_CP(io, io32, cmdp);
+	PTROUT_CP(io, io32, sbp);
+	CP(io, io32, timeout);
+	CP(io, io32, flags);
+	CP(io, io32, pack_id);
+	PTROUT_CP(io, io32, usr_ptr);
+	CP(io, io32, status);
+	CP(io, io32, masked_status);
+	CP(io, io32, msg_status);
+	CP(io, io32, sb_len_wr);
+	CP(io, io32, host_status);
+	CP(io, io32, driver_status);
+	CP(io, io32, resid);
+	CP(io, io32, duration);
+	CP(io, io32, info);
+
+	error = copyout(&io32, uap->data, sizeof(io32));
+
+	return (error);
+}
+
 int
 freebsd32_ioctl(struct thread *td, struct freebsd32_ioctl_args *uap)
 {
@@ -353,9 +322,11 @@ freebsd32_ioctl(struct thread *td, struct freebsd32_ioctl_args *uap)
 		caddr_t	data;
 	}*/ ;
 	struct file *fp;
+	cap_rights_t rights;
 	int error;
 
-	if ((error = fget(td, uap->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, uap->fd, cap_rights_init(&rights, CAP_IOCTL), &fp);
+	if (error != 0)
 		return (error);
 	if ((fp->f_flag & (FREAD | FWRITE)) == 0) {
 		fdrop(fp, td);
@@ -363,19 +334,8 @@ freebsd32_ioctl(struct thread *td, struct freebsd32_ioctl_args *uap)
 	}
 
 	switch (uap->com) {
-	case MDIOCATTACH_32:	/* FALLTHROUGH */
-	case MDIOCDETACH_32:	/* FALLTHROUGH */
-	case MDIOCQUERY_32:	/* FALLTHROUGH */
-	case MDIOCLIST_32:
-		error = freebsd32_ioctl_md(td, uap, fp);
-		break;
-
 	case CDIOREADTOCENTRYS_32:
 		error = freebsd32_ioctl_ioc_read_toc(td, uap, fp);
-		break;
-
-	case CDIOREADTOCHEADER_32:
-		error = freebsd32_ioctl_ioc_toc_header(td, uap, fp);
 		break;
 
 	case FIODGNAME_32:
@@ -389,6 +349,10 @@ freebsd32_ioctl(struct thread *td, struct freebsd32_ioctl_args *uap)
 
 	case PCIOCGETCONF_32:
 		error = freebsd32_ioctl_pciocgetconf(td, uap, fp);
+		break;
+
+	case SG_IO_32:
+		error = freebsd32_ioctl_sg(td, uap, fp);
 		break;
 
 	default:

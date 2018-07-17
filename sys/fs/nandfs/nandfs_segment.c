@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2012 Semihalf.
  * All rights reserved.
  *
@@ -38,6 +40,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/mount.h>
 #include <sys/mutex.h>
 #include <sys/namei.h>
+#include <sys/rwlock.h>
 #include <sys/sysctl.h>
 #include <sys/vnode.h>
 #include <sys/buf.h>
@@ -198,7 +201,7 @@ delete_segment(struct nandfs_seginfo *seginfo)
 			TAILQ_REMOVE(&seg->segsum, bp, b_cluster.cluster_entry);
 			bp->b_flags &= ~B_MANAGED;
 			brelse(bp);
-		};
+		}
 
 		LIST_REMOVE(seg, seg_link);
 		free(seg, M_DEVBUF);
@@ -478,6 +481,7 @@ nandfs_iterate_dirty_vnodes(struct mount *mp, struct nandfs_seginfo *seginfo)
 	struct nandfs_node *nandfs_node;
 	struct vnode *vp, *mvp;
 	struct thread *td;
+	struct bufobj *bo;
 	int error, update;
 
 	td = curthread;
@@ -498,17 +502,21 @@ nandfs_iterate_dirty_vnodes(struct mount *mp, struct nandfs_seginfo *seginfo)
 			update = 1;
 		}
 
+		bo = &vp->v_bufobj;
+		BO_LOCK(bo);
 		if (vp->v_bufobj.bo_dirty.bv_cnt) {
 			error = nandfs_iterate_dirty_buf(vp, seginfo, 0);
 			if (error) {
 				nandfs_error("%s: cannot iterate vnode:%p "
 				    "err:%d\n", __func__, vp, error);
 				vput(vp);
+				BO_UNLOCK(bo);
 				return (error);
 			}
 			update = 1;
 		} else
 			vput(vp);
+		BO_UNLOCK(bo);
 
 		if (update)
 			nandfs_node_update(nandfs_node);
@@ -702,7 +710,7 @@ nandfs_save_buf(struct buf *bp, uint64_t blocknr, struct nandfs_device *fsdev)
 	if (bp->b_bufobj != bo) {
 		BO_LOCK(bp->b_bufobj);
 		BUF_LOCK(bp, LK_EXCLUSIVE | LK_NOWAIT | LK_INTERLOCK,
-		    BO_MTX(bp->b_bufobj));
+		    BO_LOCKPTR(bp->b_bufobj));
 		KASSERT(BUF_ISLOCKED(bp), ("Problem with locking buffer"));
 	}
 
@@ -746,7 +754,7 @@ nandfs_clean_segblocks(struct nandfs_segment *seg, uint8_t unlock)
 	TAILQ_FOREACH_SAFE(bp, &seg->segsum, b_cluster.cluster_entry, tbp) {
 		TAILQ_REMOVE(&seg->segsum, bp, b_cluster.cluster_entry);
 		nandfs_clean_buf(fsdev, bp);
-	};
+	}
 
 	TAILQ_FOREACH_SAFE(bp, &seg->data, b_cluster.cluster_entry, tbp) {
 		TAILQ_REMOVE(&seg->data, bp, b_cluster.cluster_entry);
@@ -801,7 +809,7 @@ nandfs_save_segblocks(struct nandfs_segment *seg, uint8_t unlock)
 			goto out;
 		}
 		i++;
-	};
+	}
 
 	i = 0;
 	TAILQ_FOREACH_SAFE(bp, &seg->data, b_cluster.cluster_entry, tbp) {

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Mitsuru IWASAKI
  * All rights reserved.
  *
@@ -45,9 +47,8 @@ __FBSDID("$FreeBSD$");
 #include <machine/nexusvar.h>
 
 int acpi_resume_beep;
-TUNABLE_INT("debug.acpi.resume_beep", &acpi_resume_beep);
-SYSCTL_INT(_debug_acpi, OID_AUTO, resume_beep, CTLFLAG_RW, &acpi_resume_beep,
-    0, "Beep the PC speaker when resuming");
+SYSCTL_INT(_debug_acpi, OID_AUTO, resume_beep, CTLFLAG_RWTUN,
+    &acpi_resume_beep, 0, "Beep the PC speaker when resuming");
 
 int acpi_reset_video;
 TUNABLE_INT("hw.acpi.reset_video", &acpi_reset_video);
@@ -62,6 +63,7 @@ acpi_machdep_init(device_t dev)
 	sc = device_get_softc(dev);
 
 	acpi_apm_init(sc);
+	acpi_install_wakeup_handler(sc);
 
 	if (intr_model != ACPI_INTR_PIC)
 		acpi_SetIntrModel(intr_model);
@@ -86,13 +88,6 @@ acpi_machdep_quirks(int *quirks)
 {
 
 	return (0);
-}
-
-void
-acpi_cpu_c1()
-{
-
-	__asm __volatile("sti; hlt");
 }
 
 /*
@@ -355,20 +350,13 @@ nexus_acpi_probe(device_t dev)
 static int
 nexus_acpi_attach(device_t dev)
 {
-	device_t acpi_dev;
-	int error;
 
 	nexus_init_resources();
 	bus_generic_probe(dev);
-	acpi_dev = BUS_ADD_CHILD(dev, 10, "acpi", 0);
-	if (acpi_dev == NULL)
+	if (BUS_ADD_CHILD(dev, 10, "acpi", 0) == NULL)
 		panic("failed to add acpi0 device");
 
-	error = bus_generic_attach(dev);
-	if (error == 0)
-		acpi_install_wakeup_handler(device_get_softc(acpi_dev));
-
-	return (error);
+	return (bus_generic_attach(dev));
 }
 
 static device_method_t nexus_acpi_methods[] = {

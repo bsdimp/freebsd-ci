@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008-2009 Hans Petter Selasky. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -138,8 +140,8 @@ libusb20_tr_close(struct libusb20_transfer *xfer)
 		free(xfer->ppBuffer);
 	}
 	/* reset variable fields in case the transfer is opened again */
-	xfer->priv_sc0 = 0;
-	xfer->priv_sc1 = 0;
+	xfer->priv_sc0 = NULL;
+	xfer->priv_sc1 = NULL;
 	xfer->is_opened = 0;
 	xfer->is_pending = 0;
 	xfer->is_cancel = 0;
@@ -175,6 +177,12 @@ libusb20_tr_open_stream(struct libusb20_transfer *xfer, uint32_t MaxBufSize,
 		return (LIBUSB20_ERROR_BUSY);
 	if (MaxFrameCount & LIBUSB20_MAX_FRAME_PRE_SCALE) {
 		MaxFrameCount &= ~LIBUSB20_MAX_FRAME_PRE_SCALE;
+		/*
+		 * The kernel can setup 8 times more frames when
+		 * pre-scaling ISOCHRONOUS transfers. Make sure the
+		 * length and pointer buffers are big enough:
+		 */
+		MaxFrameCount *= 8;
 		pre_scale = 1;
 	} else {
 		pre_scale = 0;
@@ -199,8 +207,13 @@ libusb20_tr_open_stream(struct libusb20_transfer *xfer, uint32_t MaxBufSize,
 	}
 	memset(xfer->ppBuffer, 0, size);
 
-	error = xfer->pdev->methods->tr_open(xfer, MaxBufSize,
-	    MaxFrameCount, ep_no, stream_id, pre_scale);
+	if (pre_scale) {
+		error = xfer->pdev->methods->tr_open(xfer, MaxBufSize,
+		    MaxFrameCount / 8, ep_no, stream_id, 1);
+	} else {
+		error = xfer->pdev->methods->tr_open(xfer, MaxBufSize,
+		    MaxFrameCount, ep_no, stream_id, 0);
+	}
 
 	if (error) {
 		free(xfer->ppBuffer);
@@ -600,6 +613,12 @@ libusb20_dev_close(struct libusb20_device *pdev)
 	 */
 	pdev->claimed_interface = 0;
 
+	/*
+	 * The following variable is only used by the libusb v1.0
+	 * compat layer:
+	 */
+	pdev->auto_detach = 0;
+
 	return (error);
 }
 
@@ -722,6 +741,31 @@ libusb20_dev_get_power_mode(struct libusb20_device *pdev)
 	return (power_mode);
 }
 
+int
+libusb20_dev_get_port_path(struct libusb20_device *pdev, uint8_t *buf, uint8_t bufsize)
+{
+
+	if (pdev->port_level == 0) {
+		/*
+		 * Fallback for backends without port path:
+		 */
+		if (bufsize < 2)
+			return (LIBUSB20_ERROR_OVERFLOW);
+		buf[0] = pdev->parent_address;
+		buf[1] = pdev->parent_port;
+		return (2);
+	}
+
+	/* check if client buffer is too small */
+	if (pdev->port_level > bufsize)
+		return (LIBUSB20_ERROR_OVERFLOW);
+
+	/* copy port number information */
+	memcpy(buf, pdev->port_path, pdev->port_level);
+
+	return (pdev->port_level);	/* success */
+}
+
 uint16_t
 libusb20_dev_get_power_usage(struct libusb20_device *pdev)
 {
@@ -770,6 +814,7 @@ libusb20_dev_req_string_sync(struct libusb20_device *pdev,
 {
 	struct LIBUSB20_CONTROL_SETUP_DECODED req;
 	int error;
+	int flags;
 
 	/* make sure memory is initialised */
 	memset(ptr, 0, len);
@@ -796,22 +841,24 @@ libusb20_dev_req_string_sync(struct libusb20_device *pdev,
 	error = libusb20_dev_request_sync(pdev, &req,
 	    ptr, NULL, 1000, LIBUSB20_TRANSFER_SINGLE_SHORT_NOT_OK);
 	if (error) {
-		return (error);
+		/* try to request full string */
+		req.wLength = 255;
+		flags = 0;
+	} else {
+		/* extract length and request full string */
+		req.wLength = *(uint8_t *)ptr;
+		flags = LIBUSB20_TRANSFER_SINGLE_SHORT_NOT_OK;
 	}
-	req.wLength = *(uint8_t *)ptr;	/* bytes */
 	if (req.wLength > len) {
 		/* partial string read */
 		req.wLength = len;
 	}
-	error = libusb20_dev_request_sync(pdev, &req,
-	    ptr, NULL, 1000, LIBUSB20_TRANSFER_SINGLE_SHORT_NOT_OK);
-
-	if (error) {
+	error = libusb20_dev_request_sync(pdev, &req, ptr, NULL, 1000, flags);
+	if (error)
 		return (error);
-	}
-	if (((uint8_t *)ptr)[1] != LIBUSB20_DT_STRING) {
+
+	if (((uint8_t *)ptr)[1] != LIBUSB20_DT_STRING)
 		return (LIBUSB20_ERROR_OTHER);
-	}
 	return (0);			/* success */
 }
 
@@ -1195,27 +1242,13 @@ libusb20_be_alloc(const struct libusb20_backend_methods *methods)
 struct libusb20_backend *
 libusb20_be_alloc_linux(void)
 {
-	struct libusb20_backend *pbe;
-
-#ifdef __linux__
-	pbe = libusb20_be_alloc(&libusb20_linux_backend);
-#else
-	pbe = NULL;
-#endif
-	return (pbe);
+	return (NULL);
 }
 
 struct libusb20_backend *
 libusb20_be_alloc_ugen20(void)
 {
-	struct libusb20_backend *pbe;
-
-#if defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
-	pbe = libusb20_be_alloc(&libusb20_ugen20_backend);
-#else
-	pbe = NULL;
-#endif
-	return (pbe);
+	return (libusb20_be_alloc(&libusb20_ugen20_backend));
 }
 
 struct libusb20_backend *
@@ -1223,10 +1256,12 @@ libusb20_be_alloc_default(void)
 {
 	struct libusb20_backend *pbe;
 
+#ifdef __linux__
 	pbe = libusb20_be_alloc_linux();
 	if (pbe) {
 		return (pbe);
 	}
+#endif
 	pbe = libusb20_be_alloc_ugen20();
 	if (pbe) {
 		return (pbe);

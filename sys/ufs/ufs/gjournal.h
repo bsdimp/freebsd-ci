@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005-2006 Pawel Jakub Dawidek <pjd@FreeBSD.org>
  * All rights reserved.
  *
@@ -27,7 +29,7 @@
  */
 
 #ifndef _UFS_UFS_GJOURNAL_H_
-#define _UFS_UFS_GJOURNAL_H_
+#define	_UFS_UFS_GJOURNAL_H_
 
 /*
  * GEOM journal function prototypes.

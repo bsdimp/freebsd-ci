@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -98,9 +100,11 @@ char *
 savestr(const char *s)
 {
 	char *p;
+	size_t len;
 
-	p = ckmalloc(strlen(s) + 1);
-	scopy(s, p);
+	len = strlen(s);
+	p = ckmalloc(len + 1);
+	memcpy(p, s, len + 1);
 	return p;
 }
 
@@ -124,7 +128,6 @@ struct stack_block {
 #define SPACE(sp)	((char*)(sp) + ALIGN(sizeof(struct stack_block)))
 
 static struct stack_block *stackp;
-static struct stackmark *markp;
 char *stacknxt;
 int stacknleft;
 char *sstrend;
@@ -179,6 +182,18 @@ stunalloc(pointer p)
 }
 
 
+char *
+stsavestr(const char *s)
+{
+	char *p;
+	size_t len;
+
+	len = strlen(s);
+	p = stalloc(len + 1);
+	memcpy(p, s, len + 1);
+	return p;
+}
+
 
 void
 setstackmark(struct stackmark *mark)
@@ -186,8 +201,9 @@ setstackmark(struct stackmark *mark)
 	mark->stackp = stackp;
 	mark->stacknxt = stacknxt;
 	mark->stacknleft = stacknleft;
-	mark->marknext = markp;
-	markp = mark;
+	/* Ensure this block stays in place. */
+	if (stackp != NULL && stacknxt == SPACE(stackp))
+		stalloc(1);
 }
 
 
@@ -197,7 +213,6 @@ popstackmark(struct stackmark *mark)
 	struct stack_block *sp;
 
 	INTOFF;
-	markp = mark->marknext;
 	while (stackp != mark->stackp) {
 		sp = stackp;
 		stackp = sp->prev;
@@ -229,7 +244,6 @@ growstackblock(int min)
 	int oldlen;
 	struct stack_block *sp;
 	struct stack_block *oldstackp;
-	struct stackmark *xmark;
 
 	if (min < stacknleft)
 		min = stacknleft;
@@ -254,18 +268,6 @@ growstackblock(int min)
 		stacknxt = SPACE(sp);
 		stacknleft = newlen - (stacknxt - (char*)sp);
 		sstrend = stacknxt + stacknleft;
-
-		/*
-		 * Stack marks pointing to the start of the old block
-		 * must be relocated to point to the new block
-		 */
-		xmark = markp;
-		while (xmark != NULL && xmark->stackp == oldstackp) {
-			xmark->stackp = stackp;
-			xmark->stacknxt = stacknxt;
-			xmark->stacknleft = stacknleft;
-			xmark = xmark->marknext;
-		}
 		INTON;
 	} else {
 		newlen -= ALIGN(sizeof(struct stack_block));

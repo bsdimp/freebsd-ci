@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause OR GPL-2.0
+ *
  * This file is provided under a dual BSD/GPLv2 license.  When using or
  * redistributing this file, you may do so under either license.
  *
@@ -64,6 +66,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+#include <sys/param.h>
 
 #include <dev/isci/scil/scic_io_request.h>
 
@@ -331,7 +335,6 @@ extern SCIC_SDS_IO_REQUEST_STATE_HANDLER_T
 #define scic_sds_request_get_task_context(request) \
    ((request)->task_context_buffer)
 
-#define CACHE_LINE_SIZE (64)
 #define scic_sds_request_align_task_context_buffer(address) \
    ((SCU_TASK_CONTEXT_T *)( \
        (((POINTER_UINT)(address)) + (CACHE_LINE_SIZE - 1)) \

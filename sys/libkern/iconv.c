@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
  *
@@ -137,7 +139,7 @@ iconv_unregister_converter(struct iconv_converter_class *dcp)
 {
 	dcp->refs--;
 	if (dcp->refs > 1) {
-		ICDEBUG("converter have %d referenses left\n", dcp->refs);
+		ICDEBUG("converter has %d references left\n", dcp->refs);
 		return EBUSY;
 	}
 	TAILQ_REMOVE(&iconv_converters, dcp, cc_link);
@@ -168,8 +170,8 @@ iconv_lookupcs(const char *to, const char *from, struct iconv_cspair **cspp)
 	struct iconv_cspair *csp;
 
 	TAILQ_FOREACH(csp, &iconv_cslist, cp_link) {
-		if (strcmp(csp->cp_to, to) == 0 &&
-		    strcmp(csp->cp_from, from) == 0) {
+		if (strcasecmp(csp->cp_to, to) == 0 &&
+		    strcasecmp(csp->cp_from, from) == 0) {
 			if (cspp)
 				*cspp = csp;
 			return 0;
@@ -411,11 +413,11 @@ iconv_sysctl_add(SYSCTL_HANDLER_ARGS)
 		return EINVAL;
 	if (din.ia_datalen > ICONV_CSMAXDATALEN)
 		return EINVAL;
-	if (strlen(din.ia_from) >= ICONV_CSNMAXLEN)
+	if (strnlen(din.ia_from, sizeof(din.ia_from)) >= ICONV_CSNMAXLEN)
 		return EINVAL;
-	if (strlen(din.ia_to) >= ICONV_CSNMAXLEN)
+	if (strnlen(din.ia_to, sizeof(din.ia_to)) >= ICONV_CSNMAXLEN)
 		return EINVAL;
-	if (strlen(din.ia_converter) >= ICONV_CNVNMAXLEN)
+	if (strnlen(din.ia_converter, sizeof(din.ia_converter)) >= ICONV_CNVNMAXLEN)
 		return EINVAL;
 	if (iconv_lookupconv(din.ia_converter, &dcp) != 0)
 		return EINVAL;

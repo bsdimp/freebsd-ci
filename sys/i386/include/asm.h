@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990 The Regents of the University of California.
  * All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -49,11 +51,12 @@
 	popl	%ebx
 #define	PIC_PLT(x)	x@PLT
 #define	PIC_GOT(x)	x@GOT(%ebx)
+#define	PIC_GOTOFF(x)	x@GOTOFF(%ebx)
 #else
 #define	PIC_PROLOGUE
 #define	PIC_EPILOGUE
 #define	PIC_PLT(x)	x
-#define	PIC_GOT(x)	x
+#define	PIC_GOTOFF(x)	x
 #endif
 
 /*
@@ -90,11 +93,15 @@
 #endif
 
 /*
- * WEAK_ALIAS: create a weak alias.
+ * WEAK_REFERENCE(): create a weak reference alias from sym.
+ * The macro is not a general asm macro that takes arbitrary names,
+ * but one that takes only C names. It does the non-null name
+ * translation inside the macro.
  */
-#define	WEAK_ALIAS(alias,sym)						\
-	.weak alias;							\
-	alias = sym
+
+#define	WEAK_REFERENCE(sym, alias)					\
+	.weak CNAME(alias);						\
+	.equ CNAME(alias),CNAME(sym)
 
 /*
  * STRONG_ALIAS: create a strong alias.
@@ -106,10 +113,10 @@
 #define RCSID(x)	.text; .asciz x
 
 #undef __FBSDID
-#if !defined(lint) && !defined(STRIP_FBSDID)
+#if !defined(STRIP_FBSDID)
 #define __FBSDID(s)	.ident s
 #else
 #define __FBSDID(s)	/* nothing */
-#endif /* not lint and not STRIP_FBSDID */
+#endif /* not STRIP_FBSDID */
 
 #endif /* !_MACHINE_ASM_H_ */

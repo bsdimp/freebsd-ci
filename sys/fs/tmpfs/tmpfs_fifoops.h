@@ -1,6 +1,8 @@
 /*	$NetBSD: tmpfs_fifoops.h,v 1.4 2005/12/03 17:34:44 christos Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (c) 2005 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -41,13 +43,10 @@
 
 #include <fs/tmpfs/tmpfs_vnops.h>
 
-/* --------------------------------------------------------------------- */
-
 /*
  * Declarations for tmpfs_fifoops.c.
  */
 
 extern struct vop_vector tmpfs_fifoop_entries;
 
-/* --------------------------------------------------------------------- */
 #endif /* _FS_TMPFS_TMPFS_FIFOOPS_H_ */

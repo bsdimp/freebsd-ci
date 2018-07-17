@@ -1,5 +1,8 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2007-2008 Robert N. M. Watson
+ * Copyright (c) 2015 Allan Jude <allanjude@freebsd.org>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -38,86 +41,62 @@
 
 #include "procstat.h"
 
-static const char *get_umask(struct kinfo_proc *kipp);
+static const char *get_umask(struct procstat *procstat,
+    struct kinfo_proc *kipp);
 
 void
-procstat_cred(struct kinfo_proc *kipp)
+procstat_cred(struct procstat *procstat, struct kinfo_proc *kipp)
 {
-	int i;
-	int mib[4];
-	int ngroups;
-	size_t len;
-	gid_t *groups = NULL;
+	unsigned int i, ngroups;
+	gid_t *groups;
 
-	if (!hflag)
-		printf("%5s %-16s %5s %5s %5s %5s %5s %5s %5s %5s %-15s\n",
+	if ((procstat_opts & PS_OPT_NOHEADER) == 0)
+		xo_emit("{T:/%5s %-16s %5s %5s %5s %5s %5s %5s %5s %5s %-15s}\n",
 		    "PID", "COMM", "EUID", "RUID", "SVUID", "EGID", "RGID",
 		    "SVGID", "UMASK", "FLAGS", "GROUPS");
 
-	printf("%5d ", kipp->ki_pid);
-	printf("%-16s ", kipp->ki_comm);
-	printf("%5d ", kipp->ki_uid);
-	printf("%5d ", kipp->ki_ruid);
-	printf("%5d ", kipp->ki_svuid);
-	printf("%5d ", kipp->ki_groups[0]);
-	printf("%5d ", kipp->ki_rgid);
-	printf("%5d ", kipp->ki_svgid);
-	printf("%5s ", get_umask(kipp));
-	printf("%s", kipp->ki_cr_flags & CRED_FLAG_CAPMODE ? "C" : "-");
-	printf("     ");
+	xo_emit("{k:process_id/%5d/%d} ", kipp->ki_pid);
+	xo_emit("{:command/%-16s/%s} ", kipp->ki_comm);
+	xo_emit("{:uid/%5d} ", kipp->ki_uid);
+	xo_emit("{:ruid/%5d} ", kipp->ki_ruid);
+	xo_emit("{:svuid/%5d} ", kipp->ki_svuid);
+	xo_emit("{:group/%5d} ", kipp->ki_groups[0]);
+	xo_emit("{:rgid/%5d} ", kipp->ki_rgid);
+	xo_emit("{:svgid/%5d} ", kipp->ki_svgid);
+	xo_emit("{:umask/%5s} ", get_umask(procstat, kipp));
+	xo_emit("{:cr_flags/%s}", kipp->ki_cr_flags & CRED_FLAG_CAPMODE ?
+	    "C" : "-");
+	xo_emit("{P:     }");
 
+	groups = NULL;
 	/*
 	 * We may have too many groups to fit in kinfo_proc's statically
-	 * sized storage.  If that occurs, attempt to retrieve them via
-	 * sysctl.
+	 * sized storage.  If that occurs, attempt to retrieve them using
+	 * libprocstat.
 	 */
-	if (kipp->ki_cr_flags & KI_CRF_GRP_OVERFLOW) {
-		mib[0] = CTL_KERN;
-		mib[1] = KERN_PROC;
-		mib[2] = KERN_PROC_GROUPS;
-		mib[3] = kipp->ki_pid;
-
-		ngroups = sysconf(_SC_NGROUPS_MAX) + 1;
-		len = ngroups * sizeof(gid_t);
-		if((groups = malloc(len)) == NULL)
-			err(-1, "malloc");
-
-		if (sysctl(mib, 4, groups, &len, NULL, 0) == -1) {
-			warn("sysctl: kern.proc.groups: %d "
-			    "group list truncated", kipp->ki_pid);
-			free(groups);
-			groups = NULL;
-		}
-		ngroups = len / sizeof(gid_t);
-	}
+	if (kipp->ki_cr_flags & KI_CRF_GRP_OVERFLOW)
+		groups = procstat_getgroups(procstat, kipp, &ngroups);
 	if (groups == NULL) {
 		ngroups = kipp->ki_ngroups;
 		groups = kipp->ki_groups;
 	}
+	xo_open_list("groups");
 	for (i = 0; i < ngroups; i++)
-		printf("%s%d", (i > 0) ? "," : "", groups[i]);
+		xo_emit("{D:/%s}{l:groups/%d}", (i > 0) ? "," : "", groups[i]);
 	if (groups != kipp->ki_groups)
-		free(groups);
+		procstat_freegroups(procstat, groups);
 
-	printf("\n");
+	xo_close_list("groups");
+	xo_emit("\n");
 }
 
 static const char *
-get_umask(struct kinfo_proc *kipp)
+get_umask(struct procstat *procstat, struct kinfo_proc *kipp)
 {
-	int error;
-	int mib[4];
-	size_t len;
 	u_short fd_cmask;
 	static char umask[4];
 
-	mib[0] = CTL_KERN;
-	mib[1] = KERN_PROC;
-	mib[2] = KERN_PROC_UMASK;
-	mib[3] = kipp->ki_pid;
-	len = sizeof(fd_cmask);
-	error = sysctl(mib, 4, &fd_cmask, &len, NULL, 0);
-	if (error == 0) {
+	if (procstat_getumask(procstat, kipp, &fd_cmask) == 0) {
 		snprintf(umask, 4, "%03o", fd_cmask);
 		return (umask);
 	} else {

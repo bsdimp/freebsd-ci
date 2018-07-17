@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright 2003 by Peter Grehan. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -53,6 +55,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/rman.h>
 
+#include <machine/openpicreg.h>
 #include <machine/openpicvar.h>
 #include <powerpc/psim/iobusvar.h>
 

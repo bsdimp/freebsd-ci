@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993, David Greenman
  * All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -32,14 +34,17 @@
 #ifndef _SYS_IMGACT_H_
 #define	_SYS_IMGACT_H_
 
-#include <sys/uio.h>
+#include <sys/_uio.h>
 
 #include <vm/vm.h>
 
 #define MAXSHELLCMDLEN	PAGE_SIZE
 
+struct ucred;
+
 struct image_args {
 	char *buf;		/* pointer to string buffer */
+	void *bufkva;		/* cookie for string buffer KVA */
 	char *begin_argv;	/* beginning of argv in buf */
 	char *begin_envv;	/* beginning of envv in buf */
 	char *endp;		/* current `end' pointer of arg & env strings */
@@ -49,6 +54,7 @@ struct image_args {
 	int argc;		/* count of argument strings */
 	int envc;		/* count of environment strings */
 	int fd;			/* file descriptor of the executable */
+	struct filedesc *fdp;	/* new file descriptor table */
 };
 
 struct image_params {
@@ -61,13 +67,14 @@ struct image_params {
 	unsigned long entry_addr; /* entry address of target executable */
 	unsigned long reloc_base; /* load address of image */
 	char vmspace_destroyed;	/* flag - we've blown away original vm space */
-	char interpreted;	/* flag - this executable is interpreted */
+#define IMGACT_SHELL	0x1
+#define IMGACT_BINMISC	0x2
+	unsigned char interpreted;	/* mask of interpreters that have run */
 	char opened;		/* flag - we have opened executable vnode */
 	char *interpreter_name;	/* name of the interpreter */
 	void *auxargs;		/* ELF Auxinfo structure pointer */
 	struct sf_buf *firstpage;	/* first page that we mapped */
 	unsigned long ps_strings; /* PS_STRINGS for BSD/OS binaries */
-	size_t auxarg_size;
 	struct image_args *args;	/* system call arguments */
 	struct sysentvec *sysent;	/* system entry vector */
 	char *execpath;
@@ -78,13 +85,15 @@ struct image_params {
 	unsigned long pagesizes;
 	int pagesizeslen;
 	vm_prot_t stack_prot;
+	u_long stack_sz;
+	struct ucred *newcred;		/* new credentials if changing */
+	bool credential_setid;		/* true if becoming setid */
 };
 
 #ifdef _KERNEL
 struct sysentvec;
 struct thread;
-
-#define IMGACT_CORE_COMPRESS	0x01
+struct vmspace;
 
 int	exec_alloc_args(struct image_args *);
 int	exec_check_permissions(struct image_params *);
@@ -95,6 +104,10 @@ void	exec_setregs(struct thread *, struct image_params *, u_long);
 int	exec_shell_imgact(struct image_params *);
 int	exec_copyin_args(struct image_args *, char *, enum uio_seg,
 	char **, char **);
+int	exec_copyin_data_fds(struct thread *, struct image_args *, const void *,
+	size_t, const int *, size_t);
+int	pre_execve(struct thread *td, struct vmspace **oldvmspace);
+void	post_execve(struct thread *td, int error, struct vmspace *oldvmspace);
 #endif
 
 #endif /* !_SYS_IMGACT_H_ */

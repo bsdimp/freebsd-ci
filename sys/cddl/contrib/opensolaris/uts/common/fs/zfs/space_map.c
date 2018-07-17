@@ -23,476 +23,410 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
 #include <sys/spa.h>
 #include <sys/dmu.h>
+#include <sys/dmu_tx.h>
+#include <sys/dnode.h>
+#include <sys/dsl_pool.h>
 #include <sys/zio.h>
 #include <sys/space_map.h>
+#include <sys/refcount.h>
+#include <sys/zfeature.h>
 
 SYSCTL_DECL(_vfs_zfs);
-static int space_map_last_hope;
-TUNABLE_INT("vfs.zfs.space_map_last_hope", &space_map_last_hope);
-SYSCTL_INT(_vfs_zfs, OID_AUTO, space_map_last_hope, CTLFLAG_RDTUN,
-    &space_map_last_hope, 0,
-    "If kernel panic in space_map code on pool import, import the pool in readonly mode and backup all your data before trying this option.");
-
-static kmem_cache_t *space_seg_cache;
-
-void
-space_map_init(void)
-{
-	ASSERT(space_seg_cache == NULL);
-	space_seg_cache = kmem_cache_create("space_seg_cache",
-	    sizeof (space_seg_t), 0, NULL, NULL, NULL, NULL, NULL, 0);
-}
-
-void
-space_map_fini(void)
-{
-	kmem_cache_destroy(space_seg_cache);
-	space_seg_cache = NULL;
-}
 
 /*
- * Space map routines.
- * NOTE: caller is responsible for all locking.
+ * Note on space map block size:
+ *
+ * The data for a given space map can be kept on blocks of any size.
+ * Larger blocks entail fewer i/o operations, but they also cause the
+ * DMU to keep more data in-core, and also to waste more i/o bandwidth
+ * when only a few blocks have changed since the last transaction group.
  */
-static int
-space_map_seg_compare(const void *x1, const void *x2)
-{
-	const space_seg_t *s1 = x1;
-	const space_seg_t *s2 = x2;
-
-	if (s1->ss_start < s2->ss_start) {
-		if (s1->ss_end > s2->ss_start)
-			return (0);
-		return (-1);
-	}
-	if (s1->ss_start > s2->ss_start) {
-		if (s1->ss_start < s2->ss_end)
-			return (0);
-		return (1);
-	}
-	return (0);
-}
-
-void
-space_map_create(space_map_t *sm, uint64_t start, uint64_t size, uint8_t shift,
-	kmutex_t *lp)
-{
-	bzero(sm, sizeof (*sm));
-
-	cv_init(&sm->sm_load_cv, NULL, CV_DEFAULT, NULL);
-
-	avl_create(&sm->sm_root, space_map_seg_compare,
-	    sizeof (space_seg_t), offsetof(struct space_seg, ss_node));
-
-	sm->sm_start = start;
-	sm->sm_size = size;
-	sm->sm_shift = shift;
-	sm->sm_lock = lp;
-}
-
-void
-space_map_destroy(space_map_t *sm)
-{
-	ASSERT(!sm->sm_loaded && !sm->sm_loading);
-	VERIFY0(sm->sm_space);
-	avl_destroy(&sm->sm_root);
-	cv_destroy(&sm->sm_load_cv);
-}
-
-void
-space_map_add(space_map_t *sm, uint64_t start, uint64_t size)
-{
-	avl_index_t where;
-	space_seg_t *ss_before, *ss_after, *ss;
-	uint64_t end = start + size;
-	int merge_before, merge_after;
-
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-	VERIFY(!sm->sm_condensing);
-	VERIFY(size != 0);
-	VERIFY3U(start, >=, sm->sm_start);
-	VERIFY3U(end, <=, sm->sm_start + sm->sm_size);
-	VERIFY(sm->sm_space + size <= sm->sm_size);
-	VERIFY(P2PHASE(start, 1ULL << sm->sm_shift) == 0);
-	VERIFY(P2PHASE(size, 1ULL << sm->sm_shift) == 0);
-again:
-	ss = space_map_find(sm, start, size, &where);
-	if (ss != NULL) {
-		zfs_panic_recover("zfs: allocating allocated segment"
-		    "(offset=%llu size=%llu)\n",
-		    (longlong_t)start, (longlong_t)size);
-		return;
-	}
-	if (ss != NULL && space_map_last_hope) {
-		uint64_t sstart, ssize;
-
-		if (ss->ss_start > start)
-			sstart = ss->ss_start;
-		else
-			sstart = start;
-		if (ss->ss_end > end)
-			ssize = end - sstart;
-		else
-			ssize = ss->ss_end - sstart;
-		ZFS_LOG(0,
-		    "Removing colliding space_map range (start=%ju end=%ju). Good luck!",
-		    (uintmax_t)sstart, (uintmax_t)(sstart + ssize));
-		space_map_remove(sm, sstart, ssize);
-		goto again;
-	}
-
-	/* Make sure we don't overlap with either of our neighbors */
-	VERIFY(ss == NULL);
-
-	ss_before = avl_nearest(&sm->sm_root, where, AVL_BEFORE);
-	ss_after = avl_nearest(&sm->sm_root, where, AVL_AFTER);
-
-	merge_before = (ss_before != NULL && ss_before->ss_end == start);
-	merge_after = (ss_after != NULL && ss_after->ss_start == end);
-
-	if (merge_before && merge_after) {
-		avl_remove(&sm->sm_root, ss_before);
-		if (sm->sm_pp_root) {
-			avl_remove(sm->sm_pp_root, ss_before);
-			avl_remove(sm->sm_pp_root, ss_after);
-		}
-		ss_after->ss_start = ss_before->ss_start;
-		kmem_cache_free(space_seg_cache, ss_before);
-		ss = ss_after;
-	} else if (merge_before) {
-		ss_before->ss_end = end;
-		if (sm->sm_pp_root)
-			avl_remove(sm->sm_pp_root, ss_before);
-		ss = ss_before;
-	} else if (merge_after) {
-		ss_after->ss_start = start;
-		if (sm->sm_pp_root)
-			avl_remove(sm->sm_pp_root, ss_after);
-		ss = ss_after;
-	} else {
-		ss = kmem_cache_alloc(space_seg_cache, KM_SLEEP);
-		ss->ss_start = start;
-		ss->ss_end = end;
-		avl_insert(&sm->sm_root, ss, where);
-	}
-
-	if (sm->sm_pp_root)
-		avl_add(sm->sm_pp_root, ss);
-
-	sm->sm_space += size;
-}
-
-void
-space_map_remove(space_map_t *sm, uint64_t start, uint64_t size)
-{
-#ifdef illumos
-	avl_index_t where;
-#endif
-	space_seg_t *ss, *newseg;
-	uint64_t end = start + size;
-	int left_over, right_over;
-
-	VERIFY(!sm->sm_condensing);
-#ifdef illumos
-	ss = space_map_find(sm, start, size, &where);
-#else
-	ss = space_map_find(sm, start, size, NULL);
-#endif
-
-	/* Make sure we completely overlap with someone */
-	if (ss == NULL) {
-		zfs_panic_recover("zfs: freeing free segment "
-		    "(offset=%llu size=%llu)",
-		    (longlong_t)start, (longlong_t)size);
-		return;
-	}
-	VERIFY3U(ss->ss_start, <=, start);
-	VERIFY3U(ss->ss_end, >=, end);
-	VERIFY(sm->sm_space - size < sm->sm_size);
-
-	left_over = (ss->ss_start != start);
-	right_over = (ss->ss_end != end);
-
-	if (sm->sm_pp_root)
-		avl_remove(sm->sm_pp_root, ss);
-
-	if (left_over && right_over) {
-		newseg = kmem_cache_alloc(space_seg_cache, KM_SLEEP);
-		newseg->ss_start = end;
-		newseg->ss_end = ss->ss_end;
-		ss->ss_end = start;
-		avl_insert_here(&sm->sm_root, newseg, ss, AVL_AFTER);
-		if (sm->sm_pp_root)
-			avl_add(sm->sm_pp_root, newseg);
-	} else if (left_over) {
-		ss->ss_end = start;
-	} else if (right_over) {
-		ss->ss_start = end;
-	} else {
-		avl_remove(&sm->sm_root, ss);
-		kmem_cache_free(space_seg_cache, ss);
-		ss = NULL;
-	}
-
-	if (sm->sm_pp_root && ss != NULL)
-		avl_add(sm->sm_pp_root, ss);
-
-	sm->sm_space -= size;
-}
-
-space_seg_t *
-space_map_find(space_map_t *sm, uint64_t start, uint64_t size,
-    avl_index_t *wherep)
-{
-	space_seg_t ssearch, *ss;
-
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-	VERIFY(size != 0);
-	VERIFY(P2PHASE(start, 1ULL << sm->sm_shift) == 0);
-	VERIFY(P2PHASE(size, 1ULL << sm->sm_shift) == 0);
-
-	ssearch.ss_start = start;
-	ssearch.ss_end = start + size;
-	ss = avl_find(&sm->sm_root, &ssearch, wherep);
-
-	if (ss != NULL && ss->ss_start <= start && ss->ss_end >= start + size)
-		return (ss);
-	return (NULL);
-}
-
-boolean_t
-space_map_contains(space_map_t *sm, uint64_t start, uint64_t size)
-{
-	avl_index_t where;
-
-	return (space_map_find(sm, start, size, &where) != 0);
-}
-
-void
-space_map_swap(space_map_t **msrc, space_map_t **mdst)
-{
-	space_map_t *sm;
-
-	ASSERT(MUTEX_HELD((*msrc)->sm_lock));
-	ASSERT0((*mdst)->sm_space);
-	ASSERT0(avl_numnodes(&(*mdst)->sm_root));
-
-	sm = *msrc;
-	*msrc = *mdst;
-	*mdst = sm;
-}
-
-void
-space_map_vacate(space_map_t *sm, space_map_func_t *func, space_map_t *mdest)
-{
-	space_seg_t *ss;
-	void *cookie = NULL;
-
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-
-	while ((ss = avl_destroy_nodes(&sm->sm_root, &cookie)) != NULL) {
-		if (func != NULL)
-			func(mdest, ss->ss_start, ss->ss_end - ss->ss_start);
-		kmem_cache_free(space_seg_cache, ss);
-	}
-	sm->sm_space = 0;
-}
-
-void
-space_map_walk(space_map_t *sm, space_map_func_t *func, space_map_t *mdest)
-{
-	space_seg_t *ss;
-
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-
-	for (ss = avl_first(&sm->sm_root); ss; ss = AVL_NEXT(&sm->sm_root, ss))
-		func(mdest, ss->ss_start, ss->ss_end - ss->ss_start);
-}
 
 /*
- * Wait for any in-progress space_map_load() to complete.
- */
-void
-space_map_load_wait(space_map_t *sm)
-{
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-
-	while (sm->sm_loading) {
-		ASSERT(!sm->sm_loaded);
-		cv_wait(&sm->sm_load_cv, sm->sm_lock);
-	}
-}
-
-/*
- * Note: space_map_load() will drop sm_lock across dmu_read() calls.
- * The caller must be OK with this.
+ * Iterate through the space map, invoking the callback on each (non-debug)
+ * space map entry.
  */
 int
-space_map_load(space_map_t *sm, space_map_ops_t *ops, uint8_t maptype,
-	space_map_obj_t *smo, objset_t *os)
+space_map_iterate(space_map_t *sm, sm_cb_t callback, void *arg)
 {
 	uint64_t *entry, *entry_map, *entry_map_end;
-	uint64_t bufsize, size, offset, end, space;
-	uint64_t mapstart = sm->sm_start;
+	uint64_t bufsize, size, offset, end;
 	int error = 0;
 
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-	ASSERT(!sm->sm_loaded);
-	ASSERT(!sm->sm_loading);
+	end = space_map_length(sm);
 
-	sm->sm_loading = B_TRUE;
-	end = smo->smo_objsize;
-	space = smo->smo_alloc;
-
-	ASSERT(sm->sm_ops == NULL);
-	VERIFY0(sm->sm_space);
-
-	if (maptype == SM_FREE) {
-		space_map_add(sm, sm->sm_start, sm->sm_size);
-		space = sm->sm_size - space;
-	}
-
-	bufsize = 1ULL << SPACE_MAP_BLOCKSHIFT;
+	bufsize = MAX(sm->sm_blksz, SPA_MINBLOCKSIZE);
 	entry_map = zio_buf_alloc(bufsize);
 
-	mutex_exit(sm->sm_lock);
-	if (end > bufsize)
-		dmu_prefetch(os, smo->smo_object, bufsize, end - bufsize);
-	mutex_enter(sm->sm_lock);
+	if (end > bufsize) {
+		dmu_prefetch(sm->sm_os, space_map_object(sm), 0, bufsize,
+		    end - bufsize, ZIO_PRIORITY_SYNC_READ);
+	}
 
-	for (offset = 0; offset < end; offset += bufsize) {
+	for (offset = 0; offset < end && error == 0; offset += bufsize) {
 		size = MIN(end - offset, bufsize);
 		VERIFY(P2PHASE(size, sizeof (uint64_t)) == 0);
 		VERIFY(size != 0);
+		ASSERT3U(sm->sm_blksz, !=, 0);
 
 		dprintf("object=%llu  offset=%llx  size=%llx\n",
-		    smo->smo_object, offset, size);
+		    space_map_object(sm), offset, size);
 
-		mutex_exit(sm->sm_lock);
-		error = dmu_read(os, smo->smo_object, offset, size, entry_map,
-		    DMU_READ_PREFETCH);
-		mutex_enter(sm->sm_lock);
+		error = dmu_read(sm->sm_os, space_map_object(sm), offset, size,
+		    entry_map, DMU_READ_PREFETCH);
 		if (error != 0)
 			break;
 
 		entry_map_end = entry_map + (size / sizeof (uint64_t));
-		for (entry = entry_map; entry < entry_map_end; entry++) {
+		for (entry = entry_map; entry < entry_map_end && error == 0;
+		    entry++) {
 			uint64_t e = *entry;
+			uint64_t offset, size;
 
-			if (SM_DEBUG_DECODE(e))		/* Skip debug entries */
+			if (SM_DEBUG_DECODE(e))	/* Skip debug entries */
 				continue;
 
-			(SM_TYPE_DECODE(e) == maptype ?
-			    space_map_add : space_map_remove)(sm,
-			    (SM_OFFSET_DECODE(e) << sm->sm_shift) + mapstart,
-			    SM_RUN_DECODE(e) << sm->sm_shift);
+			offset = (SM_OFFSET_DECODE(e) << sm->sm_shift) +
+			    sm->sm_start;
+			size = SM_RUN_DECODE(e) << sm->sm_shift;
+
+			VERIFY0(P2PHASE(offset, 1ULL << sm->sm_shift));
+			VERIFY0(P2PHASE(size, 1ULL << sm->sm_shift));
+			VERIFY3U(offset, >=, sm->sm_start);
+			VERIFY3U(offset + size, <=, sm->sm_start + sm->sm_size);
+			error = callback(SM_TYPE_DECODE(e), offset, size, arg);
 		}
 	}
 
-	if (error == 0) {
-		VERIFY3U(sm->sm_space, ==, space);
-
-		sm->sm_loaded = B_TRUE;
-		sm->sm_ops = ops;
-		if (ops != NULL)
-			ops->smop_load(sm);
-	} else {
-		space_map_vacate(sm, NULL, NULL);
-	}
-
 	zio_buf_free(entry_map, bufsize);
-
-	sm->sm_loading = B_FALSE;
-
-	cv_broadcast(&sm->sm_load_cv);
-
 	return (error);
 }
 
-void
-space_map_unload(space_map_t *sm)
+/*
+ * Note: This function performs destructive actions - specifically
+ * it deletes entries from the end of the space map. Thus, callers
+ * should ensure that they are holding the appropriate locks for
+ * the space map that they provide.
+ */
+int
+space_map_incremental_destroy(space_map_t *sm, sm_cb_t callback, void *arg,
+    dmu_tx_t *tx)
 {
-	ASSERT(MUTEX_HELD(sm->sm_lock));
+	uint64_t bufsize, len;
+	uint64_t *entry_map;
+	int error = 0;
 
-	if (sm->sm_loaded && sm->sm_ops != NULL)
-		sm->sm_ops->smop_unload(sm);
+	len = space_map_length(sm);
+	bufsize = MAX(sm->sm_blksz, SPA_MINBLOCKSIZE);
+	entry_map = zio_buf_alloc(bufsize);
 
-	sm->sm_loaded = B_FALSE;
-	sm->sm_ops = NULL;
+	dmu_buf_will_dirty(sm->sm_dbuf, tx);
 
-	space_map_vacate(sm, NULL, NULL);
+	/*
+	 * Since we can't move the starting offset of the space map
+	 * (e.g there are reference on-disk pointing to it), we destroy
+	 * its entries incrementally starting from the end.
+	 *
+	 * The logic that follows is basically the same as the one used
+	 * in space_map_iterate() but it traverses the space map
+	 * backwards:
+	 *
+	 * 1] We figure out the size of the buffer that we want to use
+	 *    to read the on-disk space map entries.
+	 * 2] We figure out the offset at the end of the space map where
+	 *    we will start reading entries into our buffer.
+	 * 3] We read the on-disk entries into the buffer.
+	 * 4] We iterate over the entries from end to beginning calling
+	 *    the callback function on each one. As we move from entry
+	 *    to entry we decrease the size of the space map, deleting
+	 *    effectively each entry.
+	 * 5] If there are no more entries in the space map or the
+	 *    callback returns a value other than 0, we stop iterating
+	 *    over the space map. If there are entries remaining and
+	 *    the callback returned zero we go back to step [1].
+	 */
+	uint64_t offset = 0, size = 0;
+	while (len > 0 && error == 0) {
+		size = MIN(bufsize, len);
+
+		VERIFY(P2PHASE(size, sizeof (uint64_t)) == 0);
+		VERIFY3U(size, >, 0);
+		ASSERT3U(sm->sm_blksz, !=, 0);
+
+		offset = len - size;
+
+		IMPLY(bufsize > len, offset == 0);
+		IMPLY(bufsize == len, offset == 0);
+		IMPLY(bufsize < len, offset > 0);
+
+
+		EQUIV(size == len, offset == 0);
+		IMPLY(size < len, bufsize < len);
+
+		dprintf("object=%llu  offset=%llx  size=%llx\n",
+		    space_map_object(sm), offset, size);
+
+		error = dmu_read(sm->sm_os, space_map_object(sm),
+		    offset, size, entry_map, DMU_READ_PREFETCH);
+		if (error != 0)
+			break;
+
+		uint64_t num_entries = size / sizeof (uint64_t);
+
+		ASSERT3U(num_entries, >, 0);
+
+		while (num_entries > 0) {
+			uint64_t e, entry_offset, entry_size;
+			maptype_t type;
+
+			e = entry_map[num_entries - 1];
+
+			ASSERT3U(num_entries, >, 0);
+			ASSERT0(error);
+
+			if (SM_DEBUG_DECODE(e)) {
+				sm->sm_phys->smp_objsize -= sizeof (uint64_t);
+				space_map_update(sm);
+				len -= sizeof (uint64_t);
+				num_entries--;
+				continue;
+			}
+
+			type = SM_TYPE_DECODE(e);
+			entry_offset = (SM_OFFSET_DECODE(e) << sm->sm_shift) +
+			    sm->sm_start;
+			entry_size = SM_RUN_DECODE(e) << sm->sm_shift;
+
+			VERIFY0(P2PHASE(entry_offset, 1ULL << sm->sm_shift));
+			VERIFY0(P2PHASE(entry_size, 1ULL << sm->sm_shift));
+			VERIFY3U(entry_offset, >=, sm->sm_start);
+			VERIFY3U(entry_offset + entry_size, <=,
+			    sm->sm_start + sm->sm_size);
+
+			error = callback(type, entry_offset, entry_size, arg);
+			if (error != 0)
+				break;
+
+			if (type == SM_ALLOC)
+				sm->sm_phys->smp_alloc -= entry_size;
+			else
+				sm->sm_phys->smp_alloc += entry_size;
+
+			sm->sm_phys->smp_objsize -= sizeof (uint64_t);
+			space_map_update(sm);
+			len -= sizeof (uint64_t);
+			num_entries--;
+		}
+		IMPLY(error == 0, num_entries == 0);
+		EQUIV(offset == 0 && error == 0, len == 0 && num_entries == 0);
+	}
+
+	if (len == 0) {
+		ASSERT0(error);
+		ASSERT0(offset);
+		ASSERT0(sm->sm_length);
+		ASSERT0(sm->sm_phys->smp_objsize);
+		ASSERT0(sm->sm_alloc);
+	}
+
+	zio_buf_free(entry_map, bufsize);
+	return (error);
 }
 
-uint64_t
-space_map_maxsize(space_map_t *sm)
-{
-	ASSERT(sm->sm_ops != NULL);
-	return (sm->sm_ops->smop_max(sm));
-}
+typedef struct space_map_load_arg {
+	space_map_t	*smla_sm;
+	range_tree_t	*smla_rt;
+	maptype_t	smla_type;
+} space_map_load_arg_t;
 
-uint64_t
-space_map_alloc(space_map_t *sm, uint64_t size)
+static int
+space_map_load_callback(maptype_t type, uint64_t offset, uint64_t size,
+    void *arg)
 {
-	uint64_t start;
+	space_map_load_arg_t *smla = arg;
+	if (type == smla->smla_type) {
+		VERIFY3U(range_tree_space(smla->smla_rt) + size, <=,
+		    smla->smla_sm->sm_size);
+		range_tree_add(smla->smla_rt, offset, size);
+	} else {
+		range_tree_remove(smla->smla_rt, offset, size);
+	}
 
-	start = sm->sm_ops->smop_alloc(sm, size);
-	if (start != -1ULL)
-		space_map_remove(sm, start, size);
-	return (start);
-}
-
-void
-space_map_claim(space_map_t *sm, uint64_t start, uint64_t size)
-{
-	sm->sm_ops->smop_claim(sm, start, size);
-	space_map_remove(sm, start, size);
-}
-
-void
-space_map_free(space_map_t *sm, uint64_t start, uint64_t size)
-{
-	space_map_add(sm, start, size);
-	sm->sm_ops->smop_free(sm, start, size);
+	return (0);
 }
 
 /*
- * Note: space_map_sync() will drop sm_lock across dmu_write() calls.
+ * Load the space map disk into the specified range tree. Segments of maptype
+ * are added to the range tree, other segment types are removed.
  */
-void
-space_map_sync(space_map_t *sm, uint8_t maptype,
-	space_map_obj_t *smo, objset_t *os, dmu_tx_t *tx)
+int
+space_map_load(space_map_t *sm, range_tree_t *rt, maptype_t maptype)
 {
-	spa_t *spa = dmu_objset_spa(os);
-	avl_tree_t *t = &sm->sm_root;
-	space_seg_t *ss;
-	uint64_t bufsize, start, size, run_len, total, sm_space, nodes;
-	uint64_t *entry, *entry_map, *entry_map_end;
+	uint64_t space;
+	int err;
+	space_map_load_arg_t smla;
 
-	ASSERT(MUTEX_HELD(sm->sm_lock));
+	VERIFY0(range_tree_space(rt));
+	space = space_map_allocated(sm);
 
-	if (sm->sm_space == 0)
+	if (maptype == SM_FREE) {
+		range_tree_add(rt, sm->sm_start, sm->sm_size);
+		space = sm->sm_size - space;
+	}
+
+	smla.smla_rt = rt;
+	smla.smla_sm = sm;
+	smla.smla_type = maptype;
+	err = space_map_iterate(sm, space_map_load_callback, &smla);
+
+	if (err == 0) {
+		VERIFY3U(range_tree_space(rt), ==, space);
+	} else {
+		range_tree_vacate(rt, NULL, NULL);
+	}
+
+	return (err);
+}
+
+void
+space_map_histogram_clear(space_map_t *sm)
+{
+	if (sm->sm_dbuf->db_size != sizeof (space_map_phys_t))
 		return;
 
-	dprintf("object %4llu, txg %llu, pass %d, %c, count %lu, space %llx\n",
-	    smo->smo_object, dmu_tx_get_txg(tx), spa_sync_pass(spa),
-	    maptype == SM_ALLOC ? 'A' : 'F', avl_numnodes(&sm->sm_root),
-	    sm->sm_space);
+	bzero(sm->sm_phys->smp_histogram, sizeof (sm->sm_phys->smp_histogram));
+}
+
+boolean_t
+space_map_histogram_verify(space_map_t *sm, range_tree_t *rt)
+{
+	/*
+	 * Verify that the in-core range tree does not have any
+	 * ranges smaller than our sm_shift size.
+	 */
+	for (int i = 0; i < sm->sm_shift; i++) {
+		if (rt->rt_histogram[i] != 0)
+			return (B_FALSE);
+	}
+	return (B_TRUE);
+}
+
+void
+space_map_histogram_add(space_map_t *sm, range_tree_t *rt, dmu_tx_t *tx)
+{
+	int idx = 0;
+
+	ASSERT(dmu_tx_is_syncing(tx));
+	VERIFY3U(space_map_object(sm), !=, 0);
+
+	if (sm->sm_dbuf->db_size != sizeof (space_map_phys_t))
+		return;
+
+	dmu_buf_will_dirty(sm->sm_dbuf, tx);
+
+	ASSERT(space_map_histogram_verify(sm, rt));
+	/*
+	 * Transfer the content of the range tree histogram to the space
+	 * map histogram. The space map histogram contains 32 buckets ranging
+	 * between 2^sm_shift to 2^(32+sm_shift-1). The range tree,
+	 * however, can represent ranges from 2^0 to 2^63. Since the space
+	 * map only cares about allocatable blocks (minimum of sm_shift) we
+	 * can safely ignore all ranges in the range tree smaller than sm_shift.
+	 */
+	for (int i = sm->sm_shift; i < RANGE_TREE_HISTOGRAM_SIZE; i++) {
+
+		/*
+		 * Since the largest histogram bucket in the space map is
+		 * 2^(32+sm_shift-1), we need to normalize the values in
+		 * the range tree for any bucket larger than that size. For
+		 * example given an sm_shift of 9, ranges larger than 2^40
+		 * would get normalized as if they were 1TB ranges. Assume
+		 * the range tree had a count of 5 in the 2^44 (16TB) bucket,
+		 * the calculation below would normalize this to 5 * 2^4 (16).
+		 */
+		ASSERT3U(i, >=, idx + sm->sm_shift);
+		sm->sm_phys->smp_histogram[idx] +=
+		    rt->rt_histogram[i] << (i - idx - sm->sm_shift);
+
+		/*
+		 * Increment the space map's index as long as we haven't
+		 * reached the maximum bucket size. Accumulate all ranges
+		 * larger than the max bucket size into the last bucket.
+		 */
+		if (idx < SPACE_MAP_HISTOGRAM_SIZE - 1) {
+			ASSERT3U(idx + sm->sm_shift, ==, i);
+			idx++;
+			ASSERT3U(idx, <, SPACE_MAP_HISTOGRAM_SIZE);
+		}
+	}
+}
+
+uint64_t
+space_map_entries(space_map_t *sm, range_tree_t *rt)
+{
+	avl_tree_t *t = &rt->rt_root;
+	range_seg_t *rs;
+	uint64_t size, entries;
+
+	/*
+	 * All space_maps always have a debug entry so account for it here.
+	 */
+	entries = 1;
+
+	/*
+	 * Traverse the range tree and calculate the number of space map
+	 * entries that would be required to write out the range tree.
+	 */
+	for (rs = avl_first(t); rs != NULL; rs = AVL_NEXT(t, rs)) {
+		size = (rs->rs_end - rs->rs_start) >> sm->sm_shift;
+		entries += howmany(size, SM_RUN_MAX);
+	}
+	return (entries);
+}
+
+void
+space_map_write(space_map_t *sm, range_tree_t *rt, maptype_t maptype,
+    dmu_tx_t *tx)
+{
+	objset_t *os = sm->sm_os;
+	spa_t *spa = dmu_objset_spa(os);
+	avl_tree_t *t = &rt->rt_root;
+	range_seg_t *rs;
+	uint64_t size, total, rt_space, nodes;
+	uint64_t *entry, *entry_map, *entry_map_end;
+	uint64_t expected_entries, actual_entries = 1;
+
+	ASSERT(dsl_pool_sync_context(dmu_objset_pool(os)));
+	VERIFY3U(space_map_object(sm), !=, 0);
+	dmu_buf_will_dirty(sm->sm_dbuf, tx);
+
+	/*
+	 * This field is no longer necessary since the in-core space map
+	 * now contains the object number but is maintained for backwards
+	 * compatibility.
+	 */
+	sm->sm_phys->smp_object = sm->sm_object;
+
+	if (range_tree_is_empty(rt)) {
+		VERIFY3U(sm->sm_object, ==, sm->sm_phys->smp_object);
+		return;
+	}
 
 	if (maptype == SM_ALLOC)
-		smo->smo_alloc += sm->sm_space;
+		sm->sm_phys->smp_alloc += range_tree_space(rt);
 	else
-		smo->smo_alloc -= sm->sm_space;
+		sm->sm_phys->smp_alloc -= range_tree_space(rt);
 
-	bufsize = (8 + avl_numnodes(&sm->sm_root)) * sizeof (uint64_t);
-	bufsize = MIN(bufsize, 1ULL << SPACE_MAP_BLOCKSHIFT);
-	entry_map = zio_buf_alloc(bufsize);
-	entry_map_end = entry_map + (bufsize / sizeof (uint64_t));
+	expected_entries = space_map_entries(sm, rt);
+
+	entry_map = zio_buf_alloc(sm->sm_blksz);
+	entry_map_end = entry_map + (sm->sm_blksz / sizeof (uint64_t));
 	entry = entry_map;
 
 	*entry++ = SM_DEBUG_ENCODE(1) |
@@ -501,24 +435,26 @@ space_map_sync(space_map_t *sm, uint8_t maptype,
 	    SM_DEBUG_TXG_ENCODE(dmu_tx_get_txg(tx));
 
 	total = 0;
-	nodes = avl_numnodes(&sm->sm_root);
-	sm_space = sm->sm_space;
-	for (ss = avl_first(t); ss != NULL; ss = AVL_NEXT(t, ss)) {
-		size = ss->ss_end - ss->ss_start;
-		start = (ss->ss_start - sm->sm_start) >> sm->sm_shift;
+	nodes = avl_numnodes(&rt->rt_root);
+	rt_space = range_tree_space(rt);
+	for (rs = avl_first(t); rs != NULL; rs = AVL_NEXT(t, rs)) {
+		uint64_t start;
 
-		total += size;
-		size >>= sm->sm_shift;
+		size = (rs->rs_end - rs->rs_start) >> sm->sm_shift;
+		start = (rs->rs_start - sm->sm_start) >> sm->sm_shift;
 
-		while (size) {
+		total += size << sm->sm_shift;
+
+		while (size != 0) {
+			uint64_t run_len;
+
 			run_len = MIN(size, SM_RUN_MAX);
 
 			if (entry == entry_map_end) {
-				mutex_exit(sm->sm_lock);
-				dmu_write(os, smo->smo_object, smo->smo_objsize,
-				    bufsize, entry_map, tx);
-				mutex_enter(sm->sm_lock);
-				smo->smo_objsize += bufsize;
+				dmu_write(os, space_map_object(sm),
+				    sm->sm_phys->smp_objsize, sm->sm_blksz,
+				    entry_map, tx);
+				sm->sm_phys->smp_objsize += sm->sm_blksz;
 				entry = entry_map;
 			}
 
@@ -528,162 +464,232 @@ space_map_sync(space_map_t *sm, uint8_t maptype,
 
 			start += run_len;
 			size -= run_len;
+			actual_entries++;
 		}
 	}
 
 	if (entry != entry_map) {
 		size = (entry - entry_map) * sizeof (uint64_t);
-		mutex_exit(sm->sm_lock);
-		dmu_write(os, smo->smo_object, smo->smo_objsize,
+		dmu_write(os, space_map_object(sm), sm->sm_phys->smp_objsize,
 		    size, entry_map, tx);
-		mutex_enter(sm->sm_lock);
-		smo->smo_objsize += size;
+		sm->sm_phys->smp_objsize += size;
 	}
+	ASSERT3U(expected_entries, ==, actual_entries);
 
 	/*
 	 * Ensure that the space_map's accounting wasn't changed
 	 * while we were in the middle of writing it out.
 	 */
-	VERIFY3U(nodes, ==, avl_numnodes(&sm->sm_root));
-	VERIFY3U(sm->sm_space, ==, sm_space);
-	VERIFY3U(sm->sm_space, ==, total);
+	VERIFY3U(nodes, ==, avl_numnodes(&rt->rt_root));
+	VERIFY3U(range_tree_space(rt), ==, rt_space);
+	VERIFY3U(range_tree_space(rt), ==, total);
 
-	zio_buf_free(entry_map, bufsize);
+	zio_buf_free(entry_map, sm->sm_blksz);
 }
 
-void
-space_map_truncate(space_map_obj_t *smo, objset_t *os, dmu_tx_t *tx)
-{
-	VERIFY(dmu_free_range(os, smo->smo_object, 0, -1ULL, tx) == 0);
-
-	smo->smo_objsize = 0;
-	smo->smo_alloc = 0;
-}
-
-/*
- * Space map reference trees.
- *
- * A space map is a collection of integers.  Every integer is either
- * in the map, or it's not.  A space map reference tree generalizes
- * the idea: it allows its members to have arbitrary reference counts,
- * as opposed to the implicit reference count of 0 or 1 in a space map.
- * This representation comes in handy when computing the union or
- * intersection of multiple space maps.  For example, the union of
- * N space maps is the subset of the reference tree with refcnt >= 1.
- * The intersection of N space maps is the subset with refcnt >= N.
- *
- * [It's very much like a Fourier transform.  Unions and intersections
- * are hard to perform in the 'space map domain', so we convert the maps
- * into the 'reference count domain', where it's trivial, then invert.]
- *
- * vdev_dtl_reassess() uses computations of this form to determine
- * DTL_MISSING and DTL_OUTAGE for interior vdevs -- e.g. a RAID-Z vdev
- * has an outage wherever refcnt >= vdev_nparity + 1, and a mirror vdev
- * has an outage wherever refcnt >= vdev_children.
- */
 static int
-space_map_ref_compare(const void *x1, const void *x2)
+space_map_open_impl(space_map_t *sm)
 {
-	const space_ref_t *sr1 = x1;
-	const space_ref_t *sr2 = x2;
+	int error;
+	u_longlong_t blocks;
 
-	if (sr1->sr_offset < sr2->sr_offset)
-		return (-1);
-	if (sr1->sr_offset > sr2->sr_offset)
-		return (1);
+	error = dmu_bonus_hold(sm->sm_os, sm->sm_object, sm, &sm->sm_dbuf);
+	if (error)
+		return (error);
 
-	if (sr1 < sr2)
-		return (-1);
-	if (sr1 > sr2)
-		return (1);
+	dmu_object_size_from_db(sm->sm_dbuf, &sm->sm_blksz, &blocks);
+	sm->sm_phys = sm->sm_dbuf->db_data;
+	return (0);
+}
+
+int
+space_map_open(space_map_t **smp, objset_t *os, uint64_t object,
+    uint64_t start, uint64_t size, uint8_t shift)
+{
+	space_map_t *sm;
+	int error;
+
+	ASSERT(*smp == NULL);
+	ASSERT(os != NULL);
+	ASSERT(object != 0);
+
+	sm = kmem_zalloc(sizeof (space_map_t), KM_SLEEP);
+
+	sm->sm_start = start;
+	sm->sm_size = size;
+	sm->sm_shift = shift;
+	sm->sm_os = os;
+	sm->sm_object = object;
+
+	error = space_map_open_impl(sm);
+	if (error != 0) {
+		space_map_close(sm);
+		return (error);
+	}
+
+	*smp = sm;
 
 	return (0);
 }
 
 void
-space_map_ref_create(avl_tree_t *t)
+space_map_close(space_map_t *sm)
 {
-	avl_create(t, space_map_ref_compare,
-	    sizeof (space_ref_t), offsetof(space_ref_t, sr_node));
+	if (sm == NULL)
+		return;
+
+	if (sm->sm_dbuf != NULL)
+		dmu_buf_rele(sm->sm_dbuf, sm);
+	sm->sm_dbuf = NULL;
+	sm->sm_phys = NULL;
+
+	kmem_free(sm, sizeof (*sm));
 }
 
 void
-space_map_ref_destroy(avl_tree_t *t)
+space_map_truncate(space_map_t *sm, int blocksize, dmu_tx_t *tx)
 {
-	space_ref_t *sr;
-	void *cookie = NULL;
+	objset_t *os = sm->sm_os;
+	spa_t *spa = dmu_objset_spa(os);
+	dmu_object_info_t doi;
 
-	while ((sr = avl_destroy_nodes(t, &cookie)) != NULL)
-		kmem_free(sr, sizeof (*sr));
+	ASSERT(dsl_pool_sync_context(dmu_objset_pool(os)));
+	ASSERT(dmu_tx_is_syncing(tx));
+	VERIFY3U(dmu_tx_get_txg(tx), <=, spa_final_dirty_txg(spa));
 
-	avl_destroy(t);
-}
+	dmu_object_info_from_db(sm->sm_dbuf, &doi);
 
-static void
-space_map_ref_add_node(avl_tree_t *t, uint64_t offset, int64_t refcnt)
-{
-	space_ref_t *sr;
+	/*
+	 * If the space map has the wrong bonus size (because
+	 * SPA_FEATURE_SPACEMAP_HISTOGRAM has recently been enabled), or
+	 * the wrong block size (because space_map_blksz has changed),
+	 * free and re-allocate its object with the updated sizes.
+	 *
+	 * Otherwise, just truncate the current object.
+	 */
+	if ((spa_feature_is_enabled(spa, SPA_FEATURE_SPACEMAP_HISTOGRAM) &&
+	    doi.doi_bonus_size != sizeof (space_map_phys_t)) ||
+	    doi.doi_data_block_size != blocksize) {
+		zfs_dbgmsg("txg %llu, spa %s, sm %p, reallocating "
+		    "object[%llu]: old bonus %u, old blocksz %u",
+		    dmu_tx_get_txg(tx), spa_name(spa), sm, sm->sm_object,
+		    doi.doi_bonus_size, doi.doi_data_block_size);
 
-	sr = kmem_alloc(sizeof (*sr), KM_SLEEP);
-	sr->sr_offset = offset;
-	sr->sr_refcnt = refcnt;
+		space_map_free(sm, tx);
+		dmu_buf_rele(sm->sm_dbuf, sm);
 
-	avl_add(t, sr);
-}
+		sm->sm_object = space_map_alloc(sm->sm_os, blocksize, tx);
+		VERIFY0(space_map_open_impl(sm));
+	} else {
+		VERIFY0(dmu_free_range(os, space_map_object(sm), 0, -1ULL, tx));
 
-void
-space_map_ref_add_seg(avl_tree_t *t, uint64_t start, uint64_t end,
-	int64_t refcnt)
-{
-	space_map_ref_add_node(t, start, refcnt);
-	space_map_ref_add_node(t, end, -refcnt);
+		/*
+		 * If the spacemap is reallocated, its histogram
+		 * will be reset.  Do the same in the common case so that
+		 * bugs related to the uncommon case do not go unnoticed.
+		 */
+		bzero(sm->sm_phys->smp_histogram,
+		    sizeof (sm->sm_phys->smp_histogram));
+	}
+
+	dmu_buf_will_dirty(sm->sm_dbuf, tx);
+	sm->sm_phys->smp_objsize = 0;
+	sm->sm_phys->smp_alloc = 0;
 }
 
 /*
- * Convert (or add) a space map into a reference tree.
+ * Update the in-core space_map allocation and length values.
  */
 void
-space_map_ref_add_map(avl_tree_t *t, space_map_t *sm, int64_t refcnt)
+space_map_update(space_map_t *sm)
 {
-	space_seg_t *ss;
+	if (sm == NULL)
+		return;
 
-	ASSERT(MUTEX_HELD(sm->sm_lock));
-
-	for (ss = avl_first(&sm->sm_root); ss; ss = AVL_NEXT(&sm->sm_root, ss))
-		space_map_ref_add_seg(t, ss->ss_start, ss->ss_end, refcnt);
+	sm->sm_alloc = sm->sm_phys->smp_alloc;
+	sm->sm_length = sm->sm_phys->smp_objsize;
 }
 
-/*
- * Convert a reference tree into a space map.  The space map will contain
- * all members of the reference tree for which refcnt >= minref.
- */
-void
-space_map_ref_generate_map(avl_tree_t *t, space_map_t *sm, int64_t minref)
+uint64_t
+space_map_alloc(objset_t *os, int blocksize, dmu_tx_t *tx)
 {
-	uint64_t start = -1ULL;
-	int64_t refcnt = 0;
-	space_ref_t *sr;
+	spa_t *spa = dmu_objset_spa(os);
+	uint64_t object;
+	int bonuslen;
 
-	ASSERT(MUTEX_HELD(sm->sm_lock));
+	if (spa_feature_is_enabled(spa, SPA_FEATURE_SPACEMAP_HISTOGRAM)) {
+		spa_feature_incr(spa, SPA_FEATURE_SPACEMAP_HISTOGRAM, tx);
+		bonuslen = sizeof (space_map_phys_t);
+		ASSERT3U(bonuslen, <=, dmu_bonus_max());
+	} else {
+		bonuslen = SPACE_MAP_SIZE_V0;
+	}
 
-	space_map_vacate(sm, NULL, NULL);
+	object = dmu_object_alloc(os, DMU_OT_SPACE_MAP, blocksize,
+	    DMU_OT_SPACE_MAP_HEADER, bonuslen, tx);
 
-	for (sr = avl_first(t); sr != NULL; sr = AVL_NEXT(t, sr)) {
-		refcnt += sr->sr_refcnt;
-		if (refcnt >= minref) {
-			if (start == -1ULL) {
-				start = sr->sr_offset;
-			}
-		} else {
-			if (start != -1ULL) {
-				uint64_t end = sr->sr_offset;
-				ASSERT(start <= end);
-				if (end > start)
-					space_map_add(sm, start, end - start);
-				start = -1ULL;
-			}
+	return (object);
+}
+
+void
+space_map_free_obj(objset_t *os, uint64_t smobj, dmu_tx_t *tx)
+{
+	spa_t *spa = dmu_objset_spa(os);
+	if (spa_feature_is_enabled(spa, SPA_FEATURE_SPACEMAP_HISTOGRAM)) {
+		dmu_object_info_t doi;
+
+		VERIFY0(dmu_object_info(os, smobj, &doi));
+		if (doi.doi_bonus_size != SPACE_MAP_SIZE_V0) {
+			spa_feature_decr(spa,
+			    SPA_FEATURE_SPACEMAP_HISTOGRAM, tx);
 		}
 	}
-	ASSERT(refcnt == 0);
-	ASSERT(start == -1ULL);
+
+	VERIFY0(dmu_object_free(os, smobj, tx));
+}
+
+void
+space_map_free(space_map_t *sm, dmu_tx_t *tx)
+{
+	if (sm == NULL)
+		return;
+
+	space_map_free_obj(sm->sm_os, space_map_object(sm), tx);
+	sm->sm_object = 0;
+}
+
+uint64_t
+space_map_object(space_map_t *sm)
+{
+	return (sm != NULL ? sm->sm_object : 0);
+}
+
+/*
+ * Returns the already synced, on-disk allocated space.
+ */
+uint64_t
+space_map_allocated(space_map_t *sm)
+{
+	return (sm != NULL ? sm->sm_alloc : 0);
+}
+
+/*
+ * Returns the already synced, on-disk length;
+ */
+uint64_t
+space_map_length(space_map_t *sm)
+{
+	return (sm != NULL ? sm->sm_length : 0);
+}
+
+/*
+ * Returns the allocated space that is currently syncing.
+ */
+int64_t
+space_map_alloc_delta(space_map_t *sm)
+{
+	if (sm == NULL)
+		return (0);
+	ASSERT(sm->sm_dbuf != NULL);
+	return (sm->sm_phys->smp_alloc - space_map_allocated(sm));
 }

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2003 Hidetoshi Shimokawa
  * Copyright (c) 1998-2002 Katsushi Kobayashi and Hidetoshi Shimokawa
  * All rights reserved.
@@ -35,7 +37,7 @@
  *
  */
 
-#define ORB_NOTIFY	(1 << 31)
+#define ORB_NOTIFY	(1U << 31)
 #define	ORB_FMT_STD	(0 << 29)
 #define	ORB_FMT_VED	(2 << 29)
 #define	ORB_FMT_NOP	(3 << 29)
@@ -76,7 +78,7 @@ struct ind_ptr {
 
 #define SBP_RECV_LEN 32
 
-struct sbp_login_res{
+struct sbp_login_res {
 	uint16_t	len;
 	uint16_t	id;
 	uint16_t	res0;
@@ -86,7 +88,7 @@ struct sbp_login_res{
 	uint16_t	recon_hold;
 };
 
-struct sbp_status{
+struct sbp_status {
 #if BYTE_ORDER == BIG_ENDIAN
 	uint8_t		src:2,
 			resp:2,
@@ -155,7 +157,7 @@ struct sbp_status{
 /* F: Address error */
 
 
-struct sbp_cmd_status{
+struct sbp_cmd_status {
 #define SBP_SFMT_CURR 0
 #define SBP_SFMT_DEFER 1
 #if BYTE_ORDER == BIG_ENDIAN

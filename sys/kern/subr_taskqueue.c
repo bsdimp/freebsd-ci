@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Doug Rabson
  * All rights reserved.
  *
@@ -30,15 +32,18 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/bus.h>
+#include <sys/cpuset.h>
 #include <sys/interrupt.h>
 #include <sys/kernel.h>
 #include <sys/kthread.h>
+#include <sys/libkern.h>
 #include <sys/limits.h>
 #include <sys/lock.h>
 #include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/proc.h>
 #include <sys/sched.h>
+#include <sys/smp.h>
 #include <sys/taskqueue.h>
 #include <sys/unistd.h>
 #include <machine/stdarg.h>
@@ -46,16 +51,22 @@ __FBSDID("$FreeBSD$");
 static MALLOC_DEFINE(M_TASKQUEUE, "taskqueue", "Task Queues");
 static void	*taskqueue_giant_ih;
 static void	*taskqueue_ih;
+static void	 taskqueue_fast_enqueue(void *);
+static void	 taskqueue_swi_enqueue(void *);
+static void	 taskqueue_swi_giant_enqueue(void *);
 
 struct taskqueue_busy {
 	struct task	*tb_running;
 	TAILQ_ENTRY(taskqueue_busy) tb_link;
 };
 
+struct task * const TB_DRAIN_WAITER = (struct task *)0x1;
+
 struct taskqueue {
 	STAILQ_HEAD(, task)	tq_queue;
 	taskqueue_enqueue_fn	tq_enqueue;
 	void			*tq_context;
+	char			*tq_name;
 	TAILQ_HEAD(, taskqueue_busy) tq_active;
 	struct mtx		tq_mutex;
 	struct thread		**tq_threads;
@@ -69,9 +80,10 @@ struct taskqueue {
 
 #define	TQ_FLAGS_ACTIVE		(1 << 0)
 #define	TQ_FLAGS_BLOCKED	(1 << 1)
-#define	TQ_FLAGS_PENDING	(1 << 2)
+#define	TQ_FLAGS_UNLOCKED_ENQUEUE	(1 << 2)
 
 #define	DT_CALLOUT_ARMED	(1 << 0)
+#define	DT_DRAIN_IN_PROGRESS	(1 << 1)
 
 #define	TQ_LOCK(tq)							\
 	do {								\
@@ -97,7 +109,8 @@ _timeout_task_init(struct taskqueue *queue, struct timeout_task *timeout_task,
 {
 
 	TASK_INIT(&timeout_task->t, priority, func, context);
-	callout_init_mtx(&timeout_task->c, &queue->tq_mutex, 0);
+	callout_init_mtx(&timeout_task->c, &queue->tq_mutex,
+	    CALLOUT_RETURNUNLOCKED);
 	timeout_task->q = queue;
 	timeout_task->f = 0;
 }
@@ -112,33 +125,49 @@ TQ_SLEEP(struct taskqueue *tq, void *p, struct mtx *m, int pri, const char *wm,
 }
 
 static struct taskqueue *
-_taskqueue_create(const char *name __unused, int mflags,
+_taskqueue_create(const char *name, int mflags,
 		 taskqueue_enqueue_fn enqueue, void *context,
-		 int mtxflags, const char *mtxname)
+		 int mtxflags, const char *mtxname __unused)
 {
 	struct taskqueue *queue;
+	char *tq_name;
+
+	tq_name = malloc(TASKQUEUE_NAMELEN, M_TASKQUEUE, mflags | M_ZERO);
+	if (tq_name == NULL)
+		return (NULL);
 
 	queue = malloc(sizeof(struct taskqueue), M_TASKQUEUE, mflags | M_ZERO);
-	if (!queue)
-		return NULL;
+	if (queue == NULL) {
+		free(tq_name, M_TASKQUEUE);
+		return (NULL);
+	}
+
+	snprintf(tq_name, TASKQUEUE_NAMELEN, "%s", (name) ? name : "taskqueue");
 
 	STAILQ_INIT(&queue->tq_queue);
 	TAILQ_INIT(&queue->tq_active);
 	queue->tq_enqueue = enqueue;
 	queue->tq_context = context;
+	queue->tq_name = tq_name;
 	queue->tq_spin = (mtxflags & MTX_SPIN) != 0;
 	queue->tq_flags |= TQ_FLAGS_ACTIVE;
-	mtx_init(&queue->tq_mutex, mtxname, NULL, mtxflags);
+	if (enqueue == taskqueue_fast_enqueue ||
+	    enqueue == taskqueue_swi_enqueue ||
+	    enqueue == taskqueue_swi_giant_enqueue ||
+	    enqueue == taskqueue_thread_enqueue)
+		queue->tq_flags |= TQ_FLAGS_UNLOCKED_ENQUEUE;
+	mtx_init(&queue->tq_mutex, tq_name, NULL, mtxflags);
 
-	return queue;
+	return (queue);
 }
 
 struct taskqueue *
 taskqueue_create(const char *name, int mflags,
 		 taskqueue_enqueue_fn enqueue, void *context)
 {
+
 	return _taskqueue_create(name, mflags, enqueue, context,
-			MTX_DEF, "taskqueue");
+			MTX_DEF, name);
 }
 
 void
@@ -182,6 +211,7 @@ taskqueue_free(struct taskqueue *queue)
 	KASSERT(queue->tq_callouts == 0, ("Armed timeout tasks"));
 	mtx_destroy(&queue->tq_mutex);
 	free(queue->tq_threads, M_TASKQUEUE);
+	free(queue->tq_name, M_TASKQUEUE);
 	free(queue, M_TASKQUEUE);
 }
 
@@ -191,12 +221,14 @@ taskqueue_enqueue_locked(struct taskqueue *queue, struct task *task)
 	struct task *ins;
 	struct task *prev;
 
+	KASSERT(task->ta_func != NULL, ("enqueueing task with NULL func"));
 	/*
 	 * Count multiple enqueues.
 	 */
 	if (task->ta_pending) {
 		if (task->ta_pending < USHRT_MAX)
 			task->ta_pending++;
+		TQ_UNLOCK(queue);
 		return (0);
 	}
 
@@ -220,13 +252,17 @@ taskqueue_enqueue_locked(struct taskqueue *queue, struct task *task)
 	}
 
 	task->ta_pending = 1;
+	if ((queue->tq_flags & TQ_FLAGS_UNLOCKED_ENQUEUE) != 0)
+		TQ_UNLOCK(queue);
 	if ((queue->tq_flags & TQ_FLAGS_BLOCKED) == 0)
 		queue->tq_enqueue(queue->tq_context);
-	else
-		queue->tq_flags |= TQ_FLAGS_PENDING;
+	if ((queue->tq_flags & TQ_FLAGS_UNLOCKED_ENQUEUE) == 0)
+		TQ_UNLOCK(queue);
 
+	/* Return with lock released. */
 	return (0);
 }
+
 int
 taskqueue_enqueue(struct taskqueue *queue, struct task *task)
 {
@@ -234,7 +270,7 @@ taskqueue_enqueue(struct taskqueue *queue, struct task *task)
 
 	TQ_LOCK(queue);
 	res = taskqueue_enqueue_locked(queue, task);
-	TQ_UNLOCK(queue);
+	/* The lock is released inside. */
 
 	return (res);
 }
@@ -251,11 +287,12 @@ taskqueue_timeout_func(void *arg)
 	timeout_task->f &= ~DT_CALLOUT_ARMED;
 	queue->tq_callouts--;
 	taskqueue_enqueue_locked(timeout_task->q, &timeout_task->t);
+	/* The lock is released inside. */
 }
 
 int
-taskqueue_enqueue_timeout(struct taskqueue *queue,
-    struct timeout_task *timeout_task, int ticks)
+taskqueue_enqueue_timeout_sbt(struct taskqueue *queue,
+    struct timeout_task *timeout_task, sbintime_t sbt, sbintime_t pr, int flags)
 {
 	int res;
 
@@ -265,24 +302,116 @@ taskqueue_enqueue_timeout(struct taskqueue *queue,
 	KASSERT(!queue->tq_spin, ("Timeout for spin-queue"));
 	timeout_task->q = queue;
 	res = timeout_task->t.ta_pending;
-	if (ticks == 0) {
+	if (timeout_task->f & DT_DRAIN_IN_PROGRESS) {
+		/* Do nothing */
+		TQ_UNLOCK(queue);
+		res = -1;
+	} else if (sbt == 0) {
 		taskqueue_enqueue_locked(queue, &timeout_task->t);
+		/* The lock is released inside. */
 	} else {
 		if ((timeout_task->f & DT_CALLOUT_ARMED) != 0) {
 			res++;
 		} else {
 			queue->tq_callouts++;
 			timeout_task->f |= DT_CALLOUT_ARMED;
-			if (ticks < 0)
-				ticks = -ticks; /* Ignore overflow. */
+			if (sbt < 0)
+				sbt = -sbt; /* Ignore overflow. */
 		}
-		if (ticks > 0) {
-			callout_reset(&timeout_task->c, ticks,
-			    taskqueue_timeout_func, timeout_task);
+		if (sbt > 0) {
+			callout_reset_sbt(&timeout_task->c, sbt, pr,
+			    taskqueue_timeout_func, timeout_task, flags);
 		}
+		TQ_UNLOCK(queue);
 	}
-	TQ_UNLOCK(queue);
 	return (res);
+}
+
+int
+taskqueue_enqueue_timeout(struct taskqueue *queue,
+    struct timeout_task *ttask, int ticks)
+{
+
+	return (taskqueue_enqueue_timeout_sbt(queue, ttask, ticks * tick_sbt,
+	    0, 0));
+}
+
+static void
+taskqueue_task_nop_fn(void *context, int pending)
+{
+}
+
+/*
+ * Block until all currently queued tasks in this taskqueue
+ * have begun execution.  Tasks queued during execution of
+ * this function are ignored.
+ */
+static void
+taskqueue_drain_tq_queue(struct taskqueue *queue)
+{
+	struct task t_barrier;
+
+	if (STAILQ_EMPTY(&queue->tq_queue))
+		return;
+
+	/*
+	 * Enqueue our barrier after all current tasks, but with
+	 * the highest priority so that newly queued tasks cannot
+	 * pass it.  Because of the high priority, we can not use
+	 * taskqueue_enqueue_locked directly (which drops the lock
+	 * anyway) so just insert it at tail while we have the
+	 * queue lock.
+	 */
+	TASK_INIT(&t_barrier, USHRT_MAX, taskqueue_task_nop_fn, &t_barrier);
+	STAILQ_INSERT_TAIL(&queue->tq_queue, &t_barrier, ta_link);
+	t_barrier.ta_pending = 1;
+
+	/*
+	 * Once the barrier has executed, all previously queued tasks
+	 * have completed or are currently executing.
+	 */
+	while (t_barrier.ta_pending != 0)
+		TQ_SLEEP(queue, &t_barrier, &queue->tq_mutex, PWAIT, "-", 0);
+}
+
+/*
+ * Block until all currently executing tasks for this taskqueue
+ * complete.  Tasks that begin execution during the execution
+ * of this function are ignored.
+ */
+static void
+taskqueue_drain_tq_active(struct taskqueue *queue)
+{
+	struct taskqueue_busy tb_marker, *tb_first;
+
+	if (TAILQ_EMPTY(&queue->tq_active))
+		return;
+
+	/* Block taskq_terminate().*/
+	queue->tq_callouts++;
+
+	/*
+	 * Wait for all currently executing taskqueue threads
+	 * to go idle.
+	 */
+	tb_marker.tb_running = TB_DRAIN_WAITER;
+	TAILQ_INSERT_TAIL(&queue->tq_active, &tb_marker, tb_link);
+	while (TAILQ_FIRST(&queue->tq_active) != &tb_marker)
+		TQ_SLEEP(queue, &tb_marker, &queue->tq_mutex, PWAIT, "-", 0);
+	TAILQ_REMOVE(&queue->tq_active, &tb_marker, tb_link);
+
+	/*
+	 * Wakeup any other drain waiter that happened to queue up
+	 * without any intervening active thread.
+	 */
+	tb_first = TAILQ_FIRST(&queue->tq_active);
+	if (tb_first != NULL && tb_first->tb_running == TB_DRAIN_WAITER)
+		wakeup(tb_first);
+
+	/* Release taskqueue_terminate(). */
+	queue->tq_callouts--;
+	if ((queue->tq_flags & TQ_FLAGS_ACTIVE) == 0)
+		wakeup_one(queue->tq_threads);
 }
 
 void
@@ -300,10 +429,8 @@ taskqueue_unblock(struct taskqueue *queue)
 
 	TQ_LOCK(queue);
 	queue->tq_flags &= ~TQ_FLAGS_BLOCKED;
-	if (queue->tq_flags & TQ_FLAGS_PENDING) {
-		queue->tq_flags &= ~TQ_FLAGS_PENDING;
+	if (!STAILQ_EMPTY(&queue->tq_queue))
 		queue->tq_enqueue(queue->tq_context);
-	}
 	TQ_UNLOCK(queue);
 }
 
@@ -311,32 +438,42 @@ static void
 taskqueue_run_locked(struct taskqueue *queue)
 {
 	struct taskqueue_busy tb;
+	struct taskqueue_busy *tb_first;
 	struct task *task;
 	int pending;
 
+	KASSERT(queue != NULL, ("tq is NULL"));
 	TQ_ASSERT_LOCKED(queue);
 	tb.tb_running = NULL;
-	TAILQ_INSERT_TAIL(&queue->tq_active, &tb, tb_link);
 
 	while (STAILQ_FIRST(&queue->tq_queue)) {
+		TAILQ_INSERT_TAIL(&queue->tq_active, &tb, tb_link);
+
 		/*
 		 * Carefully remove the first task from the queue and
 		 * zero its pending count.
 		 */
 		task = STAILQ_FIRST(&queue->tq_queue);
+		KASSERT(task != NULL, ("task is NULL"));
 		STAILQ_REMOVE_HEAD(&queue->tq_queue, ta_link);
 		pending = task->ta_pending;
 		task->ta_pending = 0;
 		tb.tb_running = task;
 		TQ_UNLOCK(queue);
 
+		KASSERT(task->ta_func != NULL, ("task->ta_func is NULL"));
 		task->ta_func(task->ta_context, pending);
 
 		TQ_LOCK(queue);
 		tb.tb_running = NULL;
 		wakeup(task);
+
+		TAILQ_REMOVE(&queue->tq_active, &tb, tb_link);
+		tb_first = TAILQ_FIRST(&queue->tq_active);
+		if (tb_first != NULL &&
+		    tb_first->tb_running == TB_DRAIN_WAITER)
+			wakeup(tb_first);
 	}
-	TAILQ_REMOVE(&queue->tq_active, &tb, tb_link);
 }
 
 void
@@ -361,6 +498,23 @@ task_is_running(struct taskqueue *queue, struct task *task)
 	return (0);
 }
 
+/*
+ * Only use this function in single threaded contexts. It returns
+ * non-zero if the given task is either pending or running. Else the
+ * task is idle and can be queued again or freed.
+ */
+int
+taskqueue_poll_is_busy(struct taskqueue *queue, struct task *task)
+{
+	int retval;
+
+	TQ_LOCK(queue);
+	retval = task->ta_pending > 0 || task_is_running(queue, task);
+	TQ_UNLOCK(queue);
+
+	return (retval);
+}
+
 static int
 taskqueue_cancel_locked(struct taskqueue *queue, struct task *task,
     u_int *pendp)
@@ -377,11 +531,9 @@ taskqueue_cancel_locked(struct taskqueue *queue, struct task *task,
 int
 taskqueue_cancel(struct taskqueue *queue, struct task *task, u_int *pendp)
 {
-	u_int pending;
 	int error;
 
 	TQ_LOCK(queue);
-	pending = task->ta_pending;
 	error = taskqueue_cancel_locked(queue, task, pendp);
 	TQ_UNLOCK(queue);
 
@@ -396,7 +548,7 @@ taskqueue_cancel_timeout(struct taskqueue *queue,
 	int error;
 
 	TQ_LOCK(queue);
-	pending = !!callout_stop(&timeout_task->c);
+	pending = !!(callout_stop(&timeout_task->c) > 0);
 	error = taskqueue_cancel_locked(queue, &timeout_task->t, &pending1);
 	if ((timeout_task->f & DT_CALLOUT_ARMED) != 0) {
 		timeout_task->f &= ~DT_CALLOUT_ARMED;
@@ -423,12 +575,41 @@ taskqueue_drain(struct taskqueue *queue, struct task *task)
 }
 
 void
+taskqueue_drain_all(struct taskqueue *queue)
+{
+
+	if (!queue->tq_spin)
+		WITNESS_WARN(WARN_GIANTOK | WARN_SLEEPOK, NULL, __func__);
+
+	TQ_LOCK(queue);
+	taskqueue_drain_tq_queue(queue);
+	taskqueue_drain_tq_active(queue);
+	TQ_UNLOCK(queue);
+}
+
+void
 taskqueue_drain_timeout(struct taskqueue *queue,
     struct timeout_task *timeout_task)
 {
 
+	/*
+	 * Set flag to prevent timer from re-starting during drain:
+	 */
+	TQ_LOCK(queue);
+	KASSERT((timeout_task->f & DT_DRAIN_IN_PROGRESS) == 0,
+	    ("Drain already in progress"));
+	timeout_task->f |= DT_DRAIN_IN_PROGRESS;
+	TQ_UNLOCK(queue);
+
 	callout_drain(&timeout_task->c);
 	taskqueue_drain(queue, &timeout_task->t);
+
+	/*
+	 * Clear flag to allow timer to re-start:
+	 */
+	TQ_LOCK(queue);
+	timeout_task->f &= ~DT_DRAIN_IN_PROGRESS;
+	TQ_UNLOCK(queue);
 }
 
 static void
@@ -455,24 +636,20 @@ taskqueue_swi_giant_run(void *dummy)
 	taskqueue_run(taskqueue_swi_giant);
 }
 
-int
-taskqueue_start_threads(struct taskqueue **tqp, int count, int pri,
-			const char *name, ...)
+static int
+_taskqueue_start_threads(struct taskqueue **tqp, int count, int pri,
+    cpuset_t *mask, const char *name, va_list ap)
 {
-	va_list ap;
+	char ktname[MAXCOMLEN + 1];
 	struct thread *td;
 	struct taskqueue *tq;
 	int i, error;
-	char ktname[MAXCOMLEN + 1];
 
 	if (count <= 0)
 		return (EINVAL);
 
-	tq = *tqp;
-
-	va_start(ap, name);
 	vsnprintf(ktname, sizeof(ktname), name, ap);
-	va_end(ap);
+	tq = *tqp;
 
 	tq->tq_threads = malloc(sizeof(struct thread *) * count, M_TASKQUEUE,
 	    M_NOWAIT | M_ZERO);
@@ -497,10 +674,28 @@ taskqueue_start_threads(struct taskqueue **tqp, int count, int pri,
 		} else
 			tq->tq_tcount++;
 	}
+	if (tq->tq_tcount == 0) {
+		free(tq->tq_threads, M_TASKQUEUE);
+		tq->tq_threads = NULL;
+		return (ENOMEM);
+	}
 	for (i = 0; i < count; i++) {
 		if (tq->tq_threads[i] == NULL)
 			continue;
 		td = tq->tq_threads[i];
+		if (mask) {
+			error = cpuset_setthread(td->td_tid, mask);
+			/*
+			 * Failing to pin is rarely an actual fatal error;
+			 * it'll just affect performance.
+			 */
+			if (error)
+				printf("%s: curthread=%llu: can't pin; "
+				    "error=%d\n",
+				    __func__,
+				    (unsigned long long) td->td_tid,
+				    error);
+		}
 		thread_lock(td);
 		sched_prio(td, pri);
 		sched_add(td, SRQ_BORING);
@@ -508,6 +703,32 @@ taskqueue_start_threads(struct taskqueue **tqp, int count, int pri,
 	}
 
 	return (0);
+}
+
+int
+taskqueue_start_threads(struct taskqueue **tqp, int count, int pri,
+    const char *name, ...)
+{
+	va_list ap;
+	int error;
+
+	va_start(ap, name);
+	error = _taskqueue_start_threads(tqp, count, pri, NULL, name, ap);
+	va_end(ap);
+	return (error);
+}
+
+int
+taskqueue_start_threads_cpuset(struct taskqueue **tqp, int count, int pri,
+    cpuset_t *mask, const char *name, ...)
+{
+	va_list ap;
+	int error;
+
+	va_start(ap, name);
+	error = _taskqueue_start_threads(tqp, count, pri, mask, name, ap);
+	va_end(ap);
+	return (error);
 }
 
 static inline void
@@ -532,6 +753,7 @@ taskqueue_thread_loop(void *arg)
 	taskqueue_run_callback(tq, TASKQUEUE_CALLBACK_TYPE_INIT);
 	TQ_LOCK(tq);
 	while ((tq->tq_flags & TQ_FLAGS_ACTIVE) != 0) {
+		/* XXX ? */
 		taskqueue_run_locked(tq);
 		/*
 		 * Because taskqueue_run() can drop tq_mutex, we need to
@@ -543,7 +765,6 @@ taskqueue_thread_loop(void *arg)
 		TQ_SLEEP(tq, tq, &tq->tq_mutex, 0, "-", 0);
 	}
 	taskqueue_run_locked(tq);
-
 	/*
 	 * This thread is on its way out, so just drop the lock temporarily
 	 * in order to call the shutdown callback.  This allows the callback
@@ -567,18 +788,16 @@ taskqueue_thread_enqueue(void *context)
 
 	tqp = context;
 	tq = *tqp;
-
-	TQ_ASSERT_LOCKED(tq);
 	wakeup_one(tq);
 }
 
 TASKQUEUE_DEFINE(swi, taskqueue_swi_enqueue, NULL,
 		 swi_add(NULL, "task queue", taskqueue_swi_run, NULL, SWI_TQ,
-		     INTR_MPSAFE, &taskqueue_ih)); 
+		     INTR_MPSAFE, &taskqueue_ih));
 
 TASKQUEUE_DEFINE(swi_giant, taskqueue_swi_giant_enqueue, NULL,
 		 swi_add(NULL, "Giant taskq", taskqueue_swi_giant_run,
-		     NULL, SWI_TQ_GIANT, 0, &taskqueue_giant_ih)); 
+		     NULL, SWI_TQ_GIANT, 0, &taskqueue_giant_ih));
 
 TASKQUEUE_DEFINE_THREAD(thread);
 
@@ -588,13 +807,6 @@ taskqueue_create_fast(const char *name, int mflags,
 {
 	return _taskqueue_create(name, mflags, enqueue, context,
 			MTX_SPIN, "fast_taskqueue");
-}
-
-/* NB: for backwards compatibility */
-int
-taskqueue_enqueue_fast(struct taskqueue *queue, struct task *task)
-{
-	return taskqueue_enqueue(queue, task);
 }
 
 static void	*taskqueue_fast_ih;
@@ -620,7 +832,6 @@ taskqueue_member(struct taskqueue *queue, struct thread *td)
 {
 	int i, j, ret = 0;
 
-	TQ_LOCK(queue);
 	for (i = 0, j = 0; ; i++) {
 		if (queue->tq_threads[i] == NULL)
 			continue;
@@ -631,6 +842,5 @@ taskqueue_member(struct taskqueue *queue, struct thread *td)
 		if (++j >= queue->tq_tcount)
 			break;
 	}
-	TQ_UNLOCK(queue);
 	return (ret);
 }

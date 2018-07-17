@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  */
 
 /*
@@ -45,7 +45,7 @@
 /* ARGSUSED */
 static int
 vdev_missing_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
-    uint64_t *ashift)
+    uint64_t *logical_ashift, uint64_t *physical_ashift)
 {
 	/*
 	 * Really this should just fail.  But then the root vdev will be in the
@@ -55,7 +55,8 @@ vdev_missing_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	 */
 	*psize = 0;
 	*max_psize = 0;
-	*ashift = 0;
+	*logical_ashift = 0;
+	*physical_ashift = 0;
 	return (0);
 }
 
@@ -66,11 +67,11 @@ vdev_missing_close(vdev_t *vd)
 }
 
 /* ARGSUSED */
-static int
+static void
 vdev_missing_io_start(zio_t *zio)
 {
 	zio->io_error = SET_ERROR(ENOTSUP);
-	return (ZIO_PIPELINE_CONTINUE);
+	zio_execute(zio);
 }
 
 /* ARGSUSED */
@@ -88,6 +89,8 @@ vdev_ops_t vdev_missing_ops = {
 	NULL,
 	NULL,
 	NULL,
+	NULL,
+	NULL,
 	VDEV_TYPE_MISSING,	/* name of this vdev type */
 	B_TRUE			/* leaf vdev */
 };
@@ -98,6 +101,8 @@ vdev_ops_t vdev_hole_ops = {
 	vdev_default_asize,
 	vdev_missing_io_start,
 	vdev_missing_io_done,
+	NULL,
+	NULL,
 	NULL,
 	NULL,
 	NULL,

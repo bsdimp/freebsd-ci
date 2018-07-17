@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2008 Isilon Systems, Inc.
  * Copyright (c) 2008 Ilya Maykov <ivmaykov@gmail.com>
  * Copyright (c) 1998 Berkeley Software Design, Inc.
@@ -106,6 +108,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sched.h>
 #include <sys/stack.h>
 #include <sys/sysctl.h>
+#include <sys/syslog.h>
 #include <sys/systm.h>
 
 #ifdef DDB
@@ -132,10 +135,11 @@ __FBSDID("$FreeBSD$");
 /* Define this to check for blessed mutexes */
 #undef BLESSING
 
-#define	WITNESS_COUNT 		1024
-#define	WITNESS_CHILDCOUNT 	(WITNESS_COUNT * 4)
+#ifndef WITNESS_COUNT
+#define	WITNESS_COUNT 		1536
+#endif
 #define	WITNESS_HASH_SIZE	251	/* Prime, gives load factor < 2 */
-#define	WITNESS_PENDLIST	768
+#define	WITNESS_PENDLIST	(512 + (MAXCPU * 4))
 
 /* Allocate 256 KB of stack data space */
 #define	WITNESS_LO_DATA_COUNT	2048
@@ -153,7 +157,6 @@ __FBSDID("$FreeBSD$");
 
 #define	MAX_W_NAME	64
 
-#define	BADSTACK_SBUF_SIZE	(256 * WITNESS_COUNT)
 #define	FULLGRAPH_SBUF_SIZE	512
 
 /*
@@ -182,7 +185,7 @@ __FBSDID("$FreeBSD$");
 #define	WITNESS_ATOD(x)	(((x) & WITNESS_RELATED_MASK) << 2)
 
 #define	WITNESS_INDEX_ASSERT(i)						\
-	MPASS((i) > 0 && (i) <= w_max_used_index && (i) < WITNESS_COUNT)
+	MPASS((i) > 0 && (i) <= w_max_used_index && (i) < witness_count)
 
 static MALLOC_DEFINE(M_WITNESS, "Witness", "Witness");
 
@@ -305,13 +308,6 @@ witness_lock_type_equal(struct witness *w1, struct witness *w2)
 }
 
 static __inline int
-witness_lock_order_key_empty(const struct witness_lock_order_key *key)
-{
-
-	return (key->from == 0 && key->to == 0);
-}
-
-static __inline int
 witness_lock_order_key_equal(const struct witness_lock_order_key *a,
     const struct witness_lock_order_key *b)
 {
@@ -321,9 +317,6 @@ witness_lock_order_key_equal(const struct witness_lock_order_key *a,
 
 static int	_isitmyx(struct witness *w1, struct witness *w2, int rmask,
 		    const char *fname);
-#ifdef KDB
-static void	_witness_debugger(int cond, const char *msg);
-#endif
 static void	adopt(struct witness *parent, struct witness *child);
 #ifdef BLESSING
 static int	blessed(struct witness *, struct witness *);
@@ -339,6 +332,7 @@ static void	itismychild(struct witness *parent, struct witness *child);
 static int	sysctl_debug_witness_badstacks(SYSCTL_HANDLER_ARGS);
 static int	sysctl_debug_witness_watch(SYSCTL_HANDLER_ARGS);
 static int	sysctl_debug_witness_fullgraph(SYSCTL_HANDLER_ARGS);
+static int	sysctl_debug_witness_channel(SYSCTL_HANDLER_ARGS);
 static void	witness_add_fullgraph(struct sbuf *sb, struct witness *parent);
 #ifdef DDB
 static void	witness_ddb_compute_levels(void);
@@ -350,6 +344,7 @@ static void	witness_ddb_display_list(int(*prnt)(const char *fmt, ...),
 static void	witness_ddb_level_descendants(struct witness *parent, int l);
 static void	witness_ddb_list(struct thread *td);
 #endif
+static void	witness_debugger(int cond, const char *msg);
 static void	witness_free(struct witness *m);
 static struct witness	*witness_get(void);
 static uint32_t	witness_hash_djb2(const uint8_t *key, uint32_t size);
@@ -368,13 +363,9 @@ static struct witness_lock_order_data	*witness_lock_order_get(
 					    struct witness *child);
 static void	witness_list_lock(struct lock_instance *instance,
 		    int (*prnt)(const char *fmt, ...));
+static int	witness_output(const char *fmt, ...) __printflike(1, 2);
+static int	witness_voutput(const char *fmt, va_list ap) __printflike(1, 0);
 static void	witness_setflag(struct lock_object *lock, int flag, int set);
-
-#ifdef KDB
-#define	witness_debugger(c)	_witness_debugger(c, __func__)
-#else
-#define	witness_debugger(c)
-#endif
 
 static SYSCTL_NODE(_debug, OID_AUTO, witness, CTLFLAG_RW, NULL,
     "Witness Locking");
@@ -387,8 +378,7 @@ static SYSCTL_NODE(_debug, OID_AUTO, witness, CTLFLAG_RW, NULL,
  * completely disabled.
  */
 static int witness_watch = 1;
-TUNABLE_INT("debug.witness.watch", &witness_watch);
-SYSCTL_PROC(_debug_witness, OID_AUTO, watch, CTLFLAG_RW | CTLTYPE_INT, NULL, 0,
+SYSCTL_PROC(_debug_witness, OID_AUTO, watch, CTLFLAG_RWTUN | CTLTYPE_INT, NULL, 0,
     sysctl_debug_witness_watch, "I", "witness is watching lock operations");
 
 #ifdef KDB
@@ -403,28 +393,46 @@ int	witness_kdb = 1;
 #else
 int	witness_kdb = 0;
 #endif
-TUNABLE_INT("debug.witness.kdb", &witness_kdb);
-SYSCTL_INT(_debug_witness, OID_AUTO, kdb, CTLFLAG_RW, &witness_kdb, 0, "");
+SYSCTL_INT(_debug_witness, OID_AUTO, kdb, CTLFLAG_RWTUN, &witness_kdb, 0, "");
+#endif /* KDB */
 
+#if defined(DDB) || defined(KDB)
 /*
- * When KDB is enabled and witness_trace is 1, it will cause the system
+ * When DDB or KDB is enabled and witness_trace is 1, it will cause the system
  * to print a stack trace:
  *	- a lock hierarchy violation occurs
  *	- locks are held when going to sleep.
  */
 int	witness_trace = 1;
-TUNABLE_INT("debug.witness.trace", &witness_trace);
-SYSCTL_INT(_debug_witness, OID_AUTO, trace, CTLFLAG_RW, &witness_trace, 0, "");
-#endif /* KDB */
+SYSCTL_INT(_debug_witness, OID_AUTO, trace, CTLFLAG_RWTUN, &witness_trace, 0, "");
+#endif /* DDB || KDB */
 
 #ifdef WITNESS_SKIPSPIN
 int	witness_skipspin = 1;
 #else
 int	witness_skipspin = 0;
 #endif
-TUNABLE_INT("debug.witness.skipspin", &witness_skipspin);
-SYSCTL_INT(_debug_witness, OID_AUTO, skipspin, CTLFLAG_RDTUN, &witness_skipspin,
-    0, "");
+SYSCTL_INT(_debug_witness, OID_AUTO, skipspin, CTLFLAG_RDTUN, &witness_skipspin, 0, "");
+
+int badstack_sbuf_size;
+
+int witness_count = WITNESS_COUNT;
+SYSCTL_INT(_debug_witness, OID_AUTO, witness_count, CTLFLAG_RDTUN, 
+    &witness_count, 0, "");
+
+/*
+ * Output channel for witness messages.  By default we print to the console.
+ */
+enum witness_channel {
+	WITNESS_CONSOLE,
+	WITNESS_LOG,
+	WITNESS_NONE,
+};
+
+static enum witness_channel witness_channel = WITNESS_CONSOLE;
+SYSCTL_PROC(_debug_witness, OID_AUTO, output_channel, CTLTYPE_STRING |
+    CTLFLAG_RWTUN, NULL, 0, sysctl_debug_witness_channel, "A",
+    "Output channel for warnings");
 
 /*
  * Call this to print out the relations between locks.
@@ -460,7 +468,7 @@ SYSCTL_INT(_debug_witness, OID_AUTO, sleep_cnt, CTLFLAG_RD, &w_sleep_cnt, 0,
     "");
 
 static struct witness *w_data;
-static uint8_t w_rmatrix[WITNESS_COUNT+1][WITNESS_COUNT+1];
+static uint8_t **w_rmatrix;
 static struct lock_list_entry w_locklistdata[LOCK_CHILDCOUNT];
 static struct witness_hash w_hash;	/* The witness hash table. */
 
@@ -472,7 +480,9 @@ static int w_max_used_index = 0;
 static unsigned int w_generation = 0;
 static const char w_notrunning[] = "Witness not running\n";
 static const char w_stillcold[] = "Witness is still cold\n";
-
+#ifdef __i386__
+static const char w_notallowed[] = "The sysctl is disabled on the arch\n";
+#endif
 
 static struct witness_order_list_entry order_lists[] = {
 	/*
@@ -489,13 +499,18 @@ static struct witness_order_list_entry order_lists[] = {
 	{ "pipe mutex", &lock_class_mtx_sleep },
 	{ "sigio lock", &lock_class_mtx_sleep },
 	{ "process group", &lock_class_mtx_sleep },
-	{ "process lock", &lock_class_mtx_sleep },
-	{ "session", &lock_class_mtx_sleep },
-	{ "uidinfo hash", &lock_class_rw },
 #ifdef	HWPMC_HOOKS
 	{ "pmc-sleep", &lock_class_mtx_sleep },
 #endif
+	{ "process lock", &lock_class_mtx_sleep },
+	{ "session", &lock_class_mtx_sleep },
+	{ "uidinfo hash", &lock_class_rw },
 	{ "time lock", &lock_class_mtx_sleep },
+	{ NULL, NULL },
+	/*
+	 * umtx
+	 */
+	{ "umtx lock", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
 	 * Sockets
@@ -509,7 +524,7 @@ static struct witness_order_list_entry order_lists[] = {
 	 * Routing
 	 */
 	{ "so_rcv", &lock_class_mtx_sleep },
-	{ "radix node head", &lock_class_rw },
+	{ "radix node head", &lock_class_rm },
 	{ "rtentry", &lock_class_mtx_sleep },
 	{ "ifaddr", &lock_class_mtx_sleep },
 	{ NULL, NULL },
@@ -517,24 +532,28 @@ static struct witness_order_list_entry order_lists[] = {
 	 * IPv4 multicast:
 	 * protocol locks before interface locks, after UDP locks.
 	 */
+	{ "in_multi_sx", &lock_class_sx },
 	{ "udpinp", &lock_class_rw },
-	{ "in_multi_mtx", &lock_class_mtx_sleep },
+	{ "in_multi_list_mtx", &lock_class_mtx_sleep },
 	{ "igmp_mtx", &lock_class_mtx_sleep },
-	{ "if_addr_lock", &lock_class_rw },
+	{ "ifnet_rw", &lock_class_rw },
+	{ "if_addr_lock", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
 	 * IPv6 multicast:
 	 * protocol locks before interface locks, after UDP locks.
 	 */
+	{ "in6_multi_sx", &lock_class_sx },
 	{ "udpinp", &lock_class_rw },
-	{ "in6_multi_mtx", &lock_class_mtx_sleep },
+	{ "in6_multi_list_mtx", &lock_class_mtx_sleep },
 	{ "mld_mtx", &lock_class_mtx_sleep },
-	{ "if_addr_lock", &lock_class_rw },
+	{ "ifnet_rw", &lock_class_rw },
+	{ "if_addr_lock", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
 	 * UNIX Domain Sockets
 	 */
-	{ "unp_global_rwlock", &lock_class_rw },
+	{ "unp_link_rwlock", &lock_class_rw },
 	{ "unp_list_lock", &lock_class_mtx_sleep },
 	{ "unp", &lock_class_mtx_sleep },
 	{ "so_snd", &lock_class_mtx_sleep },
@@ -542,27 +561,21 @@ static struct witness_order_list_entry order_lists[] = {
 	/*
 	 * UDP/IP
 	 */
-	{ "udp", &lock_class_rw },
+	{ "udp", &lock_class_mtx_sleep },
 	{ "udpinp", &lock_class_rw },
 	{ "so_snd", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
 	 * TCP/IP
 	 */
-	{ "tcp", &lock_class_rw },
+	{ "tcp", &lock_class_mtx_sleep },
 	{ "tcpinp", &lock_class_rw },
 	{ "so_snd", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
-	 * netatalk
-	 */
-	{ "ddp_list_mtx", &lock_class_mtx_sleep },
-	{ "ddp_mtx", &lock_class_mtx_sleep },
-	{ NULL, NULL },
-	/*
 	 * BPF
 	 */
-	{ "bpf global lock", &lock_class_mtx_sleep },
+	{ "bpf global lock", &lock_class_sx },
 	{ "bpf interface lock", &lock_class_rw },
 	{ "bpf cdev lock", &lock_class_mtx_sleep },
 	{ NULL, NULL },
@@ -594,7 +607,6 @@ static struct witness_order_list_entry order_lists[] = {
 	 * CDEV
 	 */
 	{ "vm map (system)", &lock_class_mtx_sleep },
-	{ "vm page queue", &lock_class_mtx_sleep },
 	{ "vnode interlock", &lock_class_mtx_sleep },
 	{ "cdev", &lock_class_mtx_sleep },
 	{ NULL, NULL },
@@ -604,11 +616,11 @@ static struct witness_order_list_entry order_lists[] = {
 	{ "vm map (user)", &lock_class_sx },
 	{ "vm object", &lock_class_rw },
 	{ "vm page", &lock_class_mtx_sleep },
-	{ "vm page queue", &lock_class_mtx_sleep },
 	{ "pmap pv global", &lock_class_rw },
 	{ "pmap", &lock_class_mtx_sleep },
 	{ "pmap pv list", &lock_class_rw },
 	{ "vm page free queue", &lock_class_mtx_sleep },
+	{ "vm pagequeue", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
 	 * kqueue/VFS interaction
@@ -618,11 +630,27 @@ static struct witness_order_list_entry order_lists[] = {
 	{ "vnode interlock", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
+	 * VFS namecache
+	 */
+	{ "ncvn", &lock_class_mtx_sleep },
+	{ "ncbuc", &lock_class_rw },
+	{ "vnode interlock", &lock_class_mtx_sleep },
+	{ "ncneg", &lock_class_mtx_sleep },
+	{ NULL, NULL },
+	/*
 	 * ZFS locking
 	 */
 	{ "dn->dn_mtx", &lock_class_sx },
 	{ "dr->dt.di.dr_mtx", &lock_class_sx },
 	{ "db->db_mtx", &lock_class_sx },
+	{ NULL, NULL },
+	/*
+	 * TCP log locks
+	 */
+	{ "TCP ID tree", &lock_class_rw },
+	{ "tcp log id bucket", &lock_class_mtx_sleep },
+	{ "tcpinp", &lock_class_rw },
+	{ "TCP log expireq", &lock_class_mtx_sleep },
 	{ NULL, NULL },
 	/*
 	 * spin locks
@@ -632,7 +660,6 @@ static struct witness_order_list_entry order_lists[] = {
 #endif
 	{ "rm.mutex_mtx", &lock_class_mtx_spin },
 	{ "sio", &lock_class_mtx_spin },
-	{ "scrlock", &lock_class_mtx_spin },
 #ifdef __i386__
 	{ "cy", &lock_class_mtx_spin },
 #endif
@@ -644,12 +671,9 @@ static struct witness_order_list_entry order_lists[] = {
 	{ "uart_hwmtx", &lock_class_mtx_spin },
 	{ "fast_taskqueue", &lock_class_mtx_spin },
 	{ "intr table", &lock_class_mtx_spin },
-#ifdef	HWPMC_HOOKS
-	{ "pmc-per-proc", &lock_class_mtx_spin },
-#endif
 	{ "process slock", &lock_class_mtx_spin },
+	{ "syscons video lock", &lock_class_mtx_spin },
 	{ "sleepq chain", &lock_class_mtx_spin },
-	{ "umtx lock", &lock_class_mtx_spin },
 	{ "rm_spinlock", &lock_class_mtx_spin },
 	{ "turnstile chain", &lock_class_mtx_spin },
 	{ "turnstile lock", &lock_class_mtx_spin },
@@ -657,18 +681,26 @@ static struct witness_order_list_entry order_lists[] = {
 	{ "td_contested", &lock_class_mtx_spin },
 	{ "callout", &lock_class_mtx_spin },
 	{ "entropy harvest mutex", &lock_class_mtx_spin },
-	{ "syscons video lock", &lock_class_mtx_spin },
 #ifdef SMP
 	{ "smp rendezvous", &lock_class_mtx_spin },
 #endif
 #ifdef __powerpc__
 	{ "tlb0", &lock_class_mtx_spin },
 #endif
+	{ NULL, NULL },
+	{ "sched lock", &lock_class_mtx_spin },
+#ifdef	HWPMC_HOOKS
+	{ "pmc-per-proc", &lock_class_mtx_spin },
+#endif
+	{ NULL, NULL },
 	/*
 	 * leaf locks
 	 */
 	{ "intrcnt", &lock_class_mtx_spin },
 	{ "icu", &lock_class_mtx_spin },
+#if defined(SMP) && defined(__sparc64__)
+	{ "ipi", &lock_class_mtx_spin },
+#endif
 #ifdef __i386__
 	{ "allpmaps", &lock_class_mtx_spin },
 	{ "descriptor tables", &lock_class_mtx_spin },
@@ -678,9 +710,6 @@ static struct witness_order_list_entry order_lists[] = {
 	{ "mprof lock", &lock_class_mtx_spin },
 	{ "zombie lock", &lock_class_mtx_spin },
 	{ "ALD Queue", &lock_class_mtx_spin },
-#ifdef __ia64__
-	{ "MCA spin lock", &lock_class_mtx_spin },
-#endif
 #if defined(__i386__) || defined(__amd64__)
 	{ "pcicfg", &lock_class_mtx_spin },
 	{ "NDIS thread lock", &lock_class_mtx_spin },
@@ -705,8 +734,6 @@ static struct witness_order_list_entry order_lists[] = {
  */
 static struct witness_blessed blessed_list[] = {
 };
-static int blessed_count =
-	sizeof(blessed_list) / sizeof(struct witness_blessed);
 #endif
 
 /*
@@ -733,20 +760,47 @@ fixup_filename(const char *file)
 }
 
 /*
+ * Calculate the size of early witness structures.
+ */
+int
+witness_startup_count(void)
+{
+	int sz;
+
+	sz = sizeof(struct witness) * witness_count;
+	sz += sizeof(*w_rmatrix) * (witness_count + 1);
+	sz += sizeof(*w_rmatrix[0]) * (witness_count + 1) *
+	    (witness_count + 1);
+
+	return (sz);
+}
+
+/*
  * The WITNESS-enabled diagnostic code.  Note that the witness code does
  * assume that the early boot is single-threaded at least until after this
  * routine is completed.
  */
-static void
-witness_initialize(void *dummy __unused)
+void
+witness_startup(void *mem)
 {
 	struct lock_object *lock;
 	struct witness_order_list_entry *order;
 	struct witness *w, *w1;
+	uintptr_t p;
 	int i;
 
-	w_data = malloc(sizeof (struct witness) * WITNESS_COUNT, M_WITNESS,
-	    M_NOWAIT | M_ZERO);
+	p = (uintptr_t)mem;
+	w_data = (void *)p;
+	p += sizeof(struct witness) * witness_count;
+
+	w_rmatrix = (void *)p;
+	p += sizeof(*w_rmatrix) * (witness_count + 1);
+
+	for (i = 0; i < witness_count + 1; i++) {
+		w_rmatrix[i] = (void *)p;
+		p += sizeof(*w_rmatrix[i]) * (witness_count + 1);
+	}
+	badstack_sbuf_size = witness_count * 256;
 
 	/*
 	 * We have to release Giant before initializing its witness
@@ -758,7 +812,7 @@ witness_initialize(void *dummy __unused)
 	CTR1(KTR_WITNESS, "%s: initializing witness", __func__);
 	mtx_init(&w_mtx, "witness lock", NULL, MTX_SPIN | MTX_QUIET |
 	    MTX_NOWITNESS | MTX_NOPROFILE);
-	for (i = WITNESS_COUNT - 1; i >= 0; i--) {
+	for (i = witness_count - 1; i >= 0; i--) {
 		w = &w_data[i];
 		memset(w, 0, sizeof(*w));
 		w_data[i].w_index = i;	/* Witness index never changes. */
@@ -771,8 +825,10 @@ witness_initialize(void *dummy __unused)
 	STAILQ_REMOVE_HEAD(&w_free, w_list);
 	w_free_cnt--;
 
-	memset(w_rmatrix, 0,
-	    (sizeof(**w_rmatrix) * (WITNESS_COUNT+1) * (WITNESS_COUNT+1)));
+	for (i = 0; i < witness_count; i++) {
+		memset(w_rmatrix[i], 0, sizeof(*w_rmatrix[i]) * 
+		    (witness_count + 1));
+	}
 
 	for (i = 0; i < LOCK_CHILDCOUNT; i++)
 		witness_lock_list_free(&w_locklistdata[i]);
@@ -810,8 +866,6 @@ witness_initialize(void *dummy __unused)
 
 	mtx_lock(&Giant);
 }
-SYSINIT(witness_init, SI_SUB_WITNESS, SI_ORDER_FIRST, witness_initialize,
-    NULL);
 
 void
 witness_init(struct lock_object *lock, const char *type)
@@ -1053,7 +1107,7 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 {
 	struct lock_list_entry *lock_list, *lle;
 	struct lock_instance *lock1, *lock2, *plock;
-	struct lock_class *class;
+	struct lock_class *class, *iclass;
 	struct witness *w, *w1;
 	struct thread *td;
 	int i, j;
@@ -1114,23 +1168,37 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 	if (lock1 != NULL) {
 		if ((lock1->li_flags & LI_EXCLUSIVE) != 0 &&
 		    (flags & LOP_EXCLUSIVE) == 0) {
-			printf("shared lock of (%s) %s @ %s:%d\n",
+			witness_output("shared lock of (%s) %s @ %s:%d\n",
 			    class->lc_name, lock->lo_name,
 			    fixup_filename(file), line);
-			printf("while exclusively locked from %s:%d\n",
-			    fixup_filename(lock1->li_file), lock1->li_line);
-			kassert_panic("share->excl");
-		}
-		if ((lock1->li_flags & LI_EXCLUSIVE) == 0 &&
-		    (flags & LOP_EXCLUSIVE) != 0) {
-			printf("exclusive lock of (%s) %s @ %s:%d\n",
-			    class->lc_name, lock->lo_name,
-			    fixup_filename(file), line);
-			printf("while share locked from %s:%d\n",
+			witness_output("while exclusively locked from %s:%d\n",
 			    fixup_filename(lock1->li_file), lock1->li_line);
 			kassert_panic("excl->share");
 		}
+		if ((lock1->li_flags & LI_EXCLUSIVE) == 0 &&
+		    (flags & LOP_EXCLUSIVE) != 0) {
+			witness_output("exclusive lock of (%s) %s @ %s:%d\n",
+			    class->lc_name, lock->lo_name,
+			    fixup_filename(file), line);
+			witness_output("while share locked from %s:%d\n",
+			    fixup_filename(lock1->li_file), lock1->li_line);
+			kassert_panic("share->excl");
+		}
 		return;
+	}
+
+	/* Warn if the interlock is not locked exactly once. */
+	if (interlock != NULL) {
+		iclass = LOCK_CLASS(interlock);
+		lock1 = find_instance(lock_list, interlock);
+		if (lock1 == NULL)
+			kassert_panic("interlock (%s) %s not locked @ %s:%d",
+			    iclass->lc_name, interlock->lo_name,
+			    fixup_filename(file), line);
+		else if ((lock1->li_flags & LI_RECURSEMASK) != 0)
+			kassert_panic("interlock (%s) %s recursed @ %s:%d",
+			    iclass->lc_name, interlock->lo_name,
+			    fixup_filename(file), line);
 	}
 
 	/*
@@ -1156,19 +1224,25 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 	
 	/*
 	 * Try to perform most checks without a lock.  If this succeeds we
-	 * can skip acquiring the lock and return success.
+	 * can skip acquiring the lock and return success.  Otherwise we redo
+	 * the check with the lock held to handle races with concurrent updates.
 	 */
 	w1 = plock->li_lock->lo_witness;
 	if (witness_lock_order_check(w1, w))
 		return;
+
+	mtx_lock_spin(&w_mtx);
+	if (witness_lock_order_check(w1, w)) {
+		mtx_unlock_spin(&w_mtx);
+		return;
+	}
+	witness_lock_order_add(w1, w);
 
 	/*
 	 * Check for duplicate locks of the same type.  Note that we only
 	 * have to check for this on the last lock we just acquired.  Any
 	 * other cases will be caught as lock order violations.
 	 */
-	mtx_lock_spin(&w_mtx);
-	witness_lock_order_add(w1, w);
 	if (w1 == w) {
 		i = w->w_index;
 		if (!(lock->lo_flags & LO_DUPOK) && !(flags & LOP_DUPOK) &&
@@ -1176,14 +1250,14 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 		    w_rmatrix[i][i] |= WITNESS_REVERSAL;
 			w->w_reversed = 1;
 			mtx_unlock_spin(&w_mtx);
-			printf(
+			witness_output(
 			    "acquiring duplicate lock of same type: \"%s\"\n", 
 			    w->w_name);
-			printf(" 1st %s @ %s:%d\n", plock->li_lock->lo_name,
+			witness_output(" 1st %s @ %s:%d\n", plock->li_lock->lo_name,
 			    fixup_filename(plock->li_file), plock->li_line);
-			printf(" 2nd %s @ %s:%d\n", lock->lo_name,
+			witness_output(" 2nd %s @ %s:%d\n", lock->lo_name,
 			    fixup_filename(file), line);
-			witness_debugger(1);
+			witness_debugger(1, __func__);
 		} else
 			mtx_unlock_spin(&w_mtx);
 		return;
@@ -1201,16 +1275,14 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 	for (j = 0, lle = lock_list; lle != NULL; lle = lle->ll_next) {
 		for (i = lle->ll_count - 1; i >= 0; i--, j++) {
 
-			MPASS(j < WITNESS_COUNT);
+			MPASS(j < LOCK_CHILDCOUNT * LOCK_NCHILDREN);
 			lock1 = &lle->ll_children[i];
 
 			/*
-			 * Ignore the interlock the first time we see it.
+			 * Ignore the interlock.
 			 */
-			if (interlock != NULL && interlock == lock1->li_lock) {
-				interlock = NULL;
+			if (interlock == lock1->li_lock)
 				continue;
-			}
 
 			/*
 			 * If this lock doesn't undergo witness checking,
@@ -1289,20 +1361,32 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 			w->w_reversed = w1->w_reversed = 1;
 			witness_increment_graph_generation();
 			mtx_unlock_spin(&w_mtx);
-			
+
+#ifdef WITNESS_NO_VNODE
+			/*
+			 * There are known LORs between VNODE locks. They are
+			 * not an indication of a bug. VNODE locks are flagged
+			 * as such (LO_IS_VNODE) and we don't yell if the LOR
+			 * is between 2 VNODE locks.
+			 */
+			if ((lock->lo_flags & LO_IS_VNODE) != 0 &&
+			    (lock1->li_lock->lo_flags & LO_IS_VNODE) != 0)
+				return;
+#endif
+
 			/*
 			 * Ok, yell about it.
 			 */
 			if (((lock->lo_flags & LO_SLEEPABLE) != 0 &&
 			    (lock1->li_lock->lo_flags & LO_SLEEPABLE) == 0))
-				printf(
+				witness_output(
 		"lock order reversal: (sleepable after non-sleepable)\n");
 			else if ((lock1->li_lock->lo_flags & LO_SLEEPABLE) == 0
 			    && lock == &Giant.lock_object)
-				printf(
+				witness_output(
 		"lock order reversal: (Giant after non-sleepable)\n");
 			else
-				printf("lock order reversal:\n");
+				witness_output("lock order reversal:\n");
 
 			/*
 			 * Try to locate an earlier lock with
@@ -1321,28 +1405,28 @@ witness_checkorder(struct lock_object *lock, int flags, const char *file,
 					i--;
 			} while (i >= 0);
 			if (i < 0) {
-				printf(" 1st %p %s (%s) @ %s:%d\n",
+				witness_output(" 1st %p %s (%s) @ %s:%d\n",
 				    lock1->li_lock, lock1->li_lock->lo_name,
 				    w1->w_name, fixup_filename(lock1->li_file),
 				    lock1->li_line);
-				printf(" 2nd %p %s (%s) @ %s:%d\n", lock,
+				witness_output(" 2nd %p %s (%s) @ %s:%d\n", lock,
 				    lock->lo_name, w->w_name,
 				    fixup_filename(file), line);
 			} else {
-				printf(" 1st %p %s (%s) @ %s:%d\n",
+				witness_output(" 1st %p %s (%s) @ %s:%d\n",
 				    lock2->li_lock, lock2->li_lock->lo_name,
 				    lock2->li_lock->lo_witness->w_name,
 				    fixup_filename(lock2->li_file),
 				    lock2->li_line);
-				printf(" 2nd %p %s (%s) @ %s:%d\n",
+				witness_output(" 2nd %p %s (%s) @ %s:%d\n",
 				    lock1->li_lock, lock1->li_lock->lo_name,
 				    w1->w_name, fixup_filename(lock1->li_file),
 				    lock1->li_line);
-				printf(" 3rd %p %s (%s) @ %s:%d\n", lock,
+				witness_output(" 3rd %p %s (%s) @ %s:%d\n", lock,
 				    lock->lo_name, w->w_name,
 				    fixup_filename(file), line);
 			}
-			witness_debugger(1);
+			witness_debugger(1, __func__);
 			return;
 		}
 	}
@@ -1560,17 +1644,17 @@ found:
 	/* First, check for shared/exclusive mismatches. */
 	if ((instance->li_flags & LI_EXCLUSIVE) != 0 && witness_watch > 0 &&
 	    (flags & LOP_EXCLUSIVE) == 0) {
-		printf("shared unlock of (%s) %s @ %s:%d\n", class->lc_name,
-		    lock->lo_name, fixup_filename(file), line);
-		printf("while exclusively locked from %s:%d\n",
+		witness_output("shared unlock of (%s) %s @ %s:%d\n",
+		    class->lc_name, lock->lo_name, fixup_filename(file), line);
+		witness_output("while exclusively locked from %s:%d\n",
 		    fixup_filename(instance->li_file), instance->li_line);
 		kassert_panic("excl->ushare");
 	}
 	if ((instance->li_flags & LI_EXCLUSIVE) == 0 && witness_watch > 0 &&
 	    (flags & LOP_EXCLUSIVE) != 0) {
-		printf("exclusive unlock of (%s) %s @ %s:%d\n", class->lc_name,
-		    lock->lo_name, fixup_filename(file), line);
-		printf("while share locked from %s:%d\n",
+		witness_output("exclusive unlock of (%s) %s @ %s:%d\n",
+		    class->lc_name, lock->lo_name, fixup_filename(file), line);
+		witness_output("while share locked from %s:%d\n",
 		    fixup_filename(instance->li_file),
 		    instance->li_line);
 		kassert_panic("share->uexcl");
@@ -1585,8 +1669,8 @@ found:
 	}
 	/* The lock is now being dropped, check for NORELEASE flag */
 	if ((instance->li_flags & LI_NORELEASE) != 0 && witness_watch > 0) {
-		printf("forbidden unlock of (%s) %s @ %s:%d\n", class->lc_name,
-		    lock->lo_name, fixup_filename(file), line);
+		witness_output("forbidden unlock of (%s) %s @ %s:%d\n",
+		    class->lc_name, lock->lo_name, fixup_filename(file), line);
 		kassert_panic("lock marked norelease");
 	}
 
@@ -1636,10 +1720,11 @@ witness_thread_exit(struct thread *td)
 		for (n = 0; lle != NULL; lle = lle->ll_next)
 			for (i = lle->ll_count - 1; i >= 0; i--) {
 				if (n == 0)
-		printf("Thread %p exiting with the following locks held:\n",
-					    td);
+					witness_output(
+		    "Thread %p exiting with the following locks held:\n", td);
 				n++;
-				witness_list_lock(&lle->ll_children[i], printf);
+				witness_list_lock(&lle->ll_children[i],
+				    witness_output);
 				
 			}
 		kassert_panic(
@@ -1652,7 +1737,7 @@ witness_thread_exit(struct thread *td)
  * Warn if any locks other than 'lock' are held.  Flags can be passed in to
  * exempt Giant and sleepable locks from the checks as well.  If any
  * non-exempt locks are held, then a supplied message is printed to the
- * console along with a list of the offending locks.  If indicated in the
+ * output channel along with a list of the offending locks.  If indicated in the
  * flags then a failure results in a panic as well.
  */
 int
@@ -1683,10 +1768,9 @@ witness_warn(int flags, struct lock_object *lock, const char *fmt, ...)
 				va_start(ap, fmt);
 				vprintf(fmt, ap);
 				va_end(ap);
-				printf(" with the following");
-				if (flags & WARN_SLEEPOK)
-					printf(" non-sleepable");
-				printf(" locks held:\n");
+				printf(" with the following %slocks held:\n",
+				    (flags & WARN_SLEEPOK) != 0 ?
+				    "non-sleepable " : "");
 			}
 			n++;
 			witness_list_lock(lock1, printf);
@@ -1716,17 +1800,15 @@ witness_warn(int flags, struct lock_object *lock, const char *fmt, ...)
 		va_start(ap, fmt);
 		vprintf(fmt, ap);
 		va_end(ap);
-		printf(" with the following");
-		if (flags & WARN_SLEEPOK)
-			printf(" non-sleepable");
-		printf(" locks held:\n");
+		printf(" with the following %slocks held:\n",
+		    (flags & WARN_SLEEPOK) != 0 ?  "non-sleepable " : "");
 		n += witness_list_locks(&lock_list, printf);
 	} else
 		sched_unpin();
 	if (flags & WARN_PANIC && n)
 		kassert_panic("%s", __func__);
 	else
-		witness_debugger(n);
+		witness_debugger(n, __func__);
 	return (n);
 }
 
@@ -1756,7 +1838,6 @@ static struct witness *
 enroll(const char *description, struct lock_class *lock_class)
 {
 	struct witness *w;
-	struct witness_list *typelist;
 
 	MPASS(description != NULL);
 
@@ -1765,11 +1846,7 @@ enroll(const char *description, struct lock_class *lock_class)
 	if ((lock_class->lc_flags & LC_SPINLOCK)) {
 		if (witness_skipspin)
 			return (NULL);
-		else
-			typelist = &w_spin;
-	} else if ((lock_class->lc_flags & LC_SLEEPLOCK)) {
-		typelist = &w_sleep;
-	} else {
+	} else if ((lock_class->lc_flags & LC_SLEEPLOCK) == 0) {
 		kassert_panic("lock class %s is not sleep or spin",
 		    lock_class->lc_name);
 		return (NULL);
@@ -1801,26 +1878,25 @@ enroll(const char *description, struct lock_class *lock_class)
 	return (w);
 found:
 	w->w_refcount++;
+	if (w->w_refcount == 1)
+		w->w_class = lock_class;
 	mtx_unlock_spin(&w_mtx);
 	if (lock_class != w->w_class)
 		kassert_panic(
-			"lock (%s) %s does not match earlier (%s) lock",
-			description, lock_class->lc_name,
-			w->w_class->lc_name);
+		    "lock (%s) %s does not match earlier (%s) lock",
+		    description, lock_class->lc_name,
+		    w->w_class->lc_name);
 	return (w);
 }
 
 static void
 depart(struct witness *w)
 {
-	struct witness_list *list;
 
 	MPASS(w->w_refcount == 0);
 	if (w->w_class->lc_flags & LC_SLEEPLOCK) {
-		list = &w_sleep;
 		w_sleep_cnt--;
 	} else {
-		list = &w_spin;
 		w_spin_cnt--;
 	}
 	/*
@@ -1972,7 +2048,10 @@ _isitmyx(struct witness *w1, struct witness *w2, int rmask, const char *fname)
 
 	/* The flags on one better be the inverse of the flags on the other */
 	if (!((WITNESS_ATOD(r1) == r2 && WITNESS_DTOA(r2) == r1) ||
-		(WITNESS_DTOA(r1) == r2 && WITNESS_ATOD(r2) == r1))) {
+	    (WITNESS_DTOA(r1) == r2 && WITNESS_ATOD(r2) == r1))) {
+		/* Don't squawk if we're potentially racing with an update. */
+		if (!mtx_owned(&w_mtx))
+			return (0);
 		printf("%s: rmatrix mismatch between %s (index %d) and %s "
 		    "(index %d): w_rmatrix[%d][%d] == %hhx but "
 		    "w_rmatrix[%d][%d] == %hhx\n",
@@ -2013,7 +2092,7 @@ blessed(struct witness *w1, struct witness *w2)
 	int i;
 	struct witness_blessed *b;
 
-	for (i = 0; i < blessed_count; i++) {
+	for (i = 0; i < nitems(blessed_list); i++) {
 		b = &blessed_list[i];
 		if (strcmp(w1->w_name, b->b_lock1) == 0) {
 			if (strcmp(w2->w_name, b->b_lock2) == 0)
@@ -2052,7 +2131,7 @@ witness_get(void)
 	w_free_cnt--;
 	index = w->w_index;
 	MPASS(index > 0 && index == w_max_used_index+1 &&
-	    index < WITNESS_COUNT);
+	    index < witness_count);
 	bzero(w, sizeof(*w));
 	w->w_index = index;
 	if (index > w_max_used_index)
@@ -2129,6 +2208,37 @@ witness_list_lock(struct lock_instance *instance,
 	prnt(" r = %d (%p) locked @ %s:%d\n",
 	    instance->li_flags & LI_RECURSEMASK, lock,
 	    fixup_filename(instance->li_file), instance->li_line);
+}
+
+static int
+witness_output(const char *fmt, ...)
+{
+	va_list ap;
+	int ret;
+
+	va_start(ap, fmt);
+	ret = witness_voutput(fmt, ap);
+	va_end(ap);
+	return (ret);
+}
+
+static int
+witness_voutput(const char *fmt, va_list ap)
+{
+	int ret;
+
+	ret = 0;
+	switch (witness_channel) {
+	case WITNESS_CONSOLE:
+		ret = vprintf(fmt, ap);
+		break;
+	case WITNESS_LOG:
+		vlog(LOG_NOTICE, fmt, ap);
+		break;
+	case WITNESS_NONE:
+		break;
+	}
+	return (ret);
 }
 
 #ifdef DDB
@@ -2416,7 +2526,7 @@ DB_SHOW_COMMAND(locks, db_witness_list)
 	struct thread *td;
 
 	if (have_addr)
-		td = db_lookup_thread(addr, TRUE);
+		td = db_lookup_thread(addr, true);
 	else
 		td = kdb_thread;
 	witness_ddb_list(td);
@@ -2455,31 +2565,17 @@ DB_SHOW_COMMAND(witness, db_witness_display)
 }
 #endif
 
-static int
-sysctl_debug_witness_badstacks(SYSCTL_HANDLER_ARGS)
+static void
+sbuf_print_witness_badstacks(struct sbuf *sb, size_t *oldidx)
 {
 	struct witness_lock_order_data *data1, *data2, *tmp_data1, *tmp_data2;
 	struct witness *tmp_w1, *tmp_w2, *w1, *w2;
-	struct sbuf *sb;
-	u_int w_rmatrix1, w_rmatrix2;
-	int error, generation, i, j;
+	int generation, i, j;
 
 	tmp_data1 = NULL;
 	tmp_data2 = NULL;
 	tmp_w1 = NULL;
 	tmp_w2 = NULL;
-	if (witness_watch < 1) {
-		error = SYSCTL_OUT(req, w_notrunning, sizeof(w_notrunning));
-		return (error);
-	}
-	if (witness_cold) {
-		error = SYSCTL_OUT(req, w_stillcold, sizeof(w_stillcold));
-		return (error);
-	}
-	error = 0;
-	sb = sbuf_new(NULL, NULL, BADSTACK_SBUF_SIZE, SBUF_AUTOEXTEND);
-	if (sb == NULL)
-		return (ENOMEM);
 
 	/* Allocate and init temporary storage space. */
 	tmp_w1 = malloc(sizeof(struct witness), M_TEMP, M_WAITOK | M_ZERO);
@@ -2503,7 +2599,7 @@ restart:
 			mtx_unlock_spin(&w_mtx);
 
 			/* The graph has changed, try again. */
-			req->oldidx = 0;
+			*oldidx = 0;
 			sbuf_clear(sb);
 			goto restart;
 		}
@@ -2529,7 +2625,7 @@ restart:
 				mtx_unlock_spin(&w_mtx);
 
 				/* The graph has changed, try again. */
-				req->oldidx = 0;
+				*oldidx = 0;
 				sbuf_clear(sb);
 				goto restart;
 			}
@@ -2543,8 +2639,6 @@ restart:
 			 * spin lock.
 			 */
 			*tmp_w2 = *w2;
-			w_rmatrix1 = (unsigned int)w_rmatrix[i][j];
-			w_rmatrix2 = (unsigned int)w_rmatrix[j][i];
 
 			if (data1) {
 				stack_zero(&tmp_data1->wlod_stack);
@@ -2562,12 +2656,6 @@ restart:
 	    "\nLock order reversal between \"%s\"(%s) and \"%s\"(%s)!\n",
 			    tmp_w1->w_name, tmp_w1->w_class->lc_name, 
 			    tmp_w2->w_name, tmp_w2->w_class->lc_name);
-#if 0
- 			sbuf_printf(sb,
-			"w_rmatrix[%s][%s] == %x, w_rmatrix[%s][%s] == %x\n",
- 			    tmp_w1->name, tmp_w2->w_name, w_rmatrix1,
- 			    tmp_w2->name, tmp_w1->w_name, w_rmatrix2);
-#endif
 			if (data1) {
 				sbuf_printf(sb,
 			"Lock order \"%s\"(%s) -> \"%s\"(%s) first seen at:\n",
@@ -2594,7 +2682,7 @@ restart:
 		 * The graph changed while we were printing stack data,
 		 * try again.
 		 */
-		req->oldidx = 0;
+		*oldidx = 0;
 		sbuf_clear(sb);
 		goto restart;
 	}
@@ -2605,11 +2693,90 @@ restart:
 	free(tmp_data2, M_TEMP);
 	free(tmp_w1, M_TEMP);
 	free(tmp_w2, M_TEMP);
+}
+
+static int
+sysctl_debug_witness_badstacks(SYSCTL_HANDLER_ARGS)
+{
+	struct sbuf *sb;
+	int error;
+
+	if (witness_watch < 1) {
+		error = SYSCTL_OUT(req, w_notrunning, sizeof(w_notrunning));
+		return (error);
+	}
+	if (witness_cold) {
+		error = SYSCTL_OUT(req, w_stillcold, sizeof(w_stillcold));
+		return (error);
+	}
+	error = 0;
+	sb = sbuf_new(NULL, NULL, badstack_sbuf_size, SBUF_AUTOEXTEND);
+	if (sb == NULL)
+		return (ENOMEM);
+
+	sbuf_print_witness_badstacks(sb, &req->oldidx);
 
 	sbuf_finish(sb);
 	error = SYSCTL_OUT(req, sbuf_data(sb), sbuf_len(sb) + 1);
 	sbuf_delete(sb);
 
+	return (error);
+}
+
+#ifdef DDB
+static int
+sbuf_db_printf_drain(void *arg __unused, const char *data, int len)
+{
+
+	return (db_printf("%.*s", len, data));
+}
+
+DB_SHOW_COMMAND(badstacks, db_witness_badstacks)
+{
+	struct sbuf sb;
+	char buffer[128];
+	size_t dummy;
+
+	sbuf_new(&sb, buffer, sizeof(buffer), SBUF_FIXEDLEN);
+	sbuf_set_drain(&sb, sbuf_db_printf_drain, NULL);
+	sbuf_print_witness_badstacks(&sb, &dummy);
+	sbuf_finish(&sb);
+}
+#endif
+
+static int
+sysctl_debug_witness_channel(SYSCTL_HANDLER_ARGS)
+{
+	static const struct {
+		enum witness_channel channel;
+		const char *name;
+	} channels[] = {
+		{ WITNESS_CONSOLE, "console" },
+		{ WITNESS_LOG, "log" },
+		{ WITNESS_NONE, "none" },
+	};
+	char buf[16];
+	u_int i;
+	int error;
+
+	buf[0] = '\0';
+	for (i = 0; i < nitems(channels); i++)
+		if (witness_channel == channels[i].channel) {
+			snprintf(buf, sizeof(buf), "%s", channels[i].name);
+			break;
+		}
+
+	error = sysctl_handle_string(oidp, buf, sizeof(buf), req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	error = EINVAL;
+	for (i = 0; i < nitems(channels); i++)
+		if (strcmp(channels[i].name, buf) == 0) {
+			witness_channel = channels[i].channel;
+			error = 0;
+			break;
+		}
 	return (error);
 }
 
@@ -2619,6 +2786,11 @@ sysctl_debug_witness_fullgraph(SYSCTL_HANDLER_ARGS)
 	struct witness *w;
 	struct sbuf *sb;
 	int error;
+
+#ifdef __i386__
+	error = SYSCTL_OUT(req, w_notallowed, sizeof(w_notallowed));
+	return (error);
+#endif
 
 	if (witness_watch < 1) {
 		error = SYSCTL_OUT(req, w_notrunning, sizeof(w_notrunning));
@@ -2865,7 +3037,7 @@ witness_lock_order_add(struct witness *parent, struct witness *child)
 	return (1);
 }
 
-/* Call this whenver the structure of the witness graph changes. */
+/* Call this whenever the structure of the witness graph changes. */
 static void
 witness_increment_graph_generation(void)
 {
@@ -2875,14 +3047,38 @@ witness_increment_graph_generation(void)
 	w_generation++;
 }
 
-#ifdef KDB
-static void
-_witness_debugger(int cond, const char *msg)
+static int
+witness_output_drain(void *arg __unused, const char *data, int len)
 {
 
-	if (witness_trace && cond)
-		kdb_backtrace();
-	if (witness_kdb && cond)
-		kdb_enter(KDB_WHY_WITNESS, msg);
+	witness_output("%.*s", len, data);
+	return (len);
 }
+
+static void
+witness_debugger(int cond, const char *msg)
+{
+	char buf[32];
+	struct sbuf sb;
+	struct stack st;
+
+	if (!cond)
+		return;
+
+	if (witness_trace) {
+		sbuf_new(&sb, buf, sizeof(buf), SBUF_FIXEDLEN);
+		sbuf_set_drain(&sb, witness_output_drain, NULL);
+
+		stack_zero(&st);
+		stack_save(&st);
+		witness_output("stack backtrace:\n");
+		stack_sbuf_print_ddb(&sb, &st);
+
+		sbuf_finish(&sb);
+	}
+
+#ifdef KDB
+	if (witness_kdb)
+		kdb_enter(KDB_WHY_WITNESS, msg);
 #endif
+}

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 The NetBSD Foundation, Inc.
  * All rights reserved.
  *
@@ -64,7 +66,7 @@ static const struct {
 	bus_size_t clkoff;
 	u_int flags;
 #define	MK48TXX_EXT_REGISTERS	1	/* Has extended register set. */
-} const mk48txx_models[] = {
+} mk48txx_models[] = {
 	{ "mk48t02", MK48T02_CLKSZ, MK48T02_CLKOFF, 0 },
 	{ "mk48t08", MK48T08_CLKSZ, MK48T08_CLKOFF, 0 },
 	{ "mk48t18", MK48T18_CLKSZ, MK48T18_CLKOFF, 0 },

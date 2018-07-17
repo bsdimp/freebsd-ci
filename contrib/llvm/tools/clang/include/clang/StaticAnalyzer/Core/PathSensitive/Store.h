@@ -11,14 +11,13 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_GR_STORE_H
-#define LLVM_CLANG_GR_STORE_H
+#ifndef LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_STORE_H
+#define LLVM_CLANG_STATICANALYZER_CORE_PATHSENSITIVE_STORE_H
 
 #include "clang/StaticAnalyzer/Core/PathSensitive/MemRegion.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/SValBuilder.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/StoreRef.h"
 #include "llvm/ADT/DenseSet.h"
-#include "llvm/ADT/Optional.h"
 
 namespace clang {
 
@@ -52,7 +51,7 @@ public:
   virtual ~StoreManager() {}
 
   /// Return the value bound to specified location in a given state.
-  /// \param[in] store The analysis state.
+  /// \param[in] store The store in which to make the lookup.
   /// \param[in] loc The symbolic memory location.
   /// \param[in] T An optional type that provides a hint indicating the
   ///   expected type of the returned value.  This is used if the value is
@@ -60,12 +59,36 @@ public:
   /// \return The value bound to the location \c loc.
   virtual SVal getBinding(Store store, Loc loc, QualType T = QualType()) = 0;
 
-  /// Return a state with the specified value bound to the given location.
-  /// \param[in] store The analysis state.
+  /// Return the default value bound to a region in a given store. The default
+  /// binding is the value of sub-regions that were not initialized separately
+  /// from their base region. For example, if the structure is zero-initialized
+  /// upon construction, this method retrieves the concrete zero value, even if
+  /// some or all fields were later overwritten manually. Default binding may be
+  /// an unknown, undefined, concrete, or symbolic value.
+  /// \param[in] store The store in which to make the lookup.
+  /// \param[in] R The region to find the default binding for.
+  /// \return The default value bound to the region in the store, if a default
+  /// binding exists.
+  virtual Optional<SVal> getDefaultBinding(Store store, const MemRegion *R) = 0;
+
+  /// Return the default value bound to a LazyCompoundVal. The default binding
+  /// is used to represent the value of any fields or elements within the
+  /// structure represented by the LazyCompoundVal which were not initialized
+  /// explicitly separately from the whole structure. Default binding may be an
+  /// unknown, undefined, concrete, or symbolic value.
+  /// \param[in] lcv The lazy compound value.
+  /// \return The default value bound to the LazyCompoundVal \c lcv, if a
+  /// default binding exists.
+  Optional<SVal> getDefaultBinding(nonloc::LazyCompoundVal lcv) {
+    return getDefaultBinding(lcv.getStore(), lcv.getRegion());
+  }
+
+  /// Return a store with the specified value bound to the given location.
+  /// \param[in] store The store in which to make the binding.
   /// \param[in] loc The symbolic memory location.
   /// \param[in] val The value to bind to location \c loc.
-  /// \return A pointer to a ProgramState object that contains the same
-  ///   bindings as \c state with the addition of having the value specified
+  /// \return A StoreRef object that contains the same
+  ///   bindings as \c store with the addition of having the value specified
   ///   by \c val bound to the location given for \c loc.
   virtual StoreRef Bind(Store store, Loc loc, SVal val) = 0;
 
@@ -75,21 +98,6 @@ public:
   /// \param ST the original store, that is the basis for the new store.
   /// \param L the location whose binding should be removed.
   virtual StoreRef killBinding(Store ST, Loc L) = 0;
-
-  /// \brief Create a new store that binds a value to a compound literal.
-  ///
-  /// \param ST The original store whose bindings are the basis for the new
-  ///        store.
-  ///
-  /// \param CL The compound literal to bind (the binding key).
-  ///
-  /// \param LC The LocationContext for the binding.
-  ///
-  /// \param V The value to bind to the compound literal.
-  virtual StoreRef bindCompoundLiteral(Store ST,
-                                       const CompoundLiteralExpr *CL,
-                                       const LocationContext *LC,
-                                       SVal V) = 0;
 
   /// getInitialStore - Returns the initial "empty" store representing the
   ///  value bindings upon entry to an analyzed function.
@@ -126,7 +134,7 @@ public:
 
   /// ArrayToPointer - Used by ExprEngine::VistCast to handle implicit
   ///  conversions between arrays and pointers.
-  virtual SVal ArrayToPointer(Loc Array) = 0;
+  virtual SVal ArrayToPointer(Loc Array, QualType ElementTy) = 0;
 
   /// Evaluates a chain of derived-to-base casts through the path specified in
   /// \p Cast.
@@ -139,17 +147,20 @@ public:
   SVal evalDerivedToBase(SVal Derived, QualType DerivedPtrType,
                          bool IsVirtual);
 
-  /// \brief Evaluates C++ dynamic_cast cast.
+  /// \brief Attempts to do a down cast. Used to model BaseToDerived and C++
+  ///        dynamic_cast.
   /// The callback may result in the following 3 scenarios:
   ///  - Successful cast (ex: derived is subclass of base).
   ///  - Failed cast (ex: derived is definitely not a subclass of base).
+  ///    The distinction of this case from the next one is necessary to model
+  ///    dynamic_cast. 
   ///  - We don't know (base is a symbolic region and we don't have 
   ///    enough info to determine if the cast will succeed at run time).
   /// The function returns an SVal representing the derived class; it's
   /// valid only if Failed flag is set to false.
-  SVal evalDynamicCast(SVal Base, QualType DerivedPtrType, bool &Failed);
+  SVal attemptDownCast(SVal Base, QualType DerivedPtrType, bool &Failed);
 
-  const ElementRegion *GetElementZeroRegion(const MemRegion *R, QualType T);
+  const ElementRegion *GetElementZeroRegion(const SubRegion *R, QualType T);
 
   /// castRegion - Used by ExprEngine::VisitCast to handle casts from
   ///  a MemRegion* to a specific location type.  'R' is the region being
@@ -179,8 +190,6 @@ public:
   ///  the given regions. Optionally, invalidates non-static globals as well.
   /// \param[in] store The initial store
   /// \param[in] Values The values to invalidate.
-  /// \param[in] ConstValues The values to invalidate; these are known to be
-  ///   const, so only regions accesible from them should be invalidated.
   /// \param[in] E The current statement being evaluated. Used to conjure
   ///   symbols to mark the values of invalidated regions.
   /// \param[in] Count The current block count. Used to conjure
@@ -189,13 +198,10 @@ public:
   ///   globals should get invalidated.
   /// \param[in,out] IS A set to fill with any symbols that are no longer
   ///   accessible. Pass \c NULL if this information will not be used.
-  /// \param[in,out] ConstIS A set to fill with any symbols corresponding to
-  ///   the ConstValues.
+  /// \param[in] ITraits Information about invalidation for a particular 
+  ///   region/symbol.
   /// \param[in,out] InvalidatedTopLevel A vector to fill with regions
-  ////  explicitely being invalidated. Pass \c NULL if this
-  ///   information will not be used.
-  /// \param[in,out] InvalidatedTopLevelConst A vector to fill with const 
-  ////  regions explicitely being invalidated. Pass \c NULL if this
+  ////  explicitly being invalidated. Pass \c NULL if this
   ///   information will not be used.
   /// \param[in,out] Invalidated A vector to fill with any regions being
   ///   invalidated. This should include any regions explicitly invalidated
@@ -203,14 +209,12 @@ public:
   ///   information will not be used.
   virtual StoreRef invalidateRegions(Store store,
                                   ArrayRef<SVal> Values,
-                                  ArrayRef<SVal> ConstValues,
                                   const Expr *E, unsigned Count,
                                   const LocationContext *LCtx,
                                   const CallEvent *Call,
                                   InvalidatedSymbols &IS,
-                                  InvalidatedSymbols &ConstIS,
+                                  RegionAndSymbolInvalidationTraits &ITraits,
                                   InvalidatedRegions *InvalidatedTopLevel,
-                                  InvalidatedRegions *InvalidatedTopLevelConst,
                                   InvalidatedRegions *Invalidated) = 0;
 
   /// enterStackFrame - Let the StoreManager to do something when execution
@@ -242,11 +246,12 @@ public:
     bool First;
 
   public:
-    FindUniqueBinding(SymbolRef sym) : Sym(sym), Binding(0), First(true) {}
+    FindUniqueBinding(SymbolRef sym)
+      : Sym(sym), Binding(nullptr), First(true) {}
 
     bool HandleBinding(StoreManager& SMgr, Store store, const MemRegion* R,
-                       SVal val);
-    operator bool() { return First && Binding; }
+                       SVal val) override;
+    explicit operator bool() { return First && Binding; }
     const MemRegion *getRegion() { return Binding; }
   };
 
@@ -254,8 +259,9 @@ public:
   virtual void iterBindings(Store store, BindingsHandler& f) = 0;
 
 protected:
-  const MemRegion *MakeElementRegion(const MemRegion *baseRegion,
-                                     QualType pointeeTy, uint64_t index = 0);
+  const ElementRegion *MakeElementRegion(const SubRegion *baseRegion,
+                                         QualType pointeeTy,
+                                         uint64_t index = 0);
 
   /// CastRetrievedVal - Used by subclasses of StoreManager to implement
   ///  implicit casts that arise from loads from regions that are reinterpreted
@@ -297,8 +303,10 @@ inline StoreRef &StoreRef::operator=(StoreRef const &newStore) {
 }
 
 // FIXME: Do we need to pass ProgramStateManager anymore?
-StoreManager *CreateRegionStoreManager(ProgramStateManager& StMgr);
-StoreManager *CreateFieldsOnlyRegionStoreManager(ProgramStateManager& StMgr);
+std::unique_ptr<StoreManager>
+CreateRegionStoreManager(ProgramStateManager &StMgr);
+std::unique_ptr<StoreManager>
+CreateFieldsOnlyRegionStoreManager(ProgramStateManager &StMgr);
 
 } // end GR namespace
 

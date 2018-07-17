@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright 2010, Gleb Smirnoff <glebius@FreeBSD.org>
  * All rights reserved.
  *
@@ -27,7 +29,7 @@
  */
 
 /*
- *  http://home.eeti.com.tw/web20/drivers/Software%20Programming%20Guide_v2.0.pdf
+ *  http://www.eeti.com.tw/pdf/Software%20Programming%20Guide_v2.0.pdf
  */
 
 #include <sys/param.h>
@@ -58,7 +60,7 @@
 static int uep_debug = 0;
 
 static SYSCTL_NODE(_hw_usb, OID_AUTO, uep, CTLFLAG_RW, 0, "USB uep");
-SYSCTL_INT(_hw_usb_uep, OID_AUTO, debug, CTLFLAG_RW,
+SYSCTL_INT(_hw_usb_uep, OID_AUTO, debug, CTLFLAG_RWTUN,
     &uep_debug, 0, "Debug level");
 #endif
 
@@ -441,3 +443,4 @@ static driver_t uep_driver = {
 DRIVER_MODULE(uep, uhub, uep_driver, uep_devclass, NULL, NULL);
 MODULE_DEPEND(uep, usb, 1, 1, 1);
 MODULE_VERSION(uep, 1);
+USB_PNP_HOST_INFO(uep_devs);

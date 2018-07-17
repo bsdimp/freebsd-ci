@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,10 +29,8 @@
  * SUCH DAMAGE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)stat_flags.c	8.1 (Berkeley) 5/31/93";
-#endif /* LIBC_SCCS and not lint */
 #include <sys/cdefs.h>
+__SCCSID("@(#)stat_flags.c	8.1 (Berkeley) 5/31/93");
 __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
@@ -62,13 +62,29 @@ static struct {
 #endif
 	{ "nouappnd",		0, UF_APPEND	},
 	{ "nouappend",		0, UF_APPEND	},
+	{ "nouarch", 		0, UF_ARCHIVE	},
+	{ "nouarchive",		0, UF_ARCHIVE	},
+	{ "nohidden",		0, UF_HIDDEN	},
+	{ "nouhidden",		0, UF_HIDDEN	},
 	{ "nouchg",		0, UF_IMMUTABLE	},
 	{ "nouchange",		0, UF_IMMUTABLE	},
 	{ "nouimmutable",	0, UF_IMMUTABLE	},
 	{ "nodump",		1, UF_NODUMP	},
-	{ "noopaque",		0, UF_OPAQUE	},
 	{ "nouunlnk",		0, UF_NOUNLINK	},
-	{ "nouunlink",		0, UF_NOUNLINK	}
+	{ "nouunlink",		0, UF_NOUNLINK	},
+	{ "nooffline",		0, UF_OFFLINE	},
+	{ "nouoffline",		0, UF_OFFLINE	},
+	{ "noopaque",		0, UF_OPAQUE	},
+	{ "nordonly",		0, UF_READONLY	},
+	{ "nourdonly",		0, UF_READONLY	},
+	{ "noreadonly",		0, UF_READONLY	},
+	{ "noureadonly",	0, UF_READONLY	},
+	{ "noreparse",		0, UF_REPARSE	},
+	{ "noureparse",		0, UF_REPARSE	},
+	{ "nosparse",		0, UF_SPARSE	},
+	{ "nousparse",		0, UF_SPARSE	},
+	{ "nosystem",		0, UF_SYSTEM	},
+	{ "nousystem",		0, UF_SYSTEM	}
 };
 #define nmappings	(sizeof(mapping) / sizeof(mapping[0]))
 
@@ -78,14 +94,13 @@ static struct {
  *	are set, return the empty string.
  */
 char *
-fflagstostr(flags)
-	u_long flags;
+fflagstostr(u_long flags)
 {
 	char *string;
 	const char *sp;
 	char *dp;
 	u_long setflags;
-	int i;
+	u_int i;
 
 	if ((string = (char *)malloc(nmappings * (longestflaglen + 1))) == NULL)
 		return (NULL);
@@ -112,9 +127,7 @@ fflagstostr(flags)
  *	to the offending token.
  */
 int
-strtofflags(stringp, setp, clrp)
-	char **stringp;
-	u_long *setp, *clrp;
+strtofflags(char **stringp, u_long *setp, u_long *clrp)
 {
 	char *string, *p;
 	int i;

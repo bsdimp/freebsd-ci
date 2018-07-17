@@ -1,16 +1,10 @@
 # $FreeBSD$
 
-.include <bsd.own.mk>
+PROG_CXX=	llvm-nm
 
-PROG_CXX=llvm-nm
+SRCDIR=		tools/llvm-nm
+SRCS+=		llvm-nm.cpp
 
-SRCDIR=	tools/llvm-nm
-SRCS=	llvm-nm.cpp
+LIBADD+=	z
 
-LIBDEPS=llvmobject \
-	llvmarchive \
-	llvmbitreader \
-	llvmcore \
-	llvmsupport
-
-.include "../clang.prog.mk"
+.include "../llvm.prog.mk"

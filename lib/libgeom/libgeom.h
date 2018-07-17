@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 Poul-Henning Kamp
  * All rights reserved.
  *
@@ -39,6 +41,10 @@
 #include <geom/geom_ctl.h>
 
 __BEGIN_DECLS
+
+#ifndef DEBUG_LIBGEOM
+#define DEBUG_LIBGEOM 0
+#endif
 
 void geom_stats_close(void);
 void geom_stats_resync(void);

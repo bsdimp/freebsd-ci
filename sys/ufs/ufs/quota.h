@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -62,7 +64,7 @@
 /*
  * Definitions for the default names of the quotas files.
  */
-#define INITQFNAMES { \
+#define	INITQFNAMES { \
 	"user",		/* USRQUOTA */ \
 	"group",	/* GRPQUOTA */ \
 	"undefined", \
@@ -75,8 +77,8 @@
  * broken into a main command defined below and a subcommand that is used
  * to convey the type of quota that is being manipulated (see above).
  */
-#define SUBCMDMASK	0x00ff
-#define SUBCMDSHIFT	8
+#define	SUBCMDMASK	0x00ff
+#define	SUBCMDSHIFT	8
 #define	QCMD(cmd, type)	(((cmd) << SUBCMDSHIFT) | ((type) & SUBCMDMASK))
 
 #define	Q_QUOTAON	0x0100	/* enable quotas */
@@ -119,10 +121,10 @@ struct dqblk64 {
 	int64_t   dqb_itime;		/* time limit for excessive files */
 };
 
-#define dqblk dqblk64
+#define	dqblk dqblk64
 
-#define Q_DQHDR64_MAGIC "QUOTA64"
-#define Q_DQHDR64_VERSION 0x20081104
+#define	Q_DQHDR64_MAGIC "QUOTA64"
+#define	Q_DQHDR64_VERSION 0x20081104
 
 struct dqhdr64 {
 	char	  dqh_magic[8];		/* Q_DQHDR64_MAGIC */

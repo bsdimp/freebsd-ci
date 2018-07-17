@@ -54,7 +54,7 @@ static int faketypenumber = 100000000;
 static tdesc_t *hash_table[BUCKETS];
 static tdesc_t *name_table[BUCKETS];
 
-list_t *typedbitfldmems;
+static list_t *typedbitfldmems;
 
 static void reset(void);
 static jmp_buf	resetbuf;
@@ -229,8 +229,12 @@ parse_fun(char *cp, iidesc_t *ii)
 		nargs++;
 		if (nargs > FUNCARG_DEF)
 			args = xrealloc(args, sizeof (tdesc_t *) * nargs);
-		if (!(cp = read_tid(cp, &args[nargs - 1])))
+		if (!(cp = read_tid(cp, &args[nargs - 1]))) {
+			if (tdp->t_type == TYPEDEF_UNRES)
+				free(tdp);
+			free(args);
 			return (-1);
+		}
 	}
 
 	ii->ii_type = iitype;

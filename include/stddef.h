@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -38,7 +40,10 @@
 #include <sys/_null.h>
 #include <sys/_types.h>
 
+#ifndef _PTRDIFF_T_DECLARED
 typedef	__ptrdiff_t	ptrdiff_t;
+#define	_PTRDIFF_T_DECLARED
+#endif
 
 #if __BSD_VISIBLE
 #ifndef _RUNE_T_DECLARED
@@ -54,11 +59,27 @@ typedef	__size_t	size_t;
 
 #ifndef	__cplusplus
 #ifndef _WCHAR_T_DECLARED
-typedef	__wchar_t	wchar_t;
+typedef	___wchar_t	wchar_t;
 #define	_WCHAR_T_DECLARED
 #endif
 #endif
 
-#define	offsetof(type, member)	__offsetof(type, member)
+#if __ISO_C_VISIBLE >= 2011 || __cplusplus >= 201103L
+#ifndef __CLANG_MAX_ALIGN_T_DEFINED
+typedef	__max_align_t	max_align_t;
+#define __CLANG_MAX_ALIGN_T_DEFINED
+#define _GCC_MAX_ALIGN_T
+#endif
+#endif
+
+#define	offsetof(type, field)	__offsetof(type, field)
+
+#if __EXT1_VISIBLE
+/* ISO/IEC 9899:2011 K.3.3.2 */
+#ifndef _RSIZE_T_DEFINED
+#define _RSIZE_T_DEFINED
+typedef size_t rsize_t;
+#endif
+#endif /* __EXT1_VISIBLE */
 
 #endif /* _STDDEF_H_ */

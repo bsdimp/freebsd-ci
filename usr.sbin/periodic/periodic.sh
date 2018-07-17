@@ -4,13 +4,13 @@
 #
 # Run nightly periodic scripts
 #
-# usage: periodic { daily | weekly | monthly } - run standard periodic scripts
+# usage: periodic { daily | weekly | monthly | security } - run standard scripts
 #        periodic /absolute/path/to/directory  - run periodic scripts in dir
 #
 
 usage () {
     echo "usage: $0 <directory of files to execute>" 1>&2
-    echo "or     $0 { daily | weekly | monthly }"    1>&2
+    echo "or     $0 { daily | weekly | monthly | security }"    1>&2
     exit 1
 }
 
@@ -21,7 +21,7 @@ output_pipe()
     case "$output" in
     /*) pipe="cat >>$output";;
     "") pipe=cat;;
-    *)  pipe="mail -E -s '$host ${1##*/} run output' $output";;
+    *)  pipe="mail -E -s '$host ${2}${2:+ }${1##*/} run output' $output";;
     esac
     eval $pipe
 }
@@ -30,7 +30,7 @@ if [ $# -lt 1 ] ; then
     usage
 fi
 
-# If possible, check the global system configuration file, 
+# If possible, check the global system configuration file,
 # to see if there are additional dirs to check
 if [ -r /etc/defaults/periodic.conf ]; then
     . /etc/defaults/periodic.conf
@@ -43,7 +43,7 @@ export host
 # If we were called normally, then create a lock file for each argument
 # in turn and reinvoke ourselves with the LOCKED argument.  This prevents
 # very long running jobs from being overlapped by another run as this is
-# will lead the system running progressivly slower and more and more jobs 
+# will lead the system running progressivly slower and more and more jobs
 # are run at once.
 if [ $1 != "LOCKED" ]; then
     ret=0
@@ -53,12 +53,13 @@ if [ $1 != "LOCKED" ]; then
         case $? in
         0) ;;
         73) #EX_CANTCREATE
-            echo "can't create ${lockfile}" | output_pipe $arg
+            echo "can't create ${lockfile}" | \
+                output_pipe $arg "$PERIODIC"
             ret=1
             ;;
         75) #EX_TEMPFAIL
             echo "$host ${arg##*/} prior run still in progress" | \
-                output_pipe $arg
+                output_pipe $arg "$PERIODIC"
             ret=1
             ;;
         *)
@@ -75,7 +76,15 @@ fi
 shift
 arg=$1
 
+if [ -z "$PERIODIC_ANTICONGESTION_FILE" ] ; then
+	export PERIODIC_ANTICONGESTION_FILE=`mktemp ${TMPDIR:-/tmp}/periodic.anticongestion.XXXXXXXXXX`
+fi
+if tty > /dev/null 2>&1; then
+	export PERIODIC_IS_INTERACTIVE=1
+fi
 tmp_output=`mktemp ${TMPDIR:-/tmp}/periodic.XXXXXXXXXX`
+context="$PERIODIC"
+export PERIODIC="$arg${PERIODIC:+ }${PERIODIC}"
 
 # Execute each executable file in the directory list.  If the x bit is not
 # set, assume the user didn't really want us to muck with it (it's a
@@ -93,8 +102,8 @@ case $arg in
 /*) if [ -d "$arg" ]; then
         dirlist="$arg"
     else
-        echo "$0: $arg not found" >&2 
-        continue
+        echo "$0: $arg not found" >&2
+        exit 1
     fi
     ;;
 *)  dirlist=
@@ -135,6 +144,7 @@ esac
         echo ""
         echo "-- End of $arg output --"
     fi
-} | output_pipe ${arg}
+} | output_pipe $arg "$context"
 
 rm -f $tmp_output
+rm -f $PERIODIC_ANTICONGESTION_FILE

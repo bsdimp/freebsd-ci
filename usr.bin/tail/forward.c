@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -243,7 +245,7 @@ show(file_info_t *file)
 	while ((ch = getc(file->fp)) != EOF) {
 		if (last != file && no_files > 1) {
 			if (!qflag)
-				(void)printf("\n==> %s <==\n", file->file_name);
+				printfn(file->file_name, 1);
 			last = file;
 		}
 		if (putchar(ch) == EOF)
@@ -320,7 +322,7 @@ follow(file_info_t *files, enum STYLE style, off_t off)
 			active = 1;
 			n++;
 			if (no_files > 1 && !qflag)
-				(void)printf("\n==> %s <==\n", file->file_name);
+				printfn(file->file_name, 1);
 			forward(file->fp, file->file_name, style, off, &file->st);
 			if (Fflag && fileno(file->fp) != STDIN_FILENO)
 				n++;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1982, 1986, 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -31,7 +33,7 @@
  */
 
 #ifndef _FS_EXT2FS_EXT2_MOUNT_H_
-#define _FS_EXT2FS_EXT2_MOUNT_H_
+#define	_FS_EXT2FS_EXT2_MOUNT_H_
 
 #ifdef _KERNEL
 
@@ -59,20 +61,20 @@ struct ext2mount {
 	struct bufobj *um_bo;
 };
 
-#define EXT2_LOCK(aa)		mtx_lock(&(aa)->um_lock)
-#define EXT2_UNLOCK(aa)	mtx_unlock(&(aa)->um_lock)
-#define EXT2_MTX(aa)		(&(aa)->um_lock)
+#define	EXT2_LOCK(aa)		mtx_lock(&(aa)->um_lock)
+#define	EXT2_UNLOCK(aa)	mtx_unlock(&(aa)->um_lock)
+#define	EXT2_MTX(aa)		(&(aa)->um_lock)
 
 /* Convert mount ptr to ext2fsmount ptr. */
-#define VFSTOEXT2(mp)	((struct ext2mount *)((mp)->mnt_data))
+#define	VFSTOEXT2(mp)	((struct ext2mount *)((mp)->mnt_data))
 
 /*
  * Macros to access file system parameters in the ufsmount structure.
  * Used by ufs_bmap.
  */
-#define MNINDIR(ump)			((ump)->um_nindir)
+#define	MNINDIR(ump)			((ump)->um_nindir)
 #define	blkptrtodb(ump, b)		((b) << (ump)->um_bptrtodb)
 #define	is_sequential(ump, a, b)	((b) == (a) + ump->um_seqinc)
-#endif /* _KERNEL */
+#endif	/* _KERNEL */
 
 #endif	/* !_FS_EXT2FS_EXT2_MOUNT_H_ */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 Michael Lorenz
  * Copyright (c) 2008 Nathan Whitehorn
  * All rights reserved.
@@ -99,6 +101,7 @@
 
 /* Bits from PMU_GET_LID_STATE or PMU_INT_ENVIRONMENT on core99 */
 #define PMU_ENV_LID_CLOSED	0x01	/* The lid is closed */
+#define PMU_ENV_POWER		0x08	/* Power Button pressed */
 
 /* PMU PMU_POWER_EVENTS commands */
 enum {
@@ -160,7 +163,8 @@ struct pmu_softc {
 	volatile int	sc_autopoll;
 	int		sc_batteries;
 	struct cdev	*sc_leddev;
-	int	lid_closed;
+	int		lid_closed;
+	uint8_t		saved_regs[9];
 };
 
 struct pmu_battstate {
@@ -171,5 +175,7 @@ struct pmu_battstate {
 	int current;
 	int voltage;
 };
+
+int pmu_set_speed(int low_speed);
 
 #endif /* PMUVAR_H */

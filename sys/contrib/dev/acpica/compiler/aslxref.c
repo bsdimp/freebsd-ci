@@ -4,9 +4,117 @@
  *
  *****************************************************************************/
 
-/*
- * Copyright (C) 2000 - 2013, Intel Corp.
+/******************************************************************************
+ *
+ * 1. Copyright Notice
+ *
+ * Some or all of this work - Copyright (c) 1999 - 2018, Intel Corp.
  * All rights reserved.
+ *
+ * 2. License
+ *
+ * 2.1. This is your license from Intel Corp. under its intellectual property
+ * rights. You may have additional license terms from the party that provided
+ * you this software, covering your right to use that party's intellectual
+ * property rights.
+ *
+ * 2.2. Intel grants, free of charge, to any person ("Licensee") obtaining a
+ * copy of the source code appearing in this file ("Covered Code") an
+ * irrevocable, perpetual, worldwide license under Intel's copyrights in the
+ * base code distributed originally by Intel ("Original Intel Code") to copy,
+ * make derivatives, distribute, use and display any portion of the Covered
+ * Code in any form, with the right to sublicense such rights; and
+ *
+ * 2.3. Intel grants Licensee a non-exclusive and non-transferable patent
+ * license (with the right to sublicense), under only those claims of Intel
+ * patents that are infringed by the Original Intel Code, to make, use, sell,
+ * offer to sell, and import the Covered Code and derivative works thereof
+ * solely to the minimum extent necessary to exercise the above copyright
+ * license, and in no event shall the patent license extend to any additions
+ * to or modifications of the Original Intel Code. No other license or right
+ * is granted directly or by implication, estoppel or otherwise;
+ *
+ * The above copyright and patent license is granted only if the following
+ * conditions are met:
+ *
+ * 3. Conditions
+ *
+ * 3.1. Redistribution of Source with Rights to Further Distribute Source.
+ * Redistribution of source code of any substantial portion of the Covered
+ * Code or modification with rights to further distribute source must include
+ * the above Copyright Notice, the above License, this list of Conditions,
+ * and the following Disclaimer and Export Compliance provision. In addition,
+ * Licensee must cause all Covered Code to which Licensee contributes to
+ * contain a file documenting the changes Licensee made to create that Covered
+ * Code and the date of any change. Licensee must include in that file the
+ * documentation of any changes made by any predecessor Licensee. Licensee
+ * must include a prominent statement that the modification is derived,
+ * directly or indirectly, from Original Intel Code.
+ *
+ * 3.2. Redistribution of Source with no Rights to Further Distribute Source.
+ * Redistribution of source code of any substantial portion of the Covered
+ * Code or modification without rights to further distribute source must
+ * include the following Disclaimer and Export Compliance provision in the
+ * documentation and/or other materials provided with distribution. In
+ * addition, Licensee may not authorize further sublicense of source of any
+ * portion of the Covered Code, and must include terms to the effect that the
+ * license from Licensee to its licensee is limited to the intellectual
+ * property embodied in the software Licensee provides to its licensee, and
+ * not to intellectual property embodied in modifications its licensee may
+ * make.
+ *
+ * 3.3. Redistribution of Executable. Redistribution in executable form of any
+ * substantial portion of the Covered Code or modification must reproduce the
+ * above Copyright Notice, and the following Disclaimer and Export Compliance
+ * provision in the documentation and/or other materials provided with the
+ * distribution.
+ *
+ * 3.4. Intel retains all right, title, and interest in and to the Original
+ * Intel Code.
+ *
+ * 3.5. Neither the name Intel nor any other trademark owned or controlled by
+ * Intel shall be used in advertising or otherwise to promote the sale, use or
+ * other dealings in products derived from or relating to the Covered Code
+ * without prior written authorization from Intel.
+ *
+ * 4. Disclaimer and Export Compliance
+ *
+ * 4.1. INTEL MAKES NO WARRANTY OF ANY KIND REGARDING ANY SOFTWARE PROVIDED
+ * HERE. ANY SOFTWARE ORIGINATING FROM INTEL OR DERIVED FROM INTEL SOFTWARE
+ * IS PROVIDED "AS IS," AND INTEL WILL NOT PROVIDE ANY SUPPORT, ASSISTANCE,
+ * INSTALLATION, TRAINING OR OTHER SERVICES. INTEL WILL NOT PROVIDE ANY
+ * UPDATES, ENHANCEMENTS OR EXTENSIONS. INTEL SPECIFICALLY DISCLAIMS ANY
+ * IMPLIED WARRANTIES OF MERCHANTABILITY, NONINFRINGEMENT AND FITNESS FOR A
+ * PARTICULAR PURPOSE.
+ *
+ * 4.2. IN NO EVENT SHALL INTEL HAVE ANY LIABILITY TO LICENSEE, ITS LICENSEES
+ * OR ANY OTHER THIRD PARTY, FOR ANY LOST PROFITS, LOST DATA, LOSS OF USE OR
+ * COSTS OF PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES, OR FOR ANY INDIRECT,
+ * SPECIAL OR CONSEQUENTIAL DAMAGES ARISING OUT OF THIS AGREEMENT, UNDER ANY
+ * CAUSE OF ACTION OR THEORY OF LIABILITY, AND IRRESPECTIVE OF WHETHER INTEL
+ * HAS ADVANCE NOTICE OF THE POSSIBILITY OF SUCH DAMAGES. THESE LIMITATIONS
+ * SHALL APPLY NOTWITHSTANDING THE FAILURE OF THE ESSENTIAL PURPOSE OF ANY
+ * LIMITED REMEDY.
+ *
+ * 4.3. Licensee shall not export, either directly or indirectly, any of this
+ * software or system incorporating such software without first obtaining any
+ * required license or other approval from the U. S. Department of Commerce or
+ * any other agency or department of the United States Government. In the
+ * event Licensee exports any such software from the United States or
+ * re-exports any such software from a foreign destination, Licensee shall
+ * ensure that the distribution and export/re-export of the software is in
+ * compliance with all laws, regulations, orders, or other restrictions of the
+ * U.S. Export Administration Regulations. Licensee agrees that neither it nor
+ * any of its subsidiaries will export/re-export any technical data, process,
+ * software, or service, directly or indirectly, to any country for which the
+ * United States government or any agency thereof requires an export license,
+ * other governmental approval, or letter of assurance, without first obtaining
+ * such license, approval or letter.
+ *
+ *****************************************************************************
+ *
+ * Alternatively, you may choose to be licensed under the terms of the
+ * following license:
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -23,24 +131,23 @@
  *    of any contributors may be used to endorse or promote products derived
  *    from this software without specific prior written permission.
  *
- * Alternatively, this software may be distributed under the terms of the
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * Alternatively, you may choose to be licensed under the terms of the
  * GNU General Public License ("GPL") version 2 as published by the Free
  * Software Foundation.
  *
- * NO WARRANTY
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * HOLDERS OR CONTRIBUTORS BE LIABLE FOR SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
- * IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGES.
- */
-
+ *****************************************************************************/
 
 #include <contrib/dev/acpica/compiler/aslcompiler.h>
 #include "aslcompiler.y.h"
@@ -66,6 +173,10 @@ XfNamespaceLocateEnd (
     ACPI_PARSE_OBJECT       *Op,
     UINT32                  Level,
     void                    *Context);
+
+static ACPI_PARSE_OBJECT *
+XfGetParentMethod (
+    ACPI_PARSE_OBJECT       *Op);
 
 static BOOLEAN
 XfObjectExists (
@@ -114,8 +225,6 @@ XfCrossReferenceNamespace (
     ACPI_WALK_STATE         *WalkState;
 
 
-    DbgPrint (ASL_DEBUG_OUTPUT, "\nCross referencing namespace\n\n");
-
     /*
      * Create a new walk state for use when looking up names
      * within the namespace (Passed as context to the callbacks)
@@ -128,8 +237,10 @@ XfCrossReferenceNamespace (
 
     /* Walk the entire parse tree */
 
-    TrWalkParseTree (RootNode, ASL_WALK_VISIT_TWICE, XfNamespaceLocateBegin,
-                        XfNamespaceLocateEnd, WalkState);
+    TrWalkParseTree (Gbl_ParseTreeRoot, ASL_WALK_VISIT_TWICE,
+        XfNamespaceLocateBegin, XfNamespaceLocateEnd, WalkState);
+
+    ACPI_FREE (WalkState);
     return (AE_OK);
 }
 
@@ -156,8 +267,8 @@ XfObjectExists (
     /* Walk entire namespace from the supplied root */
 
     Status = AcpiNsWalkNamespace (ACPI_TYPE_ANY, ACPI_ROOT_OBJECT,
-                ACPI_UINT32_MAX, FALSE, XfCompareOneNamespaceObject, NULL,
-                Name, NULL);
+        ACPI_UINT32_MAX, FALSE, XfCompareOneNamespaceObject, NULL,
+        Name, NULL);
     if (Status == AE_CTRL_TRUE)
     {
         /* At least one instance of the name was found */
@@ -262,6 +373,41 @@ XfCheckFieldRange (
     }
 }
 
+
+/*******************************************************************************
+ *
+ * FUNCTION:    XfGetParentMethod
+ *
+ * PARAMETERS:  Op                      - Parse Op to be checked
+ *
+ * RETURN:      Control method Op if found. NULL otherwise
+ *
+ * DESCRIPTION: Find the control method parent of a parse op. Returns NULL if
+ *              the input Op is not within a control method.
+ *
+ ******************************************************************************/
+
+static ACPI_PARSE_OBJECT *
+XfGetParentMethod (
+    ACPI_PARSE_OBJECT       *Op)
+{
+    ACPI_PARSE_OBJECT       *NextOp;
+
+
+    NextOp = Op->Asl.Parent;
+    while (NextOp)
+    {
+        if (NextOp->Asl.AmlOpcode == AML_METHOD_OP)
+        {
+            return (NextOp);
+        }
+
+        NextOp = NextOp->Asl.Parent;
+    }
+
+    return (NULL); /* No parent method found */
+}
+
 /*******************************************************************************
  *
  * FUNCTION:    XfNamespaceLocateBegin
@@ -303,9 +449,66 @@ XfNamespaceLocateBegin (
     UINT8                   Message = 0;
     const ACPI_OPCODE_INFO  *OpInfo;
     UINT32                  Flags;
+    ASL_METHOD_LOCAL        *MethodLocals = NULL;
+    ASL_METHOD_LOCAL        *MethodArgs = NULL;
+    int                     RegisterNumber;
+    UINT32                  i;
 
 
     ACPI_FUNCTION_TRACE_PTR (XfNamespaceLocateBegin, Op);
+
+
+    if ((Op->Asl.AmlOpcode == AML_METHOD_OP) && Op->Asl.Node)
+    {
+        Node = Op->Asl.Node;
+
+        /* Support for method LocalX/ArgX analysis */
+
+        if (!Node->MethodLocals)
+        {
+            /* Create local/arg info blocks */
+
+            MethodLocals = UtLocalCalloc (
+                sizeof (ASL_METHOD_LOCAL) * ACPI_METHOD_NUM_LOCALS);
+            Node->MethodLocals = MethodLocals;
+
+            MethodArgs = UtLocalCalloc (
+                sizeof (ASL_METHOD_LOCAL) * ACPI_METHOD_NUM_ARGS);
+            Node->MethodArgs = MethodArgs;
+
+            /*
+             * Get the method argument count
+             * First, get the name node
+             */
+            NextOp = Op->Asl.Child;
+
+            /* Get the NumArguments node */
+
+            NextOp = NextOp->Asl.Next;
+            Node->ArgCount = (UINT8)
+                (((UINT8) NextOp->Asl.Value.Integer) & 0x07);
+
+            /* We will track all posible ArgXs */
+
+            for (i = 0; i < ACPI_METHOD_NUM_ARGS; i++)
+            {
+                if (i < Node->ArgCount)
+                {
+                    /* Real Args are always "initialized" */
+
+                    MethodArgs[i].Flags = ASL_ARG_INITIALIZED;
+                }
+                else
+                {
+                    /* Other ArgXs can be used as locals */
+
+                    MethodArgs[i].Flags = ASL_ARG_IS_LOCAL;
+                }
+
+                MethodArgs[i].Op = Op;
+            }
+        }
+    }
 
     /*
      * If this node is the actual declaration of a name
@@ -314,22 +517,98 @@ XfNamespaceLocateBegin (
      * references to other objects within the namespace and the parent objects
      * of name declarations
      */
-    if (Op->Asl.CompileFlags & NODE_IS_NAME_DECLARATION)
+    if (Op->Asl.CompileFlags & OP_IS_NAME_DECLARATION)
     {
-        return (AE_OK);
+        return_ACPI_STATUS (AE_OK);
     }
-
-    /* We are only interested in opcodes that have an associated name */
 
     OpInfo = AcpiPsGetOpcodeInfo (Op->Asl.AmlOpcode);
 
+    /* Check method LocalX variables */
+
+    if (OpInfo->Type == AML_TYPE_LOCAL_VARIABLE)
+    {
+        /* Find parent method Op */
+
+        NextOp = XfGetParentMethod (Op);
+        if (!NextOp)
+        {
+            return_ACPI_STATUS (AE_OK);
+        }
+
+        /* Get method node */
+
+        Node = NextOp->Asl.Node;
+
+        RegisterNumber = Op->Asl.AmlOpcode & 0x0007; /* 0x60 through 0x67 */
+        MethodLocals = Node->MethodLocals;
+
+        if (Op->Asl.CompileFlags & OP_IS_TARGET)
+        {
+            /* Local is being initialized */
+
+            MethodLocals[RegisterNumber].Flags |= ASL_LOCAL_INITIALIZED;
+            MethodLocals[RegisterNumber].Op = Op;
+
+            return_ACPI_STATUS (AE_OK);
+        }
+
+        /* Mark this Local as referenced */
+
+        MethodLocals[RegisterNumber].Flags |= ASL_LOCAL_REFERENCED;
+        MethodLocals[RegisterNumber].Op = Op;
+
+        return_ACPI_STATUS (AE_OK);
+    }
+
+    /* Check method ArgX variables */
+
+    if (OpInfo->Type == AML_TYPE_METHOD_ARGUMENT)
+    {
+        /* Find parent method Op */
+
+        NextOp = XfGetParentMethod (Op);
+        if (!NextOp)
+        {
+            return_ACPI_STATUS (AE_OK);
+        }
+
+        /* Get method node */
+
+        Node = NextOp->Asl.Node;
+
+        /* Get Arg # */
+
+        RegisterNumber = Op->Asl.AmlOpcode - AML_ARG0; /* 0x68 through 0x6F */
+        MethodArgs = Node->MethodArgs;
+
+        /* Mark this Arg as referenced */
+
+        MethodArgs[RegisterNumber].Flags |= ASL_ARG_REFERENCED;
+        MethodArgs[RegisterNumber].Op = Op;
+
+        if (Op->Asl.CompileFlags & OP_IS_TARGET)
+        {
+            /* Arg is being initialized */
+
+            MethodArgs[RegisterNumber].Flags |= ASL_ARG_INITIALIZED;
+        }
+
+        return_ACPI_STATUS (AE_OK);
+    }
+
+    /*
+     * After method ArgX and LocalX, we are only interested in opcodes
+     * that have an associated name
+     */
     if ((!(OpInfo->Flags & AML_NAMED)) &&
         (!(OpInfo->Flags & AML_CREATE)) &&
         (Op->Asl.ParseOpcode != PARSEOP_NAMESTRING) &&
         (Op->Asl.ParseOpcode != PARSEOP_NAMESEG)    &&
-        (Op->Asl.ParseOpcode != PARSEOP_METHODCALL))
+        (Op->Asl.ParseOpcode != PARSEOP_METHODCALL) &&
+        (Op->Asl.ParseOpcode != PARSEOP_EXTERNAL))
     {
-        return (AE_OK);
+        return_ACPI_STATUS (AE_OK);
     }
 
     /*
@@ -340,7 +619,7 @@ XfNamespaceLocateBegin (
     if ((Op->Asl.Parent) &&
         (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_CONDREFOF))
     {
-        return (AE_OK);
+        return_ACPI_STATUS (AE_OK);
     }
 
     /*
@@ -350,7 +629,8 @@ XfNamespaceLocateBegin (
     Flags = ACPI_NS_SEARCH_PARENT;
     if ((Op->Asl.ParseOpcode == PARSEOP_NAMESTRING) ||
         (Op->Asl.ParseOpcode == PARSEOP_NAMESEG)    ||
-        (Op->Asl.ParseOpcode == PARSEOP_METHODCALL))
+        (Op->Asl.ParseOpcode == PARSEOP_METHODCALL) ||
+        (Op->Asl.ParseOpcode == PARSEOP_EXTERNAL))
     {
         /*
          * These are name references, do not push the scope stack
@@ -380,10 +660,11 @@ XfNamespaceLocateBegin (
         /* Name must appear as the last parameter */
 
         NextOp = Op->Asl.Child;
-        while (!(NextOp->Asl.CompileFlags & NODE_IS_NAME_DECLARATION))
+        while (!(NextOp->Asl.CompileFlags & OP_IS_NAME_DECLARATION))
         {
             NextOp = NextOp->Asl.Next;
         }
+
         Path = NextOp->Asl.Value.String;
     }
     else
@@ -405,7 +686,7 @@ XfNamespaceLocateBegin (
     Gbl_NsLookupCount++;
 
     Status = AcpiNsLookup (WalkState->ScopeInfo, Path, ObjectType,
-                ACPI_IMODE_EXECUTE, Flags, WalkState, &(Node));
+        ACPI_IMODE_EXECUTE, Flags, WalkState, &Node);
     if (ACPI_FAILURE (Status))
     {
         if (Status == AE_NOT_FOUND)
@@ -459,7 +740,28 @@ XfNamespaceLocateBegin (
 
             Status = AE_OK;
         }
-        return (Status);
+
+        return_ACPI_STATUS (Status);
+    }
+
+    /* Object was found above, check for an illegal forward reference */
+
+    if (Op->Asl.CompileFlags & OP_NOT_FOUND_DURING_LOAD)
+    {
+        /*
+         * During the load phase, this Op was flagged as a possible
+         * illegal forward reference
+         *
+         * Note: Allow "forward references" from within a method to an
+         * object that is not within any method (module-level code)
+         */
+        if (!WalkState->ScopeInfo || (UtGetParentMethod (Node) &&
+            !UtNodeIsDescendantOf (WalkState->ScopeInfo->Scope.Node,
+                UtGetParentMethod (Node))))
+        {
+            AslError (ASL_ERROR, ASL_MSG_ILLEGAL_FORWARD_REF, Op,
+                Op->Asl.ExternalName);
+        }
     }
 
     /* Check for a reference vs. name declaration */
@@ -533,27 +835,33 @@ XfNamespaceLocateBegin (
             break;
 
         case AML_CREATE_BIT_FIELD_OP:
+
             FieldBitLength = 1;
             break;
 
         case AML_CREATE_BYTE_FIELD_OP:
         case AML_INDEX_OP:
+
             FieldBitLength = 8;
             break;
 
         case AML_CREATE_WORD_FIELD_OP:
+
             FieldBitLength = 16;
             break;
 
         case AML_CREATE_DWORD_FIELD_OP:
+
             FieldBitLength = 32;
             break;
 
         case AML_CREATE_QWORD_FIELD_OP:
+
             FieldBitLength = 64;
             break;
 
         default:
+
             FieldBitLength = 0;
             break;
         }
@@ -573,7 +881,8 @@ XfNamespaceLocateBegin (
 
             if (Message)
             {
-                sprintf (MsgBuffer, "Size mismatch, Tag: %u bit%s, Field: %u bit%s",
+                sprintf (MsgBuffer,
+                    "Size mismatch, Tag: %u bit%s, Field: %u bit%s",
                     TagBitLength, (TagBitLength > 1) ? "s" : "",
                     FieldBitLength, (FieldBitLength > 1) ? "s" : "");
 
@@ -595,6 +904,7 @@ XfNamespaceLocateBegin (
             break;
 
         default:
+
             break;
         }
 
@@ -603,7 +913,7 @@ XfNamespaceLocateBegin (
         Op->Asl.AmlLength = 0;
         Op->Asl.ParseOpcode = PARSEOP_INTEGER;
         Op->Asl.Value.Integer = (UINT64) Offset;
-        Op->Asl.CompileFlags |= NODE_IS_RESOURCE_FIELD;
+        Op->Asl.CompileFlags |= OP_IS_RESOURCE_FIELD;
 
         OpcGenerateAmlOpcode (Op);
     }
@@ -617,18 +927,21 @@ XfNamespaceLocateBegin (
 
                 (Op->Asl.ParseOpcode == PARSEOP_METHODCALL))
     {
-
         /*
          * A reference to a method within one of these opcodes is not an
          * invocation of the method, it is simply a reference to the method.
+         *
+         * September 2016: Removed DeRefOf from this list
          */
         if ((Op->Asl.Parent) &&
-           ((Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_REFOF)      ||
-            (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_DEREFOF)    ||
+            ((Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_REFOF)     ||
+            (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_PACKAGE)    ||
+            (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_VAR_PACKAGE)||
             (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_OBJECTTYPE)))
         {
-            return (AE_OK);
+            return_ACPI_STATUS (AE_OK);
         }
+
         /*
          * There are two types of method invocation:
          * 1) Invocation with arguments -- the parser recognizes this
@@ -640,10 +953,10 @@ XfNamespaceLocateBegin (
         if (Node->Type != ACPI_TYPE_METHOD)
         {
             sprintf (MsgBuffer, "%s is a %s",
-                    Op->Asl.ExternalName, AcpiUtGetTypeName (Node->Type));
+                Op->Asl.ExternalName, AcpiUtGetTypeName (Node->Type));
 
             AslError (ASL_ERROR, ASL_MSG_NOT_METHOD, Op, MsgBuffer);
-            return (AE_OK);
+            return_ACPI_STATUS (AE_OK);
         }
 
         /* Save the method node in the caller's op */
@@ -651,7 +964,7 @@ XfNamespaceLocateBegin (
         Op->Asl.Node = Node;
         if (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_CONDREFOF)
         {
-            return (AE_OK);
+            return_ACPI_STATUS (AE_OK);
         }
 
         /*
@@ -663,7 +976,7 @@ XfNamespaceLocateBegin (
         UtSetParseOpName (Op);
 
         PassedArgs = 0;
-        NextOp     = Op->Asl.Child;
+        NextOp = Op->Asl.Child;
 
         while (NextOp)
         {
@@ -671,7 +984,8 @@ XfNamespaceLocateBegin (
             NextOp = NextOp->Asl.Next;
         }
 
-        if (Node->Value != ASL_EXTERNAL_METHOD)
+        if (Node->Value != ASL_EXTERNAL_METHOD &&
+            Op->Asl.Parent->Asl.ParseOpcode != PARSEOP_EXTERNAL)
         {
             /*
              * Check the parsed arguments with the number expected by the
@@ -728,18 +1042,22 @@ XfNamespaceLocateBegin (
             case AML_FIELD_ACCESS_BYTE:
             case AML_FIELD_ACCESS_BUFFER:
             default:
+
                 MinimumLength = 1;
                 break;
 
             case AML_FIELD_ACCESS_WORD:
+
                 MinimumLength = 2;
                 break;
 
             case AML_FIELD_ACCESS_DWORD:
+
                 MinimumLength = 4;
                 break;
 
             case AML_FIELD_ACCESS_QWORD:
+
                 MinimumLength = 8;
                 break;
             }
@@ -765,7 +1083,8 @@ XfNamespaceLocateBegin (
             case ACPI_ADR_SPACE_CMOS:
             case ACPI_ADR_SPACE_GPIO:
 
-                if ((UINT8) Op->Asl.Parent->Asl.Value.Integer != AML_FIELD_ACCESS_BYTE)
+                if ((UINT8) Op->Asl.Parent->Asl.Value.Integer !=
+                    AML_FIELD_ACCESS_BYTE)
                 {
                     AslError (ASL_ERROR, ASL_MSG_REGION_BYTE_ACCESS, Op, NULL);
                 }
@@ -775,7 +1094,8 @@ XfNamespaceLocateBegin (
             case ACPI_ADR_SPACE_IPMI:
             case ACPI_ADR_SPACE_GSBUS:
 
-                if ((UINT8) Op->Asl.Parent->Asl.Value.Integer != AML_FIELD_ACCESS_BUFFER)
+                if ((UINT8) Op->Asl.Parent->Asl.Value.Integer !=
+                    AML_FIELD_ACCESS_BUFFER)
                 {
                     AslError (ASL_ERROR, ASL_MSG_REGION_BUFFER_ACCESS, Op, NULL);
                 }
@@ -784,6 +1104,7 @@ XfNamespaceLocateBegin (
             default:
 
                 /* Nothing to do for other address spaces */
+
                 break;
             }
         }
@@ -802,16 +1123,24 @@ XfNamespaceLocateBegin (
             if (Op->Asl.Parent->Asl.ExtraValue && Op->Asl.Child)
             {
                 XfCheckFieldRange (Op,
-                            Op->Asl.Parent->Asl.ExtraValue,
-                            Op->Asl.ExtraValue,
-                            (UINT32) Op->Asl.Child->Asl.Value.Integer,
-                            Op->Asl.Child->Asl.ExtraValue);
+                    Op->Asl.Parent->Asl.ExtraValue,
+                    Op->Asl.ExtraValue,
+                    (UINT32) Op->Asl.Child->Asl.Value.Integer,
+                    Op->Asl.Child->Asl.ExtraValue);
             }
         }
     }
 
+    /* 5) Check for a connection object */
+#if 0
+    else if (Op->Asl.Parent->Asl.ParseOpcode == PARSEOP_CONNECTION)
+    {
+        return_ACPI_STATUS (Status);
+    }
+#endif
+
     Op->Asl.Node = Node;
-    return (Status);
+    return_ACPI_STATUS (Status);
 }
 
 
@@ -846,16 +1175,17 @@ XfNamespaceLocateEnd (
     OpInfo = AcpiPsGetOpcodeInfo (Op->Asl.AmlOpcode);
     if (!(OpInfo->Flags & AML_NAMED))
     {
-        return (AE_OK);
+        return_ACPI_STATUS (AE_OK);
     }
 
     /* Not interested in name references, we did not open a scope for them */
 
     if ((Op->Asl.ParseOpcode == PARSEOP_NAMESTRING) ||
         (Op->Asl.ParseOpcode == PARSEOP_NAMESEG)    ||
-        (Op->Asl.ParseOpcode == PARSEOP_METHODCALL))
+        (Op->Asl.ParseOpcode == PARSEOP_METHODCALL) ||
+        (Op->Asl.ParseOpcode == PARSEOP_EXTERNAL))
     {
-        return (AE_OK);
+        return_ACPI_STATUS (AE_OK);
     }
 
     /* Pop the scope stack if necessary */
@@ -870,5 +1200,5 @@ XfNamespaceLocateEnd (
         (void) AcpiDsScopeStackPop (WalkState);
     }
 
-    return (AE_OK);
+    return_ACPI_STATUS (AE_OK);
 }

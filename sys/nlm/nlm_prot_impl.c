@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008 Isilon Inc http://www.isilon.com/
  * Authors: Doug Rabson <dfr@rabson.org>
  * Developed with Red Inc: Alfred Perlstein <alfred@freebsd.org>
@@ -91,17 +93,10 @@ static SYSCTL_NODE(_vfs_nlm, OID_AUTO, sysid, CTLFLAG_RW, NULL, "");
 /*
  * Syscall hooks
  */
-static int nlm_syscall_offset = SYS_nlm_syscall;
-static struct sysent nlm_syscall_prev_sysent;
-#if __FreeBSD_version < 700000
-static struct sysent nlm_syscall_sysent = {
-	(sizeof(struct nlm_syscall_args) / sizeof(register_t)) | SYF_MPSAFE,
-	(sy_call_t *) nlm_syscall
+static struct syscall_helper_data nlm_syscalls[] = {
+	SYSCALL_INIT_HELPER(nlm_syscall),
+	SYSCALL_INIT_LAST
 };
-#else
-MAKE_SYSENT(nlm_syscall);
-#endif
-static bool_t nlm_syscall_registered = FALSE;
 
 /*
  * Debug level passed in from userland. We also support a sysctl hook
@@ -131,6 +126,11 @@ static time_t nlm_grace_threshold;
  * nlm_next_idle_check,
  */
 static time_t nlm_next_idle_check;
+
+/*
+ * A flag to indicate the server is already running.
+ */
+static int nlm_is_running;
 
 /*
  * A socket to use for RPC - shared by all IPv4 RPC clients.
@@ -280,8 +280,8 @@ ng_cookie(struct netobj *src)
 /*
  * Initialise NLM globals.
  */
-static void
-nlm_init(void *dummy)
+static int
+nlm_init(void)
 {
 	int error;
 
@@ -289,24 +289,18 @@ nlm_init(void *dummy)
 	TAILQ_INIT(&nlm_waiting_locks);
 	TAILQ_INIT(&nlm_hosts);
 
-	error = syscall_register(&nlm_syscall_offset, &nlm_syscall_sysent,
-	    &nlm_syscall_prev_sysent);
-	if (error)
+	error = syscall_helper_register(nlm_syscalls, SY_THR_STATIC_KLD);
+	if (error != 0)
 		NLM_ERR("Can't register NLM syscall\n");
-	else
-		nlm_syscall_registered = TRUE;
+	return (error);
 }
-SYSINIT(nlm_init, SI_SUB_LOCK, SI_ORDER_FIRST, nlm_init, NULL);
 
 static void
-nlm_uninit(void *dummy)
+nlm_uninit(void)
 {
 
-	if (nlm_syscall_registered)
-		syscall_deregister(&nlm_syscall_offset,
-		    &nlm_syscall_prev_sysent);
+	syscall_helper_unregister(nlm_syscalls);
 }
-SYSUNINIT(nlm_uninit, SI_SUB_LOCK, SI_ORDER_FIRST, nlm_uninit, NULL);
 
 /*
  * Create a netobj from an arbitrary source.
@@ -341,7 +335,6 @@ static CLIENT *
 nlm_get_rpc(struct sockaddr *sa, rpcprog_t prog, rpcvers_t vers)
 {
 	char *wchan = "nlmrcv";
-	const char* protofmly;
 	struct sockaddr_storage ss;
 	struct socket *so;
 	CLIENT *rpcb;
@@ -363,14 +356,11 @@ nlm_get_rpc(struct sockaddr *sa, rpcprog_t prog, rpcvers_t vers)
 	switch (ss.ss_family) {
 	case AF_INET:
 		((struct sockaddr_in *)&ss)->sin_port = htons(111);
-		protofmly = "inet";
 		so = nlm_socket;
 		break;
-		
 #ifdef INET6
 	case AF_INET6:
 		((struct sockaddr_in6 *)&ss)->sin6_port = htons(111);
-		protofmly = "inet6";
 		so = nlm_socket6;
 		break;
 #endif
@@ -1067,7 +1057,7 @@ nlm_find_host_by_addr(const struct sockaddr *addr, int vers)
 		break;
 #endif
 	default:
-		strcmp(tmp, "<unknown>");
+		strlcpy(tmp, "<unknown>", sizeof(tmp));
 	}
 
 
@@ -1351,7 +1341,7 @@ int
 nlm_wait_lock(void *handle, int timo)
 {
 	struct nlm_waiting_lock *nw = handle;
-	int error;
+	int error, stops_deferred;
 
 	/*
 	 * If the granted message arrived before we got here,
@@ -1359,8 +1349,11 @@ nlm_wait_lock(void *handle, int timo)
 	 */
 	mtx_lock(&nlm_global_lock);
 	error = 0;
-	if (nw->nw_waiting)
+	if (nw->nw_waiting) {
+		stops_deferred = sigdeferstop(SIGDEFERSTOP_ERESTART);
 		error = msleep(nw, &nlm_global_lock, PCATCH, "nlmlock", timo);
+		sigallowstop(stops_deferred);
+	}
 	TAILQ_REMOVE(&nlm_waiting_locks, nw, nw_link);
 	if (error) {
 		/*
@@ -1421,7 +1414,6 @@ nlm_register_services(SVCPOOL *pool, int addr_count, char **addrs)
 	static void (*dispatchers[])(struct svc_req *, SVCXPRT *) = {
 		nlm_prog_0, nlm_prog_1, nlm_prog_3, nlm_prog_4
 	};
-	static const int version_count = sizeof(versions) / sizeof(versions[0]);
 
 	SVCXPRT **xprts;
 	char netid[16];
@@ -1434,8 +1426,14 @@ nlm_register_services(SVCPOOL *pool, int addr_count, char **addrs)
 		return (EINVAL);
 	}
 
+	if (addr_count < 0 || addr_count > 256 ) {
+		NLM_ERR("NLM:  too many service addresses (%d) given, "
+		    "max 256 - can't start server\n", addr_count);
+		return (EINVAL);
+	}
+
 	xprts = malloc(addr_count * sizeof(SVCXPRT *), M_NLM, M_WAITOK|M_ZERO);
-	for (i = 0; i < version_count; i++) {
+	for (i = 0; i < nitems(versions); i++) {
 		for (j = 0; j < addr_count; j++) {
 			/*
 			 * Create transports for the first version and
@@ -1526,51 +1524,51 @@ nlm_server_main(int addr_count, char **addrs)
 	struct nlm_waiting_lock *nw;
 	vop_advlock_t *old_nfs_advlock;
 	vop_reclaim_t *old_nfs_reclaim;
-	int v4_used;
-#ifdef INET6
-	int v6_used;
-#endif
 
-	if (nlm_socket) {
+	if (nlm_is_running != 0) {
 		NLM_ERR("NLM: can't start server - "
 		    "it appears to be running already\n");
 		return (EPERM);
 	}
 
-	memset(&opt, 0, sizeof(opt));
+	if (nlm_socket == NULL) {
+		memset(&opt, 0, sizeof(opt));
 
-	nlm_socket = NULL;
-	error = socreate(AF_INET, &nlm_socket, SOCK_DGRAM, 0,
-	    td->td_ucred, td);
-	if (error) {
-		NLM_ERR("NLM: can't create IPv4 socket - error %d\n", error);
-		return (error);
-	}
-	opt.sopt_dir = SOPT_SET;
-	opt.sopt_level = IPPROTO_IP;
-	opt.sopt_name = IP_PORTRANGE;
-	portlow = IP_PORTRANGE_LOW;
-	opt.sopt_val = &portlow;
-	opt.sopt_valsize = sizeof(portlow);
-	sosetopt(nlm_socket, &opt);
+		error = socreate(AF_INET, &nlm_socket, SOCK_DGRAM, 0,
+		    td->td_ucred, td);
+		if (error) {
+			NLM_ERR("NLM: can't create IPv4 socket - error %d\n",
+			    error);
+			return (error);
+		}
+		opt.sopt_dir = SOPT_SET;
+		opt.sopt_level = IPPROTO_IP;
+		opt.sopt_name = IP_PORTRANGE;
+		portlow = IP_PORTRANGE_LOW;
+		opt.sopt_val = &portlow;
+		opt.sopt_valsize = sizeof(portlow);
+		sosetopt(nlm_socket, &opt);
 
 #ifdef INET6
-	nlm_socket6 = NULL;
-	error = socreate(AF_INET6, &nlm_socket6, SOCK_DGRAM, 0,
-	    td->td_ucred, td);
-	if (error) {
-		NLM_ERR("NLM: can't create IPv6 socket - error %d\n", error);
-		goto out;
-		return (error);
-	}
-	opt.sopt_dir = SOPT_SET;
-	opt.sopt_level = IPPROTO_IPV6;
-	opt.sopt_name = IPV6_PORTRANGE;
-	portlow = IPV6_PORTRANGE_LOW;
-	opt.sopt_val = &portlow;
-	opt.sopt_valsize = sizeof(portlow);
-	sosetopt(nlm_socket6, &opt);
+		nlm_socket6 = NULL;
+		error = socreate(AF_INET6, &nlm_socket6, SOCK_DGRAM, 0,
+		    td->td_ucred, td);
+		if (error) {
+			NLM_ERR("NLM: can't create IPv6 socket - error %d\n",
+			    error);
+			soclose(nlm_socket);
+			nlm_socket = NULL;
+			return (error);
+		}
+		opt.sopt_dir = SOPT_SET;
+		opt.sopt_level = IPPROTO_IPV6;
+		opt.sopt_name = IPV6_PORTRANGE;
+		portlow = IPV6_PORTRANGE_LOW;
+		opt.sopt_val = &portlow;
+		opt.sopt_valsize = sizeof(portlow);
+		sosetopt(nlm_socket6, &opt);
 #endif
+	}
 
 	nlm_auth = authunix_create(curthread->td_ucred);
 
@@ -1622,6 +1620,7 @@ nlm_server_main(int addr_count, char **addrs)
 		error = EINVAL;
 		goto out;
 	}
+	nlm_is_running = 1;
 
 	NLM_DEBUG(1, "NLM: local NSM state is %d\n", smstat.state);
 	nlm_nsm_state = smstat.state;
@@ -1638,6 +1637,7 @@ nlm_server_main(int addr_count, char **addrs)
 	nfs_reclaim_p = old_nfs_reclaim;
 
 out:
+	nlm_is_running = 0;
 	if (pool)
 		svcpool_destroy(pool);
 
@@ -1661,13 +1661,8 @@ out:
 	 * nlm_hosts to the host (which may remove it from the list
 	 * and free it). After this phase, the only entries in the
 	 * nlm_host list should be from other threads performing
-	 * client lock requests. We arrange to defer closing the
-	 * sockets until the last RPC client handle is released.
+	 * client lock requests.
 	 */
-	v4_used = 0;
-#ifdef INET6
-	v6_used = 0;
-#endif
 	mtx_lock(&nlm_global_lock);
 	TAILQ_FOREACH(nw, &nlm_waiting_locks, nw_link) {
 		wakeup(nw);
@@ -1678,42 +1673,9 @@ out:
 		nlm_host_release(host);
 		mtx_lock(&nlm_global_lock);
 	}
-	TAILQ_FOREACH_SAFE(host, &nlm_hosts, nh_link, nhost) {
-		mtx_lock(&host->nh_lock);
-		if (host->nh_srvrpc.nr_client
-		    || host->nh_clntrpc.nr_client) {
-			if (host->nh_addr.ss_family == AF_INET)
-				v4_used++;
-#ifdef INET6
-			if (host->nh_addr.ss_family == AF_INET6)
-				v6_used++;
-#endif
-			/*
-			 * Note that the rpc over udp code copes
-			 * correctly with the fact that a socket may
-			 * be used by many rpc handles.
-			 */
-			if (host->nh_srvrpc.nr_client)
-				CLNT_CONTROL(host->nh_srvrpc.nr_client,
-				    CLSET_FD_CLOSE, 0);
-			if (host->nh_clntrpc.nr_client)
-				CLNT_CONTROL(host->nh_clntrpc.nr_client,
-				    CLSET_FD_CLOSE, 0);
-		}
-		mtx_unlock(&host->nh_lock);
-	}
 	mtx_unlock(&nlm_global_lock);
 
 	AUTH_DESTROY(nlm_auth);
-
-	if (!v4_used)
-		soclose(nlm_socket);
-	nlm_socket = NULL;
-#ifdef INET6
-	if (!v6_used)
-		soclose(nlm_socket6);
-	nlm_socket6 = NULL;
-#endif
 
 	return (error);
 }
@@ -2435,7 +2397,17 @@ static int
 nfslockd_modevent(module_t mod, int type, void *data)
 {
 
-	return (0);
+	switch (type) {
+	case MOD_LOAD:
+		return (nlm_init());
+
+	case MOD_UNLOAD:
+		nlm_uninit();
+		/* The NLM module cannot be safely unloaded. */
+		/* FALLTHROUGH */
+	default:
+		return (EOPNOTSUPP);
+	}
 }
 static moduledata_t nfslockd_mod = {
 	"nfslockd",

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +17,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -93,7 +95,8 @@ struct iso_primary_descriptor {
 	char application_data		[ISODCL (884, 1395)];
 	char unused5			[ISODCL (1396, 2048)];
 };
-#define ISO_DEFAULT_BLOCK_SIZE		2048
+#define ISO_DEFAULT_BLOCK_SHIFT		11
+#define ISO_DEFAULT_BLOCK_SIZE		(1 << ISO_DEFAULT_BLOCK_SHIFT)
 
 /*
  * Used by Microsoft Joliet extension to ISO9660. Almost the same
@@ -219,6 +222,11 @@ enum ISO_FTYPE	{ ISO_FTYPE_DEFAULT, ISO_FTYPE_9660, ISO_FTYPE_RRIP,
 #define	ISOFSMNT_ROOT	0
 #endif
 
+/*
+ * When ino_t becomes 64-bit, we can remove this definition in favor of ino_t.
+ */
+typedef __uint64_t cd_ino_t;
+
 struct iso_mnt {
 	uint64_t im_flags;
 
@@ -250,10 +258,10 @@ struct iso_mnt {
 };
 
 struct ifid {
-	u_short	ifid_len;
-	u_short	ifid_pad;
-	int	ifid_ino;
-	long	ifid_start;
+	u_short		ifid_len;
+	u_short		ifid_pad;
+	cd_ino_t	ifid_ino;
+	long		ifid_start;
 };
 
 #define VFSTOISOFS(mp)	((struct iso_mnt *)((mp)->mnt_data))
@@ -263,7 +271,7 @@ struct ifid {
 #define lblkno(imp, loc)	((loc) >> (imp)->im_bshift)
 #define blksize(imp, ip, lbn)	((imp)->logical_block_size)
 
-int cd9660_vget_internal(struct mount *, ino_t, int, struct vnode **, int,
+int cd9660_vget_internal(struct mount *, cd_ino_t, int, struct vnode **, int,
 			 struct iso_directory_record *);
 #define cd9660_sysctl ((int (*)(int *, u_int, void *, size_t *, void *, \
 				size_t, struct proc *))eopnotsupp)
@@ -274,7 +282,7 @@ extern struct vop_vector cd9660_fifoops;
 int isochar(u_char *, u_char *, int, u_short *, int *, int, void *);
 int isofncmp(u_char *, int, u_char *, int, int, int, void *, void *);
 void isofntrans(u_char *, int, u_char *, u_short *, int, int, int, int, void *);
-ino_t isodirino(struct iso_directory_record *, struct iso_mnt *);
+cd_ino_t isodirino(struct iso_directory_record *, struct iso_mnt *);
 u_short sgetrune(const char *, size_t, char const **, int, void *);
 
 #endif /* _KERNEL */
@@ -291,56 +299,65 @@ u_short sgetrune(const char *, size_t, char const **, int, void *);
  */
 
 static __inline uint8_t
-isonum_711(unsigned char *p)
+isonum_711(const unsigned char *p)
 {
-	return p[0];
+
+	return (p[0]);
+}
+
+static __inline int8_t
+isonum_712(const unsigned char *p)
+{
+
+	return ((signed char)p[0]);
 }
 
 static __inline uint8_t
-isonum_712(unsigned char *p)
+isonum_713(const unsigned char *p)
 {
-	return p[0];
-}
 
-static __inline uint8_t
-isonum_713(unsigned char *p)
-{
-	return p[0];
+	return (p[0]);
 }
 
 static __inline uint16_t
-isonum_721(unsigned char *p)
+isonum_721(const unsigned char *p)
 {
+
 	return (p[0] | p[1] << 8);
 }
 
 static __inline uint16_t
-isonum_722(unsigned char *p)
+isonum_722(const unsigned char *p)
 {
+
 	return (p[1] | p[0] << 8);
 }
 
 static __inline uint16_t
-isonum_723(unsigned char *p)
+isonum_723(const unsigned char *p)
 {
+
 	return (p[0] | p[1] << 8);
 }
 
 static __inline uint32_t
-isonum_731(unsigned char *p)
+isonum_731(const unsigned char *p)
 {
+
 	return (p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24);
 }
 
 static __inline uint32_t
-isonum_732(unsigned char *p)
+isonum_732(const unsigned char *p)
 {
+
 	return (p[3] | p[2] << 8 | p[1] << 16 | p[0] << 24);
 }
 
 static __inline uint32_t
-isonum_733(unsigned char *p)
+isonum_733(const unsigned char *p)
 {
+
 	return (p[0] | p[1] << 8 | p[2] << 16 | p[3] << 24);
 }
 

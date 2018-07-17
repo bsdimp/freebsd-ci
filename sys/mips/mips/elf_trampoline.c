@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Olivier Houchard.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,16 +34,17 @@ __FBSDID("$FreeBSD$");
 #else
 #include <sys/elf32.h>
 #endif
-#include <sys/inflate.h>
-#include <machine/elf.h>
-#include <machine/cpufunc.h>
-#include <machine/stdarg.h>
 
 /*
  * Since we are compiled outside of the normal kernel build process, we
  * need to include opt_global.h manually.
  */
 #include "opt_global.h"
+
+#include <sys/inflate.h>
+#include <machine/elf.h>
+#include <machine/cpufunc.h>
+#include <machine/stdarg.h>
 
 #ifndef KERNNAME
 #error Kernel name not provided

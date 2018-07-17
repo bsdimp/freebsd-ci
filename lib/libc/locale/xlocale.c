@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -154,23 +156,24 @@ __get_locale(void)
 static void
 set_thread_locale(locale_t loc)
 {
+	locale_t l = (loc == LC_GLOBAL_LOCALE) ? 0 : loc;
 
 	_once(&once_control, init_key);
 	
-	if (NULL != loc) {
-		xlocale_retain((struct xlocale_refcounted*)loc);
+	if (NULL != l) {
+		xlocale_retain((struct xlocale_refcounted*)l);
 	}
 	locale_t old = pthread_getspecific(locale_info_key);
-	if ((NULL != old) && (loc != old)) {
+	if ((NULL != old) && (l != old)) {
 		xlocale_release((struct xlocale_refcounted*)old);
 	}
 	if (fake_tls) {
-		thread_local_locale = loc;
+		thread_local_locale = l;
 	} else {
-		pthread_setspecific(locale_info_key, loc);
+		pthread_setspecific(locale_info_key, l);
 	}
 #ifndef __NO_TLS
-	__thread_locale = loc;
+	__thread_locale = l;
 	__set_thread_rune_locale(loc);
 #endif
 }
@@ -272,7 +275,7 @@ locale_t newlocale(int mask, const char *locale, locale_t base)
 	for (type=0 ; type<XLC_LAST ; type++) {
 		if (mask & 1) {
 			if (useenv) {
-				realLocale = __get_locale_env(type);
+				realLocale = __get_locale_env(type + 1);
 			}
 			new->components[type] =
 			     constructors[type](realLocale, new);
@@ -324,20 +327,18 @@ locale_t duplocale(locale_t base)
  * Free a locale_t.  This is quite a poorly named function.  It actually
  * disclaims a reference to a locale_t, rather than freeing it.  
  */
-int
+void
 freelocale(locale_t loc)
 {
-	/* Fail if we're passed something that isn't a locale. */
-	if ((NULL == loc) || (LC_GLOBAL_LOCALE == loc)) {
-		return (-1);
-	}
-	/* If we're passed the global locale, pretend that we freed it but don't
-	 * actually do anything. */
-	if (&__xlocale_global_locale == loc) {
-		return (0);
-	}
-	xlocale_release(loc);
-	return (0);
+
+	/*
+	 * Fail if we're passed something that isn't a locale. If we're
+	 * passed the global locale, pretend that we freed it but don't
+	 * actually do anything.
+	 */
+	if (loc != NULL && loc != LC_GLOBAL_LOCALE &&
+	    loc != &__xlocale_global_locale)
+		xlocale_release(loc);
 }
 
 /*
@@ -361,9 +362,6 @@ locale_t uselocale(locale_t loc)
 {
 	locale_t old = get_thread_locale();
 	if (NULL != loc) {
-		if (LC_GLOBAL_LOCALE == loc) {
-			loc = NULL;
-		}
 		set_thread_locale(loc);
 	}
 	return (old ? old : LC_GLOBAL_LOCALE);

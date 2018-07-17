@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * All rights reserved.
  *
@@ -73,6 +75,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/bus.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
@@ -249,8 +252,7 @@ void
 ath_tdma_config(struct ath_softc *sc, struct ieee80211vap *vap)
 {
 	struct ath_hal *ah = sc->sc_ah;
-	struct ifnet *ifp = sc->sc_ifp;
-	struct ieee80211com *ic = ifp->if_l2com;
+	struct ieee80211com *ic = &sc->sc_ic;
 	const struct ieee80211_txparam *tp;
 	const struct ieee80211_tdma_state *tdma = NULL;
 	int rix;
@@ -258,7 +260,7 @@ ath_tdma_config(struct ath_softc *sc, struct ieee80211vap *vap)
 	if (vap == NULL) {
 		vap = TAILQ_FIRST(&ic->ic_vaps);   /* XXX */
 		if (vap == NULL) {
-			if_printf(ifp, "%s: no vaps?\n", __func__);
+			device_printf(sc->sc_dev, "%s: no vaps?\n", __func__);
 			return;
 		}
 	}
@@ -270,16 +272,27 @@ ath_tdma_config(struct ath_softc *sc, struct ieee80211vap *vap)
 	 * fixed/lowest transmit rate.  Note that the interface
 	 * mtu does not include the 802.11 overhead so we must
 	 * tack that on (ath_hal_computetxtime includes the
-	 * preamble and plcp in it's calculation).
+	 * preamble and plcp in its calculation).
 	 */
 	tdma = vap->iv_tdma;
 	if (tp->ucastrate != IEEE80211_FIXED_RATE_NONE)
 		rix = ath_tx_findrix(sc, tp->ucastrate);
 	else
 		rix = ath_tx_findrix(sc, tp->mcastrate);
-	/* XXX short preamble assumed */
-	sc->sc_tdmaguard = ath_hal_computetxtime(ah, sc->sc_currates,
-		ifp->if_mtu + IEEE80211_MAXOVERHEAD, rix, AH_TRUE);
+
+	/*
+	 * If the chip supports enforcing TxOP on transmission,
+	 * we can just delete the guard window.  It isn't at all required.
+	 */
+	if (sc->sc_hasenforcetxop) {
+		sc->sc_tdmaguard = 0;
+	} else {
+		/* XXX short preamble assumed */
+		/* XXX non-11n rate assumed */
+		sc->sc_tdmaguard = ath_hal_computetxtime(ah, sc->sc_currates,
+		    vap->iv_ifp->if_mtu + IEEE80211_MAXOVERHEAD, rix, AH_TRUE,
+		    AH_TRUE);
+	}
 
 	ath_hal_intrset(ah, 0);
 
@@ -348,7 +361,7 @@ ath_tdma_update(struct ieee80211_node *ni,
 #define	TU_TO_TSF(_tu)	(((u_int64_t)(_tu)) << 10)
 	struct ieee80211vap *vap = ni->ni_vap;
 	struct ieee80211com *ic = ni->ni_ic;
-	struct ath_softc *sc = ic->ic_ifp->if_softc;
+	struct ath_softc *sc = ic->ic_softc;
 	struct ath_hal *ah = sc->sc_ah;
 	const HAL_RATE_TABLE *rt = sc->sc_currates;
 	u_int64_t tsf, rstamp, nextslot, nexttbtt, nexttbtt_full;
@@ -392,8 +405,36 @@ ath_tdma_update(struct ieee80211_node *ni,
 	 * the packet just received.
 	 */
 	rix = rt->rateCodeToIndex[rs->rs_rate];
-	txtime = ath_hal_computetxtime(ah, rt, rs->rs_datalen, rix,
-	    rt->info[rix].shortPreamble);
+
+	/*
+	 * To calculate the packet duration for legacy rates, we
+	 * only need the rix and preamble.
+	 *
+	 * For 11n non-aggregate frames, we also need the channel
+	 * width and short/long guard interval.
+	 *
+	 * For 11n aggregate frames, the required hacks are a little
+	 * more subtle.  You need to figure out the frame duration
+	 * for each frame, including the delimiters.  However, when
+	 * a frame isn't received successfully, we won't hear it
+	 * (unless you enable reception of CRC errored frames), so
+	 * your duration calculation is going to be off.
+	 *
+	 * However, we can assume that the beacon frames won't be
+	 * transmitted as aggregate frames, so we should be okay.
+	 * Just add a check to ensure that we aren't handed something
+	 * bad.
+	 *
+	 * For ath_hal_pkt_txtime() - for 11n rates, shortPreamble is
+	 * actually short guard interval. For legacy rates,
+	 * it's short preamble.
+	 */
+	txtime = ath_hal_pkt_txtime(ah, rt, rs->rs_datalen,
+	    rix,
+	    !! (rs->rs_flags & HAL_RX_2040),
+	    (rix & 0x80) ?
+	      (! (rs->rs_flags & HAL_RX_GI)) : rt->info[rix].shortPreamble,
+	    AH_TRUE);
 	/* NB: << 9 is to cvt to TU and /2 */
 	nextslot = (rstamp - txtime) + (sc->sc_tdmabintval << 9);
 
@@ -439,16 +480,19 @@ ath_tdma_update(struct ieee80211_node *ni,
 	DPRINTF(sc, ATH_DEBUG_TDMA_TIMER,
 	    "rs->rstamp %llu rstamp %llu tsf %llu txtime %d, nextslot %llu, "
 	    "nextslottu %d, nextslottume %d\n",
-	    (unsigned long long) rs->rs_tstamp, rstamp, tsf, txtime,
-	    nextslot, nextslottu, TSF_TO_TU(nextslot >> 32, nextslot));
+	    (unsigned long long) rs->rs_tstamp,
+	    (unsigned long long) rstamp,
+	    (unsigned long long) tsf, txtime,
+	    (unsigned long long) nextslot,
+	    nextslottu, TSF_TO_TU(nextslot >> 32, nextslot));
 	DPRINTF(sc, ATH_DEBUG_TDMA,
 	    "  beacon tstamp: %llu (0x%016llx)\n",
-	    le64toh(ni->ni_tstamp.tsf),
-	    le64toh(ni->ni_tstamp.tsf));
+	    (unsigned long long) le64toh(ni->ni_tstamp.tsf),
+	    (unsigned long long) le64toh(ni->ni_tstamp.tsf));
 
 	DPRINTF(sc, ATH_DEBUG_TDMA_TIMER,
 	    "nexttbtt %llu (0x%08llx) tsfdelta %d avg +%d/-%d\n",
-	    nexttbtt,
+	    (unsigned long long) nexttbtt,
 	    (long long) nexttbtt,
 	    tsfdelta,
 	    TDMA_AVG(sc->sc_avgtsfdeltap), TDMA_AVG(sc->sc_avgtsfdeltam));
@@ -508,7 +552,7 @@ ath_tdma_update(struct ieee80211_node *ni,
 	 *     slot position changes) because ieee80211_add_tdma
 	 *     skips over the data.
 	 */
-	memcpy(ATH_VAP(vap)->av_boff.bo_tdma +
+	memcpy(vap->iv_bcn_off.bo_tdma +
 		__offsetof(struct ieee80211_tdma_param, tdma_tstamp),
 		&ni->ni_tstamp.data, 8);
 #if 0
@@ -542,7 +586,7 @@ ath_tdma_update(struct ieee80211_node *ni,
 		DPRINTF(sc, ATH_DEBUG_TDMA_TIMER,
 		    "%s: calling ath_hal_adjusttsf: TSF=%llu, tsfdelta=%d\n",
 		    __func__,
-		    tsf,
+		    (unsigned long long) tsf,
 		    tsfdelta);
 
 #ifdef	ATH_DEBUG_ALQ

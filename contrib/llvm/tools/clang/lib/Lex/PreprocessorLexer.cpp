@@ -1,4 +1,4 @@
-//===--- PreprocessorLexer.cpp - C Language Family Lexer ------------------===//
+//===- PreprocessorLexer.cpp - C Language Family Lexer --------------------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -15,14 +15,15 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Lex/LexDiagnostic.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/Token.h"
+#include <cassert>
+
 using namespace clang;
 
-void PreprocessorLexer::anchor() { }
+void PreprocessorLexer::anchor() {}
 
 PreprocessorLexer::PreprocessorLexer(Preprocessor *pp, FileID fid)
-  : PP(pp), FID(fid), InitialNumSLocEntries(0),
-    ParsingPreprocessorDirective(false),
-    ParsingFilename(false), LexingRawMode(false) {
+    : PP(pp), FID(fid) {
   if (pp)
     InitialNumSLocEntries = pp->getSourceManager().local_sloc_entry_size();
 }
@@ -38,7 +39,10 @@ void PreprocessorLexer::LexIncludeFilename(Token &FilenameTok) {
   ParsingFilename = true;
 
   // Lex the filename.
-  IndirectLex(FilenameTok);
+  if (LexingRawMode)
+    IndirectLex(FilenameTok);
+  else
+    PP->Lex(FilenameTok);
 
   // We should have obtained the filename now.
   ParsingFilename = false;

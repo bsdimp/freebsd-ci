@@ -1,4 +1,7 @@
-/* ----------------------------------------------------------------------------
+/*-
+ * SPDX-License-Identifier: Beerware
+ *
+ * ----------------------------------------------------------------------------
  * "THE BEER-WARE LICENSE" (Revision 42) (by Poul-Henning Kamp):
  * <joerg@FreeBSD.ORG> wrote this file.  As long as you retain this notice you
  * can do whatever you want with this stuff. If we meet some day, and you think
@@ -41,7 +44,7 @@
 #include <libusb20.h>
 #include <libusb20_desc.h>
 
-#include "aux.h"
+#include "util.h"
 
 /*
  * If you want to see the details of the internal datastructures
@@ -74,7 +77,7 @@ doit(struct libusb20_device *dev)
    */
   if ((rv = libusb20_dev_open(dev, 2)) != 0)
     {
-      fprintf(stderr, "libusb20_dev_open: %s\n", usb_error(rv));
+      fprintf(stderr, "libusb20_dev_open: %s\n", libusb20_strerror(rv));
       return;
     }
 
@@ -84,7 +87,7 @@ doit(struct libusb20_device *dev)
    */
   if ((rv = libusb20_dev_set_config_index(dev, 0)) != 0)
     {
-      fprintf(stderr, "libusb20_dev_set_config_index: %s\n", usb_error(rv));
+      fprintf(stderr, "libusb20_dev_set_config_index: %s\n", libusb20_strerror(rv));
       return;
     }
 
@@ -97,7 +100,7 @@ doit(struct libusb20_device *dev)
 
   if (xfr_in == NULL || xfr_out == NULL)
     {
-      fprintf(stderr, "libusb20_tr_get_pointer: %s\n", usb_error(rv));
+      fprintf(stderr, "libusb20_tr_get_pointer: %s\n", libusb20_strerror(rv));
       return;
     }
 
@@ -107,12 +110,12 @@ doit(struct libusb20_device *dev)
    */
   if ((rv = libusb20_tr_open(xfr_out, 0, 1, out_ep)) != 0)
     {
-      fprintf(stderr, "libusb20_tr_open: %s\n", usb_error(rv));
+      fprintf(stderr, "libusb20_tr_open: %s\n", libusb20_strerror(rv));
       return;
     }
   if ((rv = libusb20_tr_open(xfr_in, 0, 1, in_ep)) != 0)
     {
-      fprintf(stderr, "libusb20_tr_open: %s\n", usb_error(rv));
+      fprintf(stderr, "libusb20_tr_open: %s\n", libusb20_strerror(rv));
       return;
     }
 
@@ -124,7 +127,7 @@ doit(struct libusb20_device *dev)
       if ((rv = libusb20_tr_bulk_intr_sync(xfr_out, out_buf, out_len, &rlen, TIMEOUT))
 	  != 0)
 	{
-	  fprintf(stderr, "libusb20_tr_bulk_intr_sync (OUT): %s\n", usb_error(rv));
+	  fprintf(stderr, "libusb20_tr_bulk_intr_sync (OUT): %s\n", libusb20_strerror(rv));
 	}
       printf("sent %d bytes\n", rlen);
     }
@@ -132,7 +135,7 @@ doit(struct libusb20_device *dev)
   if ((rv = libusb20_tr_bulk_intr_sync(xfr_in, in_buf, BUFLEN, &rlen, TIMEOUT))
       != 0)
     {
-      fprintf(stderr, "libusb20_tr_bulk_intr_sync: %s\n", usb_error(rv));
+      fprintf(stderr, "libusb20_tr_bulk_intr_sync: %s\n", libusb20_strerror(rv));
     }
       printf("received %d bytes\n", rlen);
       if (rlen > 0)

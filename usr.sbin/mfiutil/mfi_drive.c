@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2008, 2009 Yahoo!, Inc.
  * All rights reserved.
  *
@@ -472,6 +474,20 @@ rebuild_drive(int ac, char **av)
 	return (drive_set_state(av[1], MFI_PD_STATE_REBUILD));
 }
 MFI_COMMAND(top, rebuild, rebuild_drive);
+
+static int
+syspd_drive(int ac, char **av)
+{
+
+	if (ac != 2) {
+		warnx("syspd: %s", ac > 2 ? "extra arguments" :
+		    "drive required");
+		return (EINVAL);
+	}
+
+	return (drive_set_state(av[1], MFI_PD_STATE_SYSTEM));
+}
+MFI_COMMAND(top, syspd, syspd_drive);
 
 static int
 start_rebuild(int ac, char **av)

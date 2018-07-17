@@ -1,5 +1,8 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Stanislav Sedov <stas@FreeBSD.org>
+ * Copyright (c) 2017 Dell EMC
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,6 +33,15 @@
 #define	_LIBPROCSTAT_H_
 
 /*
+ * XXX: sys/elf.h conflicts with zfs_context.h. Workaround this by not
+ * including conflicting parts when building zfs code.
+ */
+#ifndef ZFS
+#include <sys/elf.h>
+#endif
+#include <sys/caprights.h>
+
+/*
  * Vnode types.
  */
 #define	PS_FST_VTYPE_VNON	1
@@ -58,6 +70,7 @@
 #define	PS_FST_TYPE_SEM		10
 #define	PS_FST_TYPE_UNKNOWN	11
 #define	PS_FST_TYPE_NONE	12
+#define	PS_FST_TYPE_PROCDESC	13
 
 /*
  * Special descriptor numbers.
@@ -89,7 +102,11 @@
 #define	PS_FST_FFLAG_EXEC	0x2000
 #define	PS_FST_FFLAG_HASLOCK	0x4000
 
+struct kinfo_kstack;
+struct kinfo_vmentry;
 struct procstat;
+struct ptrace_lwpinfo;
+struct rlimit;
 struct filestat {
 	int	fs_type;	/* Descriptor type. */
 	int	fs_flags;	/* filestat specific flags. */
@@ -106,21 +123,25 @@ struct filestat {
 struct vnstat {
 	uint64_t	vn_fileid;
 	uint64_t	vn_size;
+	uint64_t	vn_dev;
+	uint64_t	vn_fsid;
 	char		*vn_mntdir;
-	uint32_t	vn_dev;
-	uint32_t	vn_fsid;
 	int		vn_type;
 	uint16_t	vn_mode;
 	char		vn_devname[SPECNAMELEN + 1];
 };
 struct ptsstat {
-	uint32_t	dev;
+	uint64_t	dev;
 	char		devname[SPECNAMELEN + 1];
 };
 struct pipestat {
 	size_t		buffer_cnt;
 	uint64_t	addr;
 	uint64_t	peer;
+};
+struct semstat {
+	uint32_t	value;
+	uint16_t	mode;
 };
 struct shmstat {
 	uint64_t	size;
@@ -139,15 +160,29 @@ struct sockstat {
 	struct sockaddr_storage	sa_peer;	/* Peer address. */
 	int		type;
 	char		dname[32];
+	unsigned int	sendq;
+	unsigned int	recvq;
 };
 
 STAILQ_HEAD(filestat_list, filestat);
 
 __BEGIN_DECLS
 void	procstat_close(struct procstat *procstat);
+void	procstat_freeargv(struct procstat *procstat);
+#ifndef ZFS
+void	procstat_freeauxv(struct procstat *procstat, Elf_Auxinfo *auxv);
+#endif
+void	procstat_freeenvv(struct procstat *procstat);
+void	procstat_freegroups(struct procstat *procstat, gid_t *groups);
+void	procstat_freekstack(struct procstat *procstat,
+    struct kinfo_kstack *kkstp);
 void	procstat_freeprocs(struct procstat *procstat, struct kinfo_proc *p);
 void	procstat_freefiles(struct procstat *procstat,
     struct filestat_list *head);
+void	procstat_freeptlwpinfo(struct procstat *procstat,
+    struct ptrace_lwpinfo *pl);
+void	procstat_freevmmap(struct procstat *procstat,
+    struct kinfo_vmentry *vmmap);
 struct filestat_list	*procstat_getfiles(struct procstat *procstat,
     struct kinfo_proc *kp, int mmapped);
 struct kinfo_proc	*procstat_getprocs(struct procstat *procstat,
@@ -156,12 +191,39 @@ int	procstat_get_pipe_info(struct procstat *procstat, struct filestat *fst,
     struct pipestat *pipe, char *errbuf);
 int	procstat_get_pts_info(struct procstat *procstat, struct filestat *fst,
     struct ptsstat *pts, char *errbuf);
+int	procstat_get_sem_info(struct procstat *procstat, struct filestat *fst,
+    struct semstat *sem, char *errbuf);
 int	procstat_get_shm_info(struct procstat *procstat, struct filestat *fst,
     struct shmstat *shm, char *errbuf);
 int	procstat_get_socket_info(struct procstat *procstat, struct filestat *fst,
     struct sockstat *sock, char *errbuf);
 int	procstat_get_vnode_info(struct procstat *procstat, struct filestat *fst,
     struct vnstat *vn, char *errbuf);
+char	**procstat_getargv(struct procstat *procstat, struct kinfo_proc *p,
+    size_t nchr);
+#ifndef ZFS
+Elf_Auxinfo	*procstat_getauxv(struct procstat *procstat,
+    struct kinfo_proc *kp, unsigned int *cntp);
+#endif
+struct ptrace_lwpinfo	*procstat_getptlwpinfo(struct procstat *procstat,
+    unsigned int *cntp);
+char	**procstat_getenvv(struct procstat *procstat, struct kinfo_proc *p,
+    size_t nchr);
+gid_t	*procstat_getgroups(struct procstat *procstat, struct kinfo_proc *kp,
+    unsigned int *count);
+struct kinfo_kstack	*procstat_getkstack(struct procstat *procstat,
+    struct kinfo_proc *kp, unsigned int *count);
+int	procstat_getosrel(struct procstat *procstat, struct kinfo_proc *kp,
+    int *osrelp);
+int	procstat_getpathname(struct procstat *procstat, struct kinfo_proc *kp,
+    char *pathname, size_t maxlen);
+int	procstat_getrlimit(struct procstat *procstat, struct kinfo_proc *kp,
+    int which, struct rlimit* rlimit);
+int	procstat_getumask(struct procstat *procstat, struct kinfo_proc *kp,
+    unsigned short* umask);
+struct kinfo_vmentry	*procstat_getvmmap(struct procstat *procstat,
+    struct kinfo_proc *kp, unsigned int *count);
+struct procstat	*procstat_open_core(const char *filename);
 struct procstat	*procstat_open_sysctl(void);
 struct procstat	*procstat_open_kvm(const char *nlistf, const char *memf);
 __END_DECLS

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2003 Jake Burkholder.
  * Copyright 1996-1998 John D. Polstra.
  * All rights reserved.
@@ -32,7 +34,6 @@
 
 #include <err.h>
 #include <errno.h>
-#include <string.h>
 
 #include "ef.h"
 

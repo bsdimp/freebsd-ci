@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (C) 2013 Andrew Turner
  * All rights reserved.
  *
@@ -29,9 +31,12 @@
 __FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
+#ifdef _KERNEL
 #include <sys/systm.h>
+#else
+#define	panic(x) (void)0
+#endif
 
-#ifdef __ARM_EABI__
 /* We need to provide these functions never call them */
 void __aeabi_unwind_cpp_pr0(void);
 void __aeabi_unwind_cpp_pr1(void);
@@ -54,5 +59,3 @@ __aeabi_unwind_cpp_pr2(void)
 {
 	panic("__aeabi_unwind_cpp_pr2");
 }
-#endif
-

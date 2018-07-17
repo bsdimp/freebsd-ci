@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2008 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -277,10 +279,10 @@
 #define	AR_PCIE_PM_CTRL_ENA	0x00080000
 
 #define	AR_AHB_EXACT_WR_EN	0x00000000	/* write exact bytes */
-#define	AR_AHB_BUF_WR_EN	0x00000001	/* buffer write upto cacheline*/
+#define	AR_AHB_BUF_WR_EN	0x00000001	/* buffer write up to cacheline*/
 #define	AR_AHB_EXACT_RD_EN	0x00000000	/* read exact bytes */
-#define	AR_AHB_CACHELINE_RD_EN	0x00000002	/* read upto end of cacheline */
-#define	AR_AHB_PREFETCH_RD_EN	0x00000004	/* prefetch upto page boundary*/
+#define	AR_AHB_CACHELINE_RD_EN	0x00000002	/* read up to end of cacheline */
+#define	AR_AHB_PREFETCH_RD_EN	0x00000004	/* prefetch up to page boundary*/
 #define	AR_AHB_PAGE_SIZE_1K	0x00000000	/* set page-size as 1k */
 #define	AR_AHB_PAGE_SIZE_2K	0x00000008	/* set page-size as 2k */
 #define	AR_AHB_PAGE_SIZE_4K	0x00000010	/* set page-size as 4k */
@@ -476,10 +478,10 @@
 /* Sleep control */
 #define	AR5416_SLEEP1_ASSUME_DTIM	0x00080000
 #define	AR5416_SLEEP1_CAB_TIMEOUT	0xFFE00000	/* Cab timeout (TU) */
-#define	AR5416_SLEEP1_CAB_TIMEOUT_S	22
+#define	AR5416_SLEEP1_CAB_TIMEOUT_S	21
 
 #define	AR5416_SLEEP2_BEACON_TIMEOUT	0xFFE00000	/* Beacon timeout (TU)*/
-#define	AR5416_SLEEP2_BEACON_TIMEOUT_S	22
+#define	AR5416_SLEEP2_BEACON_TIMEOUT_S	21
 
 /* Sleep Registers */
 #define	AR_SLP32_HALFCLK_LATENCY      0x000FFFFF	/* rising <-> falling edge */
@@ -518,7 +520,7 @@
 #define	AR_PCU_FORCE_QUIET_COLL		0x00040000 /* kill xmit for channel change */
 #define	AR_PCU_BT_ANT_PREVENT_RX	0x00100000
 #define	AR_PCU_BT_ANT_PREVENT_RX_S	20
-#define	AR_PCU_TBTT_PROTECT		0x00200000 /* no xmit upto tbtt+20 uS */
+#define	AR_PCU_TBTT_PROTECT		0x00200000 /* no xmit up to tbtt+20 uS */
 #define	AR_PCU_CLEAR_VMF		0x01000000 /* clear vmf mode (fast cc)*/
 #define	AR_PCU_CLEAR_BA_VALID		0x04000000 /* clear ba state */
 #define	AR_PCU_SEL_EVM			0x08000000 /* select EVM data or PLCP header */
@@ -602,6 +604,25 @@
 #define	AR_EEPROM_STATUS_DATA_BUSY_ACCESS   0x00020000
 #define	AR_EEPROM_STATUS_DATA_PROT_ACCESS   0x00040000
 #define	AR_EEPROM_STATUS_DATA_ABSENT_ACCESS 0x00080000
+
+/* K2 (9271) */
+#define	AR9271_CLOCK_CONTROL		0x50040
+#define	AR9271_CLOCK_SELECTION_22	0x0
+#define	AR9271_CLOCK_SELECTION_88	0x1
+#define	AR9271_CLOCK_SELECTION_44	0x2
+#define	AR9271_CLOCK_SELECTION_117	0x4
+#define	AR9271_CLOCK_SELECTION_OSC_40	0x6
+#define	AR9271_CLOCK_SELECTION_RTC	0x7
+#define	AR9271_SPI_SEL			0x100
+#define	AR9271_UART_SEL			0x200
+
+#define	AR9271_RESET_POWER_DOWN_CONTROL	0x50044
+#define	AR9271_RADIO_RF_RST		0x20
+#define	AR9271_GATE_MAC_CTL		0x4000
+#define	AR9271_MAIN_PLL_PWD_CTL		0x40000
+
+#define	AR9271_CLKMISC			0x4090
+#define	AR9271_OSC_to_10M_EN		0x00000001
 
 /*
  * AR5212 defines the MAC revision mask as 0xF, but both ath9k and

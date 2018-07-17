@@ -1,5 +1,7 @@
 %{
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009-2010 The FreeBSD Foundation
  * Copyright (c) 2011 Pawel Jakub Dawidek <pawel@dawidek.net>
  * All rights reserved.
@@ -42,10 +44,14 @@ int depth;
 int lineno;
 
 #define	DP	do { } while (0)
+#define	YY_DECL	int yylex(void)
+
+extern int yylex(void);
 %}
 
 %option noinput
 %option nounput
+%option noyywrap
 
 %%
 control			{ DP; return CONTROL; }

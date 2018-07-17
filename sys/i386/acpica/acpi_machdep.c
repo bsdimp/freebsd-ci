@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Mitsuru IWASAKI
  * All rights reserved.
  *
@@ -45,8 +47,7 @@ __FBSDID("$FreeBSD$");
 #include <machine/nexusvar.h>
 
 uint32_t acpi_resume_beep;
-TUNABLE_INT("debug.acpi.resume_beep", &acpi_resume_beep);
-SYSCTL_UINT(_debug_acpi, OID_AUTO, resume_beep, CTLFLAG_RW, &acpi_resume_beep,
+SYSCTL_UINT(_debug_acpi, OID_AUTO, resume_beep, CTLFLAG_RWTUN, &acpi_resume_beep,
     0, "Beep the PC speaker when resuming");
 
 uint32_t acpi_reset_video;
@@ -105,13 +106,6 @@ acpi_machdep_quirks(int *quirks)
 		*quirks = ACPI_Q_BROKEN;
 
 	return (0);
-}
-
-void
-acpi_cpu_c1()
-{
-
-	__asm __volatile("sti; hlt");
 }
 
 /*

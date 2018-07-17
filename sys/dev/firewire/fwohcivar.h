@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2003 Hidetoshi SHimokawa
  * Copyright (c) 1998-2002 Katsushi Kobayashi and Hidetoshi SHimokawa
  * All rights reserved.
@@ -42,13 +44,9 @@ typedef struct fwohci_softc {
 	bus_space_tag_t bst;
 	bus_space_handle_t bsh;
 	void *ih;
-#if defined(__DragonFly__) || __FreeBSD_version < 500000
-	void *ih_cam;
-	void *ih_bio;
-#endif
 	struct resource *bsr;
 	struct resource *irq_res;
-	struct fwohci_dbch{
+	struct fwohci_dbch {
 		u_int ndb;
 		u_int ndesc;
 		STAILQ_HEAD(, fwohcidb_tr) db_trq;

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Adrian Chadd
  * All rights reserved.
  *
@@ -184,9 +186,11 @@ if_ath_alq_post(struct if_ath_alq *alq, uint16_t op, uint16_t len,
 	/*
 	 * Copy the payload _after_ the header field.
 	 */
-	memcpy(((char *) ap) + sizeof(struct if_ath_alq_hdr),
-	    buf,
-	    len);
+	if (buf != NULL) {
+		memcpy(((char *) ap) + sizeof(struct if_ath_alq_hdr),
+		    buf,
+		    len);
+	}
 
 	alq_post(alq->sc_alq_alq, ale);
 }

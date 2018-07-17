@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1994 Herb Peyerl <hpeyerl@novatel.ca>
  * All rights reserved.
  *
@@ -63,6 +65,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/kernel.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/sockio.h>
@@ -73,6 +76,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
 #include <net/if_types.h>
@@ -342,7 +346,9 @@ ep_attach(struct ep_softc *sc)
 	EP_FSET(sc, F_RX_FIRST);
 	sc->top = sc->mcur = 0;
 
+	EP_LOCK(sc);
 	epstop(sc);
+	EP_UNLOCK(sc);
 
 	return (0);
 }
@@ -509,7 +515,7 @@ startagain:
 	 */
 	if (len + pad > ETHER_MAX_LEN) {
 		/* packet is obviously too large: toss it */
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		m_freem(m0);
 		goto readcheck;
 	}
@@ -526,31 +532,17 @@ startagain:
 		CSR_WRITE_2(sc, EP_COMMAND,
 		    SET_TX_AVAIL_THRESH | EP_THRESH_DISABLE);
 
-	/* XXX 4.x and earlier would splhigh here */
-
 	CSR_WRITE_2(sc, EP_W1_TX_PIO_WR_1, len);
 	/* Second dword meaningless */
 	CSR_WRITE_2(sc, EP_W1_TX_PIO_WR_1, 0x0);
 
-	if (EP_FTST(sc, F_ACCESS_32_BITS)) {
-		for (m = m0; m != NULL; m = m->m_next) {
-			if (m->m_len > 3)
-				CSR_WRITE_MULTI_4(sc, EP_W1_TX_PIO_WR_1,
-				    mtod(m, uint32_t *), m->m_len / 4);
-			if (m->m_len & 3)
-				CSR_WRITE_MULTI_1(sc, EP_W1_TX_PIO_WR_1,
-				    mtod(m, uint8_t *)+(m->m_len & (~3)),
-				    m->m_len & 3);
-		}
-	} else {
-		for (m = m0; m != NULL; m = m->m_next) {
-			if (m->m_len > 1)
-				CSR_WRITE_MULTI_2(sc, EP_W1_TX_PIO_WR_1,
-				    mtod(m, uint16_t *), m->m_len / 2);
-			if (m->m_len & 1)
-				CSR_WRITE_1(sc, EP_W1_TX_PIO_WR_1,
-				    *(mtod(m, uint8_t *)+m->m_len - 1));
-		}
+	for (m = m0; m != NULL; m = m->m_next) {
+		if (m->m_len > 1)
+			CSR_WRITE_MULTI_2(sc, EP_W1_TX_PIO_WR_1,
+			    mtod(m, uint16_t *), m->m_len / 2);
+		if (m->m_len & 1)
+			CSR_WRITE_1(sc, EP_W1_TX_PIO_WR_1,
+			    *(mtod(m, uint8_t *)+m->m_len - 1));
 	}
 
 	while (pad--)
@@ -561,7 +553,7 @@ startagain:
 	BPF_MTAP(ifp, m0);
 
 	sc->tx_timer = 2;
-	ifp->if_opackets++;
+	if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 	m_freem(m0);
 
 	/*
@@ -637,7 +629,8 @@ rescan:
 			    CSR_READ_2(sc, EP_W4_FIFO_DIAG));
 			printf("\tStat: %x\n", sc->stat);
 			printf("\tIpackets=%d, Opackets=%d\n",
-			    ifp->if_ipackets, ifp->if_opackets);
+			    ifp->if_get_counter(ifp, IFCOUNTER_IPACKETS),
+			    ifp->if_get_counter(ifp, IFCOUNTER_OPACKETS));
 			printf("\tNOF=%d, NOMB=%d, RXOF=%d, RXOL=%d, TXU=%d\n",
 			    sc->rx_no_first, sc->rx_no_mbuf, sc->rx_overrunf,
 			    sc->rx_overrunl, sc->tx_underrun);
@@ -647,7 +640,7 @@ rescan:
 			device_printf(sc->dev,
 			    "Status: %x (input buffer overflow)\n", status);
 #else
-			++ifp->if_ierrors;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 #endif
 
 #endif
@@ -680,9 +673,9 @@ rescan:
 						 * TXS_MAX_COLLISION we
 						 * shouldn't get here
 						 */
-						++ifp->if_collisions;
+						if_inc_counter(ifp, IFCOUNTER_COLLISIONS, 1);
 					}
-					++ifp->if_oerrors;
+					if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 					CSR_WRITE_2(sc, EP_COMMAND, TX_ENABLE);
 					/*
 				         * To have a tx_avail_int but giving
@@ -728,7 +721,7 @@ epread(struct ep_softc *sc)
 read_again:
 
 	if (status & ERR_RX) {
-		++ifp->if_ierrors;
+		if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		if (status & ERR_RX_OVERRUN) {
 			/*
 		         * We can think the rx latency is actually
@@ -783,25 +776,13 @@ read_again:
 			mcur->m_next = m;
 			lenthisone = min(rx_fifo, M_TRAILINGSPACE(m));
 		}
-		if (EP_FTST(sc, F_ACCESS_32_BITS)) {
-			/* default for EISA configured cards */
-			CSR_READ_MULTI_4(sc, EP_W1_RX_PIO_RD_1,
-			    (uint32_t *)(mtod(m, caddr_t)+m->m_len),
-			    lenthisone / 4);
-			m->m_len += (lenthisone & ~3);
-			if (lenthisone & 3)
-				CSR_READ_MULTI_1(sc, EP_W1_RX_PIO_RD_1,
-				    mtod(m, caddr_t)+m->m_len, lenthisone & 3);
-			m->m_len += (lenthisone & 3);
-		} else {
-			CSR_READ_MULTI_2(sc, EP_W1_RX_PIO_RD_1,
-			    (uint16_t *)(mtod(m, caddr_t)+m->m_len),
-			    lenthisone / 2);
-			m->m_len += lenthisone;
-			if (lenthisone & 1)
-				*(mtod(m, caddr_t)+m->m_len - 1) =
-				    CSR_READ_1(sc, EP_W1_RX_PIO_RD_1);
-		}
+		CSR_READ_MULTI_2(sc, EP_W1_RX_PIO_RD_1,
+		    (uint16_t *)(mtod(m, caddr_t)+m->m_len),
+		    lenthisone / 2);
+		m->m_len += lenthisone;
+		if (lenthisone & 1)
+			*(mtod(m, caddr_t)+m->m_len - 1) =
+			    CSR_READ_1(sc, EP_W1_RX_PIO_RD_1);
 		rx_fifo -= lenthisone;
 	}
 
@@ -826,7 +807,7 @@ read_again:
 		return;
 	}
 	CSR_WRITE_2(sc, EP_COMMAND, RX_DISCARD_TOP_PACK);
-	++ifp->if_ipackets;
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	EP_FSET(sc, F_RX_FIRST);
 	top->m_pkthdr.rcvif = sc->ifp;
 	top->m_pkthdr.len = sc->cur_len;
@@ -999,6 +980,9 @@ epwatchdog(struct ep_softc *sc)
 static void
 epstop(struct ep_softc *sc)
 {
+
+	EP_ASSERT_LOCKED(sc);
+
 	CSR_WRITE_2(sc, EP_COMMAND, RX_DISABLE);
 	CSR_WRITE_2(sc, EP_COMMAND, RX_DISCARD_TOP_PACK);
 	EP_BUSY_WAIT(sc);

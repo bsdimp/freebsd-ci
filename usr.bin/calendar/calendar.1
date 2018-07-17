@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)calendar.1  8.1 (Berkeley) 6/29/93
 .\" $FreeBSD$
 .\"
-.Dd April 6, 2013
+.Dd July 24, 2016
 .Dt CALENDAR 1
 .Os
 .Sh NAME
@@ -177,12 +177,15 @@ if the line does not contain a <tab> character, it is not displayed.
 If the first character in the line is a <tab> character, it is treated as
 a continuation of the previous line.
 .Pp
-The ``calendar'' file is preprocessed by
-.Xr cpp 1 ,
-allowing the inclusion of shared files such as lists of company holidays or
-meetings.
-If the shared file is not referenced by a full pathname,
+The
+.Nm
+file is preprocessed by a limited subset of
 .Xr cpp 1
+internally, allowing the inclusion of shared files such as
+lists of company holidays or meetings.
+This limited subset consists of \fB#include #ifndef #endif\fR and \fB#define\fR.
+If the shared file is not referenced by a full pathname,
+.Xr calendar 1
 searches in the current (or home) directory first, and then in the
 directory
 .Pa /usr/share/calendar .
@@ -292,7 +295,6 @@ This is no longer true, the date is only recognized when it occurs
 at the beginning of a line.
 .Sh SEE ALSO
 .Xr at 1 ,
-.Xr cpp 1 ,
 .Xr mail 1 ,
 .Xr cron 8
 .Sh HISTORY
@@ -321,7 +323,11 @@ double-check the start and end time of solar and lunar events.
 .Sh BUGS
 The
 .Nm
-utility does not handle Jewish holidays.
+internal cpp does not correctly do #ifndef and will discard the rest
+of the file if a #ifndef is triggered.
+It also has a maximum of 50 include file and/or 100 #defines
+and only recognises #include, #define and
+#ifndef.
 .Pp
 There is no possibility to properly specify the local position
 needed for solar and lunar calculations.

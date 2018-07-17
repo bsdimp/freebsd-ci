@@ -4,18 +4,27 @@
 # the DTraceToolkit.
 #
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-SUBDIR= ${_toolkit}
-
-.if ${MK_CDDL} != "no"
-_toolkit=	toolkit
-.endif
-
-SCRIPTS=	nfsclienttime hotopen
+SCRIPTS=	blocking \
+		disklatency \
+		disklatencycmd \
+		hotopen \
+		nfsattrstats \
+		nfsclienttime \
+		siftr \
+		tcpconn \
+		tcpdebug \
+		tcpstate \
+		tcptrack \
+		udptrack
 
 SCRIPTSDIR= ${SHAREDIR}/dtrace
 
-NO_OBJ=
+DSRCS=		mbuf.d
+
+FILES=		${DSRCS}
+FILESDIR=	/usr/lib/dtrace
+FILESMODE=	${NOBINMODE}
 
 .include <bsd.prog.mk>

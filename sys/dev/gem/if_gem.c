@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-NetBSD
+ *
  * Copyright (C) 2001 Eduardo Horvath.
  * Copyright (c) 2001-2003 Thomas Moestl
  * Copyright (c) 2007 Marius Strobl <marius@FreeBSD.org>
@@ -61,6 +63,7 @@ __FBSDID("$FreeBSD$");
 #include <net/bpf.h>
 #include <net/ethernet.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_media.h>
@@ -381,7 +384,7 @@ gem_attach(struct gem_softc *sc)
 	/*
 	 * Tell the upper layer(s) we support long frames/checksum offloads.
 	 */
-	ifp->if_data.ifi_hdrlen = sizeof(struct ether_vlan_header);
+	ifp->if_hdrlen = sizeof(struct ether_vlan_header);
 	ifp->if_capabilities |= IFCAP_VLAN_MTU | IFCAP_HWCSUM;
 	ifp->if_hwassist |= sc->sc_csum_features;
 	ifp->if_capenable |= IFCAP_VLAN_MTU | IFCAP_HWCSUM;
@@ -567,18 +570,18 @@ gem_tick(void *arg)
 	/*
 	 * Unload collision and error counters.
 	 */
-	ifp->if_collisions +=
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS,
 	    GEM_BANK1_READ_4(sc, GEM_MAC_NORM_COLL_CNT) +
-	    GEM_BANK1_READ_4(sc, GEM_MAC_FIRST_COLL_CNT);
+	    GEM_BANK1_READ_4(sc, GEM_MAC_FIRST_COLL_CNT));
 	v = GEM_BANK1_READ_4(sc, GEM_MAC_EXCESS_COLL_CNT) +
 	    GEM_BANK1_READ_4(sc, GEM_MAC_LATE_COLL_CNT);
-	ifp->if_collisions += v;
-	ifp->if_oerrors += v;
-	ifp->if_ierrors +=
+	if_inc_counter(ifp, IFCOUNTER_COLLISIONS, v);
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, v);
+	if_inc_counter(ifp, IFCOUNTER_IERRORS,
 	    GEM_BANK1_READ_4(sc, GEM_MAC_RX_LEN_ERR_CNT) +
 	    GEM_BANK1_READ_4(sc, GEM_MAC_RX_ALIGN_ERR) +
 	    GEM_BANK1_READ_4(sc, GEM_MAC_RX_CRC_ERR_CNT) +
-	    GEM_BANK1_READ_4(sc, GEM_MAC_RX_CODE_VIOL);
+	    GEM_BANK1_READ_4(sc, GEM_MAC_RX_CODE_VIOL));
 
 	/*
 	 * Then clear the hardware counters.
@@ -1484,7 +1487,7 @@ gem_tint(struct gem_softc *sc)
 
 		STAILQ_INSERT_TAIL(&sc->sc_txfreeq, txs, txs_q);
 
-		ifp->if_opackets++;
+		if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		progress = 1;
 	}
 
@@ -1579,7 +1582,7 @@ gem_rint(struct gem_softc *sc)
 		}
 
 		if (rxstat & GEM_RD_BAD_CRC) {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 			device_printf(sc->sc_dev, "receive error: CRC error\n");
 			GEM_INIT_RXDESC(sc, sc->sc_rxptr);
 			m = NULL;
@@ -1605,7 +1608,7 @@ gem_rint(struct gem_softc *sc)
 		 * the buffer that's already attached to this descriptor.
 		 */
 		if (gem_add_rxbuf(sc, sc->sc_rxptr) != 0) {
-			ifp->if_iqdrops++;
+			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 			GEM_INIT_RXDESC(sc, sc->sc_rxptr);
 			m = NULL;
 		}
@@ -1633,7 +1636,7 @@ gem_rint(struct gem_softc *sc)
 			continue;
 		}
 
-		ifp->if_ipackets++;
+		if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 		m->m_data += ETHER_ALIGN; /* first byte offset */
 		m->m_pkthdr.rcvif = ifp;
 		m->m_pkthdr.len = m->m_len = GEM_RD_BUFLEN(rxstat);
@@ -1705,7 +1708,7 @@ static void
 gem_eint(struct gem_softc *sc, u_int status)
 {
 
-	sc->sc_ifp->if_ierrors++;
+	if_inc_counter(sc->sc_ifp, IFCOUNTER_IERRORS, 1);
 	if ((status & GEM_INTR_RX_TAG_ERR) != 0) {
 		gem_reset_rxdma(sc);
 		return;
@@ -1783,7 +1786,7 @@ gem_intr(void *v)
 			    "MAC TX fault, status %x\n", status2);
 		if ((status2 &
 		    (GEM_MAC_TX_UNDERRUN | GEM_MAC_TX_PKT_TOO_LONG)) != 0) {
-			sc->sc_ifp->if_oerrors++;
+			if_inc_counter(sc->sc_ifp, IFCOUNTER_OERRORS, 1);
 			sc->sc_ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
 			gem_init_locked(sc);
 		}
@@ -1797,7 +1800,7 @@ gem_intr(void *v)
 		 * likely that the receiver has hung so we reset it.
 		 */
 		if ((status2 & GEM_MAC_RX_OVERFLOW) != 0) {
-			sc->sc_ifp->if_ierrors++;
+			if_inc_counter(sc->sc_ifp, IFCOUNTER_IERRORS, 1);
 			gem_reset_rxdma(sc);
 		} else if ((status2 &
 		    ~(GEM_MAC_RX_DONE | GEM_MAC_RX_FRAME_CNT)) != 0)
@@ -1834,7 +1837,7 @@ gem_watchdog(struct gem_softc *sc)
 		device_printf(sc->sc_dev, "device timeout\n");
 	else if (bootverbose)
 		device_printf(sc->sc_dev, "device timeout (no link)\n");
-	++ifp->if_oerrors;
+	if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 
 	/* Try to get more packets going. */
 	ifp->if_drv_flags &= ~IFF_DRV_RUNNING;
@@ -2246,7 +2249,7 @@ gem_setladrf(struct gem_softc *sc)
 	memset(hash, 0, sizeof(hash));
 
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(inm, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(inm, &ifp->if_multiaddrs, ifma_link) {
 		if (inm->ifma_addr->sa_family != AF_LINK)
 			continue;
 		crc = ether_crc32_le(LLADDR((struct sockaddr_dl *)

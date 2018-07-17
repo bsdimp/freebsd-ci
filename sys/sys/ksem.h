@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002 Alfred Perlstein <alfred@FreeBSD.org>
  * All rights reserved.
  *
@@ -29,8 +31,8 @@
 #ifndef _POSIX4_KSEM_H_
 #define	_POSIX4_KSEM_H_
 
-#ifndef _KERNEL
-#error "no user-servicable parts inside"
+#if !defined(_KERNEL) && !defined(_WANT_FILE)
+#error "no user-serviceable parts inside"
 #endif
 
 #include <sys/condvar.h>
@@ -57,6 +59,7 @@ struct ksem {
 	struct timespec	ks_birthtime;
 
 	struct label	*ks_label;	/* MAC label */
+	const char	*ks_path;
 };
 
 #define	KS_ANONYMOUS	0x0001		/* Anonymous (unnamed) semaphore. */

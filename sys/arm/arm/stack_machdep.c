@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2005 Antoine Brodin
  * All rights reserved.
  *
@@ -27,8 +29,8 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
-#include <sys/systm.h>
 #include <sys/param.h>
+#include <sys/systm.h>
 #include <sys/proc.h>
 #include <sys/stack.h>
 
@@ -36,20 +38,19 @@ __FBSDID("$FreeBSD$");
 #include <machine/pcb.h>
 #include <machine/stack.h>
 
+/*
+ * This code makes assumptions about the stack layout. These are correct
+ * when using APCS (the old ABI), but are no longer true with AAPCS and the
+ * ARM EABI. There is also an issue with clang and llvm when building for
+ * APCS where it lays out the stack incorrectly. Because of this we disable
+ * this when building for ARM EABI or when building with clang.
+ */
+
+extern vm_offset_t kernel_vm_end;
+
 static void
 stack_capture(struct stack *st, u_int32_t *frame)
 {
-	vm_offset_t callpc;
-
-	stack_zero(st);
-	while (1) {
-		if (!INKERNEL(frame))
-			break;
-		callpc = frame[FR_SCP];
-		if (stack_put(st, callpc) == -1)
-			break;
-		frame = (u_int32_t *)(frame[FR_RFP]);
-	}
 }
 
 void
@@ -62,8 +63,21 @@ stack_save_td(struct stack *st, struct thread *td)
 	if (TD_IS_RUNNING(td))
 		panic("stack_save_td: running");
 
-	frame = (u_int32_t *)td->td_pcb->un_32.pcb32_r11;
+	/*
+	 * This register, the frame pointer, is incorrect for the ARM EABI
+	 * as it doesn't have a frame pointer, however it's value is not used
+	 * when building for EABI.
+	 */
+	frame = (u_int32_t *)td->td_pcb->pcb_regs.sf_r11;
+	stack_zero(st);
 	stack_capture(st, frame);
+}
+
+int
+stack_save_td_running(struct stack *st, struct thread *td)
+{
+
+	return (EOPNOTSUPP);
 }
 
 void
@@ -72,5 +86,6 @@ stack_save(struct stack *st)
 	u_int32_t *frame;
 
 	frame = (u_int32_t *)__builtin_frame_address(0);
+	stack_zero(st);
 	stack_capture(st, frame);
 }

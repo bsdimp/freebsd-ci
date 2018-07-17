@@ -34,7 +34,7 @@
 #include <machine/specialreg.h>
 #include <machine/timerreg.h>
 
-#include "assym.s"
+#include "assym.inc"
 
 /*
  * Resume entry point.  The BIOS enters here in real mode after POST with
@@ -50,17 +50,19 @@
 	.code16
 wakeup_start:
 	/*
-	 * Set up segment registers for real mode, a small stack for
-	 * any calls we make, and clear any flags.
+	 * Set up segment registers for real mode and a small stack for
+	 * any calls we make.  Set up full 32-bit bootstrap kernel flags
+	 * since resumectx() doesn't restore flags.  PSL_KERNEL gives
+	 * bootstrap kernel flags (with interrupts disabled), not normal
+	 * kernel flags.
 	 */
 	cli				/* make sure no interrupts */
 	mov	%cs, %ax		/* copy %cs to %ds.  Remember these */
 	mov	%ax, %ds		/* are offsets rather than selectors */
 	mov	%ax, %ss
 	movw	$PAGE_SIZE, %sp
-	xorw	%ax, %ax
-	pushw	%ax
-	popfw
+	pushl	$PSL_KERNEL
+	popfl
 
 	/* To debug resume hangs, beep the speaker if the user requested. */
 	testb	$~0, resume_beep - wakeup_start
@@ -151,20 +153,11 @@ wakeup_32:
 	movl	wakeup_cr3 - wakeup_start(%ebx), %eax
 	mov	%eax, %cr3
 
-	/*
-	 * Finally, switch to long bit mode by enabling paging.  We have
-	 * to be very careful here because all the segmentation disappears
-	 * out from underneath us.  The spec says we can depend on the
-	 * subsequent pipelined branch to execute, but *only if* everthing
-	 * is still identity mapped.  If any mappings change, the pipeline
-	 * will flush.
-	 */
+	/* Enable paging. */
 	mov	%cr0, %eax
 	orl	$CR0_PG, %eax
 	mov	%eax, %cr0
 
-	jmp	1f
-1:
 	/* Jump to return address. */
 	jmp	*%edx
 

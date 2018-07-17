@@ -1,7 +1,9 @@
 /* $FreeBSD$ */
-/* $NetBSD: citrus_csmapper.h,v 1.2 2008/02/09 14:56:20 junyoung Exp $ */
+/*	$NetBSD: citrus_csmapper.h,v 1.3 2013/06/24 17:28:35 joerg Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c)2003 Citrus Project,
  * All rights reserved.
  *
@@ -28,7 +30,7 @@
  */
 
 #ifndef _CITRUS_CSMAPPER_H_
-#define _CITRUS_CSMAPPER_H
+#define _CITRUS_CSMAPPER_H_
 
 #define _citrus_csmapper		_citrus_mapper
 #define _citrus_csmapper_close		_citrus_mapper_close

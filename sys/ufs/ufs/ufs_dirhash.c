@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001, 2002 Ian Dowse.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -85,10 +87,11 @@ SYSCTL_INT(_vfs_ufs, OID_AUTO, dirhash_docheck, CTLFLAG_RW, &ufs_dirhashcheck,
 static int ufs_dirhashlowmemcount = 0;
 SYSCTL_INT(_vfs_ufs, OID_AUTO, dirhash_lowmemcount, CTLFLAG_RD, 
     &ufs_dirhashlowmemcount, 0, "number of times low memory hook called");
-static int ufs_dirhashreclaimage = 5;
-SYSCTL_INT(_vfs_ufs, OID_AUTO, dirhash_reclaimage, CTLFLAG_RW, 
-    &ufs_dirhashreclaimage, 0, 
-    "max time in seconds of hash inactivity before deletion in low VM events");
+static int ufs_dirhashreclaimpercent = 10;
+static int ufsdirhash_set_reclaimpercent(SYSCTL_HANDLER_ARGS);
+SYSCTL_PROC(_vfs_ufs, OID_AUTO, dirhash_reclaimpercent,
+    CTLTYPE_INT | CTLFLAG_RW, 0, 0, ufsdirhash_set_reclaimpercent, "I",
+    "set percentage of dirhash cache to be removed in low VM events");
 
 
 static int ufsdirhash_hash(struct dirhash *dh, char *name, int namelen);
@@ -189,11 +192,11 @@ ufsdirhash_create(struct inode *ip)
 	struct dirhash *ndh;
 	struct dirhash *dh;
 	struct vnode *vp;
-	int error;
+	bool excl;
 
-	error = 0;
 	ndh = dh = NULL;
 	vp = ip->i_vnode;
+	excl = false;
 	for (;;) {
 		/* Racy check for i_dirhash to prefetch a dirhash structure. */
 		if (ip->i_dirhash == NULL && ndh == NULL) {
@@ -230,8 +233,11 @@ ufsdirhash_create(struct inode *ip)
 		ufsdirhash_hold(dh);
 		VI_UNLOCK(vp);
 
-		/* Acquire a shared lock on existing hashes. */
-		sx_slock(&dh->dh_lock);
+		/* Acquire a lock on existing hashes. */
+		if (excl)
+			sx_xlock(&dh->dh_lock);
+		else
+			sx_slock(&dh->dh_lock);
 
 		/* The hash could've been recycled while we were waiting. */
 		VI_LOCK(vp);
@@ -252,9 +258,10 @@ ufsdirhash_create(struct inode *ip)
 		 * so we can recreate it.  If we fail the upgrade, drop our
 		 * lock and try again.
 		 */
-		if (sx_try_upgrade(&dh->dh_lock))
+		if (excl || sx_try_upgrade(&dh->dh_lock))
 			break;
 		sx_sunlock(&dh->dh_lock);
+		excl = true;
 	}
 	/* Free the preallocated structure if it was not necessary. */
 	if (ndh) {
@@ -273,11 +280,9 @@ static struct dirhash *
 ufsdirhash_acquire(struct inode *ip)
 {
 	struct dirhash *dh;
-	struct vnode *vp;
 
 	ASSERT_VOP_ELOCKED(ip->i_vnode, __FUNCTION__);
 
-	vp = ip->i_vnode;
 	dh = ip->i_dirhash;
 	if (dh == NULL)
 		return (NULL);
@@ -344,7 +349,8 @@ ufsdirhash_build(struct inode *ip)
 	struct direct *ep;
 	struct vnode *vp;
 	doff_t bmask, pos;
-	int dirblocks, i, j, memreqd, nblocks, narrays, nslots, slot;
+	u_int dirblocks, i, narrays, nblocks, nslots;
+	int j, memreqd, slot;
 
 	/* Take care of a decreased sysctl value. */
 	while (ufs_dirhashmem > ufs_dirhashmaxmem) {
@@ -1148,7 +1154,7 @@ ufsdirhash_getprev(struct direct *dirp, doff_t offset)
 	doff_t blkoff, prevoff;
 	int entrypos, i;
 
-	blkoff = offset & ~(DIRBLKSIZ - 1);	/* offset of start of block */
+	blkoff = rounddown2(offset, DIRBLKSIZ);	/* offset of start of block */
 	entrypos = offset & (DIRBLKSIZ - 1);	/* entry relative to block */
 	blkbuf = (char *)dirp - entrypos;
 	prevoff = blkoff;
@@ -1247,49 +1253,52 @@ static void
 ufsdirhash_lowmem()
 {
 	struct dirhash *dh, *dh_temp;
-	int memfreed = 0;
-	/* 
-	 * Will free a *minimum* of 10% of the dirhash, but possibly much
-	 * more (depending on dirhashreclaimage). System with large dirhashes
-	 * probably also need a much larger dirhashreclaimage.
-	 * XXX: this percentage may need to be adjusted.
-	 */
-	int memwanted = ufs_dirhashmem / 10;
+	int memfreed, memwanted;
 
 	ufs_dirhashlowmemcount++;
+	memfreed = 0;
+	memwanted = ufs_dirhashmem * ufs_dirhashreclaimpercent / 100;
 
 	DIRHASHLIST_LOCK();
-	/* 
-	 * Delete dirhashes not used for more than ufs_dirhashreclaimage 
-	 * seconds. If we can't get a lock on the dirhash, it will be skipped.
+
+	/*
+	 * Reclaim up to memwanted from the oldest dirhashes. This will allow
+	 * us to make some progress when the system is running out of memory
+	 * without compromising the dinamicity of maximum age. If the situation
+	 * does not improve lowmem will be eventually retriggered and free some
+	 * other entry in the cache. The entries on the head of the list should
+	 * be the oldest. If during list traversal we can't get a lock on the
+	 * dirhash, it will be skipped.
 	 */
 	TAILQ_FOREACH_SAFE(dh, &ufsdirhash_list, dh_list, dh_temp) {
-		if (!sx_try_xlock(&dh->dh_lock))
-			continue;
-		if (time_second - dh->dh_lastused > ufs_dirhashreclaimage)
+		if (sx_try_xlock(&dh->dh_lock))
 			memfreed += ufsdirhash_destroy(dh);
-		/* Unlock if we didn't delete the dirhash */
-		else
-			ufsdirhash_release(dh);
-	}
-
-	/* 
-	 * If not enough memory was freed, keep deleting hashes from the head 
-	 * of the dirhash list. The ones closest to the head should be the 
-	 * oldest. 
-	 */
-	if (memfreed < memwanted) {
-		TAILQ_FOREACH_SAFE(dh, &ufsdirhash_list, dh_list, dh_temp) {
-			if (!sx_try_xlock(&dh->dh_lock))
-				continue;
-			memfreed += ufsdirhash_destroy(dh);
-			if (memfreed >= memwanted)
-				break;
-		}
+		if (memfreed >= memwanted)
+			break;
 	}
 	DIRHASHLIST_UNLOCK();
 }
 
+static int
+ufsdirhash_set_reclaimpercent(SYSCTL_HANDLER_ARGS)
+{
+	int error, v;
+
+	v = ufs_dirhashreclaimpercent;
+	error = sysctl_handle_int(oidp, &v, v, req);
+	if (error)
+		return (error);
+	if (req->newptr == NULL)
+		return (error);
+	if (v == ufs_dirhashreclaimpercent)
+		return (0);
+
+	/* Refuse invalid percentages */
+	if (v < 0 || v > 100)
+		return (EINVAL);
+	ufs_dirhashreclaimpercent = v;
+	return (0);
+}
 
 void
 ufsdirhash_init()

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2008-2012, by Randall Stewart. All rights reserved.
  * Copyright (c) 2008-2012, by Michael Tuexen. All rights reserved.
  *
@@ -35,7 +37,6 @@ __FBSDID("$FreeBSD$");
 #ifndef _NETINET_SCTP_DTRACE_DECLARE_H_
 #define _NETINET_SCTP_DTRACE_DECLARE_H_
 
-#include "opt_kdtrace.h"
 #include <sys/kernel.h>
 #include <sys/sdt.h>
 

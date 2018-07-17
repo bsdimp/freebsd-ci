@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 Ruslan Ermilov <ru@FreeBSD.org>
  * All rights reserved.
  *
@@ -73,7 +75,7 @@ sysctl_handle_pct(SYSCTL_HANDLER_ARGS)
 	error = sysctl_handle_int(oidp, &val, 0, req);
 	if (error || !req->newptr)
 		return (error);
-	if (val < 0 || val > 100)
+	if (val > 100)
 		return (EINVAL);
 	if ((arg1 == &g_cache_used_lo && val > g_cache_used_hi) ||
 	    (arg1 == &g_cache_used_hi && g_cache_used_lo > val))
@@ -1014,3 +1016,4 @@ g_cache_dumpconf(struct sbuf *sb, const char *indent, struct g_geom *gp,
 }
 
 DECLARE_GEOM_CLASS(g_cache_class, g_cache);
+MODULE_VERSION(geom_cache, 0);

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2001 Alexey Zelkin <phantom@FreeBSD.org>
  * All rights reserved.
  *
@@ -103,7 +105,7 @@ typedef	__nl_item	nl_item;
 #define	YESEXPR		52	/* affirmative response expression */
 #define	NOEXPR		53	/* negative response expression */
 
-#if __BSD_VISIBLE || __XSI_VISIBLE <= 500
+#if __BSD_VISIBLE || (__XSI_VISIBLE && __XSI_VISIBLE <= 500)
 #define	YESSTR		54	/* affirmative response for yes/no queries */
 #define	NOSTR		55	/* negative response for yes/no queries */
 #endif

@@ -1,9 +1,35 @@
 # $FreeBSD$
 
+PACKAGE=lib${LIB}
 LIB=	pmc
 
-SRCS=	libpmc.c pmclog.c
-INCS=	pmc.h pmclog.h
+SRCS=	libpmc.c pmclog.c libpmc_pmu_util.c libpmc_json.cc
+INCS=	pmc.h pmclog.h pmcformat.h
+
+CFLAGS+= -I${.CURDIR}
+CWARNFLAGS.gcc+= -Wno-shadow
+
+.if ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "i386"
+
+.if ${MACHINE_ARCH} == "aarch64"
+EVENT_ARCH="arm64"
+.elif ${MACHINE_ARCH} == "amd64" || ${MACHINE_ARCH} == "i386"
+EVENT_ARCH="x86"
+.elif ${MACHINE_ARCH} == "powerpc"
+EVENT_ARCH="powerpc"
+.endif
+
+JEVENTS= ${BTOOLSPATH:U.}/pmu-events/jevents
+# This file is built in a subdirectory so never try to rebuild it here.
+${JEVENTS}: .PHONY
+.if make(*clean*)
+SUBDIR+= pmu-events
+.endif
+
+libpmc_events.c: ${JEVENTS}
+	${JEVENTS} ${EVENT_ARCH} ${.CURDIR}/pmu-events/arch libpmc_events.c
+SRCS+= libpmc_events.c
+.endif
 
 MAN=	pmc.3
 MAN+=	pmc_allocate.3
@@ -23,35 +49,33 @@ MAN+=	pmclog.3
 MAN+=	pmc.soft.3
 
 # PMC-dependent manual pages
-.if ${MACHINE_CPUARCH} == "i386" || ${MACHINE_CPUARCH} == "amd64"
 MAN+=	pmc.atom.3
+MAN+=	pmc.atomsilvermont.3
 MAN+=	pmc.core.3
 MAN+=	pmc.core2.3
+MAN+=	pmc.corei7.3
+MAN+=	pmc.corei7uc.3
 MAN+=	pmc.haswell.3
 MAN+=	pmc.haswelluc.3
+MAN+=	pmc.haswellxeon.3
 MAN+=	pmc.iaf.3
 MAN+=	pmc.ivybridge.3
 MAN+=	pmc.ivybridgexeon.3
-MAN+=	pmc.ucf.3
 MAN+=	pmc.k7.3
 MAN+=	pmc.k8.3
+MAN+=	pmc.mips24k.3
+MAN+=	pmc.octeon.3
 MAN+=	pmc.p4.3
 MAN+=	pmc.p5.3
 MAN+=	pmc.p6.3
-MAN+=	pmc.corei7.3
-MAN+=	pmc.corei7uc.3
 MAN+=	pmc.sandybridge.3
-MAN+=	pmc.sandybridgeuc.3	
-MAN+=	pmc.sandybridgexeon.3	
+MAN+=	pmc.sandybridgeuc.3
+MAN+=	pmc.sandybridgexeon.3
+MAN+=	pmc.tsc.3
+MAN+=	pmc.ucf.3
 MAN+=	pmc.westmere.3
 MAN+=	pmc.westmereuc.3
-MAN+=	pmc.tsc.3
-.elif ${MACHINE_CPUARCH} == "arm"
 MAN+=	pmc.xscale.3
-.elif ${MACHINE_CPUARCH} == "mips"
-MAN+=	pmc.mips24k.3
-MAN+=	pmc.octeon.3
-.endif
 
 MLINKS+= \
 	pmc_allocate.3 pmc_release.3 \

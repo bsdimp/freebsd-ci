@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) KATO Takenori, 1997, 1998.
  * 
  * All rights reserved.  Unpublished rights reserved under the copyright
@@ -44,16 +46,6 @@ __FBSDID("$FreeBSD$");
 #include <vm/vm.h>
 #include <vm/pmap.h>
 
-#if !defined(CPU_DISABLE_SSE) && defined(I686_CPU)
-#define CPU_ENABLE_SSE
-#endif
-
-#if defined(I586_CPU) && defined(CPU_WT_ALLOC)
-void	enable_K5_wt_alloc(void);
-void	enable_K6_wt_alloc(void);
-void	enable_K6_2_wt_alloc(void);
-#endif
-
 #ifdef I486_CPU
 static void init_5x86(void);
 static void init_bluelightning(void);
@@ -64,6 +56,12 @@ static void init_i486_on_386(void);
 #endif
 static void init_6x86(void);
 #endif /* I486_CPU */
+
+#if defined(I586_CPU) && defined(CPU_WT_ALLOC)
+static void	enable_K5_wt_alloc(void);
+static void	enable_K6_wt_alloc(void);
+static void	enable_K6_2_wt_alloc(void);
+#endif
 
 #ifdef I686_CPU
 static void	init_6x86MX(void);
@@ -81,32 +79,7 @@ SYSCTL_INT(_hw, OID_AUTO, instruction_sse, CTLFLAG_RD,
  */
 static int	hw_clflush_disable = -1;
 
-/* Must *NOT* be BSS or locore will bzero these after setting them */
-int	cpu = 0;		/* Are we 386, 386sx, 486, etc? */
-u_int	cpu_feature = 0;	/* Feature flags */
-u_int	cpu_feature2 = 0;	/* Feature flags */
-u_int	amd_feature = 0;	/* AMD feature flags */
-u_int	amd_feature2 = 0;	/* AMD feature flags */
-u_int	amd_pminfo = 0;		/* AMD advanced power management info */
-u_int	via_feature_rng = 0;	/* VIA RNG features */
-u_int	via_feature_xcrypt = 0;	/* VIA ACE features */
-u_int	cpu_high = 0;		/* Highest arg to CPUID */
-u_int	cpu_id = 0;		/* Stepping ID */
-u_int	cpu_procinfo = 0;	/* HyperThreading Info / Brand Index / CLFUSH */
-u_int	cpu_procinfo2 = 0;	/* Multicore info */
-char	cpu_vendor[20] = "";	/* CPU Origin code */
-u_int	cpu_vendor_id = 0;	/* CPU vendor ID */
-u_int	cpu_clflush_line_size = 32;
-
-SYSCTL_UINT(_hw, OID_AUTO, via_feature_rng, CTLFLAG_RD,
-	&via_feature_rng, 0, "VIA RNG feature available in CPU");
-SYSCTL_UINT(_hw, OID_AUTO, via_feature_xcrypt, CTLFLAG_RD,
-	&via_feature_xcrypt, 0, "VIA xcrypt feature available in CPU");
-
-#ifdef CPU_ENABLE_SSE
-u_int	cpu_fxsr;		/* SSE enabled */
-u_int	cpu_mxcsr_mask;		/* valid bits in mxcsr */
-#endif
+u_int	cyrix_did;		/* Device ID of Cyrix CPU */
 
 #ifdef I486_CPU
 /*
@@ -116,10 +89,6 @@ static void
 init_bluelightning(void)
 {
 	register_t saveintr;
-
-#if defined(PC98) && !defined(CPU_UPGRADE_HW_CACHE)
-	need_post_dma_flush = 1;
-#endif
 
 	saveintr = intr_disable();
 
@@ -205,14 +174,6 @@ init_cy486dx(void)
 	ccr2 = read_cyrix_reg(CCR2);
 #ifdef CPU_SUSP_HLT
 	ccr2 |= CCR2_SUSP_HLT;
-#endif
-
-#ifdef PC98
-	/* Enables WB cache interface pin and Lock NW bit in CR0. */
-	ccr2 |= CCR2_WB | CCR2_LOCK_NW;
-	/* Unlock NW bit in CR0. */
-	write_cyrix_reg(CCR2, ccr2 & ~CCR2_LOCK_NW);
-	load_cr0((rcr0() & ~CR0_CD) | CR0_NW);	/* CD = 0, NW = 1 */
 #endif
 
 	write_cyrix_reg(CCR2, ccr2);
@@ -328,10 +289,6 @@ init_i486_on_386(void)
 {
 	register_t saveintr;
 
-#if defined(PC98) && !defined(CPU_UPGRADE_HW_CACHE)
-	need_post_dma_flush = 1;
-#endif
-
 	saveintr = intr_disable();
 
 	load_cr0(rcr0() & ~(CR0_CD | CR0_NW));	/* CD = 0, NW = 0 */
@@ -421,6 +378,19 @@ init_6x86(void)
 
 #ifdef I586_CPU
 /*
+ * Rise mP6
+ */
+static void
+init_rise(void)
+{
+
+	/*
+	 * The CMPXCHG8B instruction is always available but hidden.
+	 */
+	cpu_feature |= CPUID_CX8;
+}
+
+/*
  * IDT WinChip C6/2/2A/2B/3
  *
  * http://www.centtech.com/winchip_bios_writers_guide_v4_0.pdf
@@ -440,7 +410,7 @@ init_winchip(void)
 	fcr &= ~(1ULL << 11);
 
 	/*
-	 * Additioanlly, set EBRPRED, E2MMX and EAMD3D for WinChip 2 and 3.
+	 * Additionally, set EBRPRED, E2MMX and EAMD3D for WinChip 2 and 3.
 	 */
 	if (CPUID_TO_MODEL(cpu_id) >= 8)
 		fcr |= (1 << 12) | (1 << 19) | (1 << 20);
@@ -516,6 +486,8 @@ init_6x86MX(void)
 	intr_restore(saveintr);
 }
 
+static int ppro_apic_used = -1;
+
 static void
 init_ppro(void)
 {
@@ -524,9 +496,29 @@ init_ppro(void)
 	/*
 	 * Local APIC should be disabled if it is not going to be used.
 	 */
-	apicbase = rdmsr(MSR_APICBASE);
-	apicbase &= ~APICBASE_ENABLED;
-	wrmsr(MSR_APICBASE, apicbase);
+	if (ppro_apic_used != 1) {
+		apicbase = rdmsr(MSR_APICBASE);
+		apicbase &= ~APICBASE_ENABLED;
+		wrmsr(MSR_APICBASE, apicbase);
+		ppro_apic_used = 0;
+	}
+}
+
+/*
+ * If the local APIC is going to be used after being disabled above,
+ * re-enable it and don't disable it in the future.
+ */
+void
+ppro_reenable_apic(void)
+{
+	u_int64_t	apicbase;
+
+	if (ppro_apic_used == 0) {
+		apicbase = rdmsr(MSR_APICBASE);
+		apicbase |= APICBASE_ENABLED;
+		wrmsr(MSR_APICBASE, apicbase);
+		ppro_apic_used = 1;
+	}
 }
 
 /*
@@ -635,20 +627,6 @@ init_transmeta(void)
 }
 #endif
 
-/*
- * Initialize CR4 (Control register 4) to enable SSE instructions.
- */
-void
-enable_sse(void)
-{
-#if defined(CPU_ENABLE_SSE)
-	if ((cpu_feature & CPUID_XMM) && (cpu_feature & CPUID_FXSR)) {
-		load_cr4(rcr4() | CR4_FXSR | CR4_XMM);
-		cpu_fxsr = hw_instruction_sse = 1;
-	}
-#endif
-}
-
 extern int elf32_nxstack;
 
 void
@@ -681,11 +659,35 @@ initializecpu(void)
 #ifdef I586_CPU
 	case CPU_586:
 		switch (cpu_vendor_id) {
+		case CPU_VENDOR_AMD:
+#ifdef CPU_WT_ALLOC
+			if (((cpu_id & 0x0f0) > 0) &&
+			    ((cpu_id & 0x0f0) < 0x60) &&
+			    ((cpu_id & 0x00f) > 3))
+				enable_K5_wt_alloc();
+			else if (((cpu_id & 0x0f0) > 0x80) ||
+			    (((cpu_id & 0x0f0) == 0x80) &&
+				(cpu_id & 0x00f) > 0x07))
+				enable_K6_2_wt_alloc();
+			else if ((cpu_id & 0x0f0) > 0x50)
+				enable_K6_wt_alloc();
+#endif
+			if ((cpu_id & 0xf0) == 0xa0)
+				/*
+				 * Make sure the TSC runs through
+				 * suspension, otherwise we can't use
+				 * it as timecounter
+				 */
+				wrmsr(0x1900, rdmsr(0x1900) | 0x20ULL);
+			break;
 		case CPU_VENDOR_CENTAUR:
 			init_winchip();
 			break;
 		case CPU_VENDOR_TRANSMETA:
 			init_transmeta();
+			break;
+		case CPU_VENDOR_RISE:
+			init_rise();
 			break;
 		}
 		break;
@@ -733,22 +735,30 @@ initializecpu(void)
 			init_transmeta();
 			break;
 		}
-#ifdef PAE
-		if ((amd_feature & AMDID_NX) != 0) {
-			uint64_t msr;
-
-			msr = rdmsr(MSR_EFER) | EFER_NXE;
-			wrmsr(MSR_EFER, msr);
-			pg_nx = PG_NX;
-			elf32_nxstack = 1;
-		}
-#endif
 		break;
 #endif
 	default:
 		break;
 	}
-	enable_sse();
+	if ((cpu_feature & CPUID_XMM) && (cpu_feature & CPUID_FXSR)) {
+		load_cr4(rcr4() | CR4_FXSR | CR4_XMM);
+		cpu_fxsr = hw_instruction_sse = 1;
+	}
+#if defined(PAE) || defined(PAE_TABLES)
+	if ((amd_feature & AMDID_NX) != 0) {
+		uint64_t msr;
+
+		msr = rdmsr(MSR_EFER) | EFER_NXE;
+		wrmsr(MSR_EFER, msr);
+		pg_nx = PG_NX;
+		elf32_nxstack = 1;
+	}
+#endif
+}
+
+void
+initializecpucache(void)
+{
 
 	/*
 	 * CPUID with %eax = 1, %ebx returns
@@ -764,60 +774,18 @@ initializecpu(void)
 	 * CPUID_SS feature even though the native CPU supports it.
 	 */
 	TUNABLE_INT_FETCH("hw.clflush_disable", &hw_clflush_disable);
-	if (vm_guest != VM_GUEST_NO && hw_clflush_disable == -1)
+	if (vm_guest != VM_GUEST_NO && hw_clflush_disable == -1) {
 		cpu_feature &= ~CPUID_CLFSH;
-	/*
-	 * Allow to disable CLFLUSH feature manually by
-	 * hw.clflush_disable tunable.
-	 */
-	if (hw_clflush_disable == 1)
-		cpu_feature &= ~CPUID_CLFSH;
-
-#if defined(PC98) && !defined(CPU_UPGRADE_HW_CACHE)
-	/*
-	 * OS should flush L1 cache by itself because no PC-98 supports
-	 * non-Intel CPUs.  Use wbinvd instruction before DMA transfer
-	 * when need_pre_dma_flush = 1, use invd instruction after DMA
-	 * transfer when need_post_dma_flush = 1.  If your CPU upgrade
-	 * product supports hardware cache control, you can add the
-	 * CPU_UPGRADE_HW_CACHE option in your kernel configuration file.
-	 * This option eliminates unneeded cache flush instruction(s).
-	 */
-	if (cpu_vendor_id == CPU_VENDOR_CYRIX) {
-		switch (cpu) {
-#ifdef I486_CPU
-		case CPU_486DLC:
-			need_post_dma_flush = 1;
-			break;
-		case CPU_M1SC:
-			need_pre_dma_flush = 1;
-			break;
-		case CPU_CY486DX:
-			need_pre_dma_flush = 1;
-#ifdef CPU_I486_ON_386
-			need_post_dma_flush = 1;
-#endif
-			break;
-#endif
-		default:
-			break;
-		}
-	} else if (cpu_vendor_id == CPU_VENDOR_AMD) {
-		switch (cpu_id & 0xFF0) {
-		case 0x470:		/* Enhanced Am486DX2 WB */
-		case 0x490:		/* Enhanced Am486DX4 WB */
-		case 0x4F0:		/* Am5x86 WB */
-			need_pre_dma_flush = 1;
-			break;
-		}
-	} else if (cpu_vendor_id == CPU_VENDOR_IBM) {
-		need_post_dma_flush = 1;
-	} else {
-#ifdef CPU_I486_ON_386
-		need_pre_dma_flush = 1;
-#endif
+		cpu_stdext_feature &= ~CPUID_STDEXT_CLFLUSHOPT;
 	}
-#endif /* PC98 && !CPU_UPGRADE_HW_CACHE */
+	/*
+	 * The kernel's use of CLFLUSH{,OPT} can be disabled manually
+	 * by setting the hw.clflush_disable tunable.
+	 */
+	if (hw_clflush_disable == 1) {
+		cpu_feature &= ~CPUID_CLFSH;
+		cpu_stdext_feature &= ~CPUID_STDEXT_CLFLUSHOPT;
+	}
 }
 
 #if defined(I586_CPU) && defined(CPU_WT_ALLOC)
@@ -825,7 +793,7 @@ initializecpu(void)
  * Enable write allocate feature of AMD processors.
  * Following two functions require the Maxmem variable being set.
  */
-void
+static void
 enable_K5_wt_alloc(void)
 {
 	u_int64_t	msr;
@@ -850,19 +818,13 @@ enable_K5_wt_alloc(void)
 		else
 		  msr = 0;
 		msr |= AMD_WT_ALLOC_TME | AMD_WT_ALLOC_FRE;
-#ifdef PC98
-		if (!(inb(0x43b) & 4)) {
-			wrmsr(0x86, 0x0ff00f0);
-			msr |= AMD_WT_ALLOC_PRE;
-		}
-#else
+
 		/*
 		 * There is no way to know wheter 15-16M hole exists or not. 
 		 * Therefore, we disable write allocate for this range.
 		 */
-			wrmsr(0x86, 0x0ff00f0);
-			msr |= AMD_WT_ALLOC_PRE;
-#endif
+		wrmsr(0x86, 0x0ff00f0);
+		msr |= AMD_WT_ALLOC_PRE;
 		wrmsr(0x85, msr);
 
 		msr=rdmsr(0x83);
@@ -871,7 +833,7 @@ enable_K5_wt_alloc(void)
 	}
 }
 
-void
+static void
 enable_K6_wt_alloc(void)
 {
 	quad_t	size;
@@ -906,19 +868,9 @@ enable_K6_wt_alloc(void)
 		size = 0x7f;
 	whcr = (rdmsr(0xc0000082) & ~(0x7fLL << 1)) | (size << 1);
 
-#if defined(PC98) || defined(NO_MEMORY_HOLE)
-	if (whcr & (0x7fLL << 1)) {
-#ifdef PC98
-		/*
-		 * If bit 2 of port 0x43b is 0, disable wrte allocate for the
-		 * 15-16M range.
-		 */
-		if (!(inb(0x43b) & 4))
-			whcr &= ~0x0001LL;
-		else
-#endif
-			whcr |=  0x0001LL;
-	}
+#if defined(NO_MEMORY_HOLE)
+	if (whcr & (0x7fLL << 1))
+		whcr |=  0x0001LL;
 #else
 	/*
 	 * There is no way to know wheter 15-16M hole exists or not. 
@@ -931,7 +883,7 @@ enable_K6_wt_alloc(void)
 	intr_restore(saveintr);
 }
 
-void
+static void
 enable_K6_2_wt_alloc(void)
 {
 	quad_t	size;
@@ -966,19 +918,9 @@ enable_K6_2_wt_alloc(void)
 		size = 0x3ff;
 	whcr = (rdmsr(0xc0000082) & ~(0x3ffLL << 22)) | (size << 22);
 
-#if defined(PC98) || defined(NO_MEMORY_HOLE)
-	if (whcr & (0x3ffLL << 22)) {
-#ifdef PC98
-		/*
-		 * If bit 2 of port 0x43b is 0, disable wrte allocate for the
-		 * 15-16M range.
-		 */
-		if (!(inb(0x43b) & 4))
-			whcr &= ~(1LL << 16);
-		else
-#endif
-			whcr |=  1LL << 16;
-	}
+#if defined(NO_MEMORY_HOLE)
+	if (whcr & (0x3ffLL << 22))
+		whcr |=  1LL << 16;
 #else
 	/*
 	 * There is no way to know wheter 15-16M hole exists or not. 

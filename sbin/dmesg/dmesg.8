@@ -9,7 +9,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -28,7 +28,7 @@
 .\"     @(#)dmesg.8	8.1 (Berkeley) 6/5/93
 .\" $FreeBSD$
 .\"
-.Dd June 5, 1993
+.Dd October 3, 2016
 .Dt DMESG 8
 .Os
 .Sh NAME
@@ -36,7 +36,7 @@
 .Nd "display the system message buffer"
 .Sh SYNOPSIS
 .Nm
-.Op Fl a
+.Op Fl ac
 .Op Fl M Ar core Op Fl N Ar system
 .Sh DESCRIPTION
 The
@@ -59,6 +59,8 @@ Show all data in the message buffer.
 This includes any syslog records and
 .Pa /dev/console
 output.
+.It Fl c
+Clear the kernel buffer after printing.
 .It Fl M
 Extract values associated with the name list from the specified core.
 .It Fl N
@@ -82,4 +84,4 @@ at startup time
 The
 .Nm
 utility appeared in
-.Bx 4.0 .
+.Bx 3 .

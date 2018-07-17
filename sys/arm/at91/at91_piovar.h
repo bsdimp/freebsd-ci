@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2006 M. Warner Losh.  All rights reserved.
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2006 M. Warner Losh.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,5 +47,6 @@ void at91_pio_gpio_set_deglitch(uint32_t pio, uint32_t data_mask,
 void at91_pio_gpio_set_interrupt(uint32_t pio, uint32_t data_mask,
     int enable_interrupt);
 uint32_t at91_pio_gpio_clear_interrupt(uint32_t pio);
+void at91_pio_gpio_pullup(uint32_t pio, uint32_t data_mask, int do_pullup);
 
 #endif /* ARM_AT91_AT91_PIOVAR_H */

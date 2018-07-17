@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2008, Pyun YongHyeon <yongari@FreeBSD.org>
  * All rights reserved.
  *
@@ -35,7 +37,7 @@
 #include <sys/taskqueue.h>
 
 /*
- * JMC250 supports upto 1024 descriptors and the number of
+ * JMC250 supports up to 1024 descriptors and the number of
  * descriptors should be multiple of 16.
  */
 #define	JME_TX_RING_CNT		384
@@ -49,7 +51,7 @@
 #define	JME_RX_RING_ALIGN	16
 #define	JME_TSO_MAXSEGSIZE	4096
 #define	JME_TSO_MAXSIZE		(65535 + sizeof(struct ether_vlan_header))
-#define	JME_MAXTXSEGS		32
+#define	JME_MAXTXSEGS		35
 #define	JME_RX_BUF_ALIGN	sizeof(uint64_t)
 #define	JME_SSB_ALIGN		16
 

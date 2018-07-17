@@ -1,4 +1,4 @@
-//===-- RegAllocBase.h - basic regalloc interface and driver --*- C++ -*---===//
+//===- RegAllocBase.h - basic regalloc interface and driver -----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -34,21 +34,23 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CODEGEN_REGALLOCBASE
-#define LLVM_CODEGEN_REGALLOCBASE
+#ifndef LLVM_LIB_CODEGEN_REGALLOCBASE_H
+#define LLVM_LIB_CODEGEN_REGALLOCBASE_H
 
-#include "llvm/ADT/OwningPtr.h"
-#include "llvm/CodeGen/LiveIntervalUnion.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/CodeGen/RegisterClassInfo.h"
 
 namespace llvm {
 
-template<typename T> class SmallVectorImpl;
-class TargetRegisterInfo;
-class VirtRegMap;
+class LiveInterval;
 class LiveIntervals;
 class LiveRegMatrix;
+class MachineInstr;
+class MachineRegisterInfo;
+template<typename T> class SmallVectorImpl;
 class Spiller;
+class TargetRegisterInfo;
+class VirtRegMap;
 
 /// RegAllocBase provides the register allocation driver and interface that can
 /// be extended to add interesting heuristics.
@@ -57,17 +59,24 @@ class Spiller;
 /// live range splitting. They must also override enqueue/dequeue to provide an
 /// assignment order.
 class RegAllocBase {
+  virtual void anchor();
+
 protected:
-  const TargetRegisterInfo *TRI;
-  MachineRegisterInfo *MRI;
-  VirtRegMap *VRM;
-  LiveIntervals *LIS;
-  LiveRegMatrix *Matrix;
+  const TargetRegisterInfo *TRI = nullptr;
+  MachineRegisterInfo *MRI = nullptr;
+  VirtRegMap *VRM = nullptr;
+  LiveIntervals *LIS = nullptr;
+  LiveRegMatrix *Matrix = nullptr;
   RegisterClassInfo RegClassInfo;
 
-  RegAllocBase(): TRI(0), MRI(0), VRM(0), LIS(0), Matrix(0) {}
+  /// Inst which is a def of an original reg and whose defs are already all
+  /// dead after remat is saved in DeadRemats. The deletion of such inst is
+  /// postponed till all the allocations are done, so its remat expr is
+  /// always available for the remat of all the siblings of the original reg.
+  SmallPtrSet<MachineInstr *, 32> DeadRemats;
 
-  virtual ~RegAllocBase() {}
+  RegAllocBase() = default;
+  virtual ~RegAllocBase() = default;
 
   // A RegAlloc pass should call this before allocatePhysRegs.
   void init(VirtRegMap &vrm, LiveIntervals &lis, LiveRegMatrix &mat);
@@ -75,6 +84,10 @@ protected:
   // The top-level driver. The output is a VirtRegMap that us updated with
   // physical register assignments.
   void allocatePhysRegs();
+
+  // Include spiller post optimization and removing dead defs left because of
+  // rematerialization.
+  virtual void postOptimization();
 
   // Get a temporary reference to a Spiller instance.
   virtual Spiller &spiller() = 0;
@@ -90,10 +103,14 @@ protected:
   // or new set of split live virtual registers. It is up to the splitter to
   // converge quickly toward fully spilled live ranges.
   virtual unsigned selectOrSplit(LiveInterval &VirtReg,
-                                 SmallVectorImpl<LiveInterval*> &splitLVRs) = 0;
+                                 SmallVectorImpl<unsigned> &splitLVRs) = 0;
 
   // Use this group name for NamedRegionTimer.
-  static const char *TimerGroupName;
+  static const char TimerGroupName[];
+  static const char TimerGroupDescription[];
+
+  /// Method called when the allocator is about to remove a LiveInterval.
+  virtual void aboutToRemoveInterval(LiveInterval &LI) {}
 
 public:
   /// VerifyEnabled - True when -verify-regalloc is given.
@@ -105,4 +122,4 @@ private:
 
 } // end namespace llvm
 
-#endif // !defined(LLVM_CODEGEN_REGALLOCBASE)
+#endif // LLVM_LIB_CODEGEN_REGALLOCBASE_H

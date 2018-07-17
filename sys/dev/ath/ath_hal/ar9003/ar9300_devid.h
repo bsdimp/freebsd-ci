@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 2012, Qualcomm Atheros, Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
@@ -48,11 +50,13 @@
 #define	AR_SREV_VERSION_AR9380		0x1C0
 #define	AR_SREV_VERSION_AR9580		0x1C0
 #define	AR_SREV_VERSION_AR9460		0x280
+#define	AR_SREV_VERSION_QCA9565		0x2c0
 
 #define	AR_SREV_VERSION_AR9330		0x200
 #define	AR_SREV_VERSION_AR9340		0x300
 #define	AR_SREV_VERSION_QCA9550		0x400
 #define	AR_SREV_VERSION_AR9485		0x240
+#define	AR_SREV_VERSION_QCA9530		0x500
 
 #define	AR_SREV_REVISION_AR9380_10	0	/* AR9380 1.0 */
 #define	AR_SREV_REVISION_AR9380_20	2	/* AR9380 2.0/2.1 */

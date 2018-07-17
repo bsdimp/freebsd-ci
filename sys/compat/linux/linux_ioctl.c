@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1994-1995 Søren Schmidt
  * All rights reserved.
  *
@@ -6,24 +8,22 @@
  * modification, are permitted provided that the following conditions
  * are met:
  * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer
- *    in this position and unchanged.
+ *    notice, this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. The name of the author may not be used to endorse or promote products
- *    derived from this software without specific prior written permission
  *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
- * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
- * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
  */
 
 #include "opt_compat.h"
@@ -34,7 +34,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/sysproto.h>
-#include <sys/capability.h>
+#include <sys/capsicum.h>
 #include <sys/cdio.h>
 #include <sys/dvdio.h>
 #include <sys/conf.h>
@@ -66,10 +66,11 @@ __FBSDID("$FreeBSD$");
 #include <sys/resourcevar.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
-#include <net/vnet.h>
 
+#include <dev/evdev/input.h>
 #include <dev/usb/usb_ioctl.h>
 
 #ifdef COMPAT_LINUX32
@@ -83,18 +84,18 @@ __FBSDID("$FreeBSD$");
 #include <compat/linux/linux_ioctl.h>
 #include <compat/linux/linux_mib.h>
 #include <compat/linux/linux_socket.h>
+#include <compat/linux/linux_timer.h>
 #include <compat/linux/linux_util.h>
 
-#include <compat/linux/linux_videodev.h>
+#include <contrib/v4l/videodev.h>
 #include <compat/linux/linux_videodev_compat.h>
 
-#include <compat/linux/linux_videodev2.h>
+#include <contrib/v4l/videodev2.h>
 #include <compat/linux/linux_videodev2_compat.h>
 
-CTASSERT(LINUX_IFNAMSIZ == IFNAMSIZ);
+#include <cam/scsi/scsi_sg.h>
 
-FEATURE(linuxulator_v4l, "V4L ioctl wrapper support in the linuxulator");
-FEATURE(linuxulator_v4l2, "V4L2 ioctl wrapper support in the linuxulator");
+CTASSERT(LINUX_IFNAMSIZ == IFNAMSIZ);
 
 static linux_ioctl_function_t linux_ioctl_cdrom;
 static linux_ioctl_function_t linux_ioctl_vfat;
@@ -111,6 +112,7 @@ static linux_ioctl_function_t linux_ioctl_v4l;
 static linux_ioctl_function_t linux_ioctl_v4l2;
 static linux_ioctl_function_t linux_ioctl_special;
 static linux_ioctl_function_t linux_ioctl_fbsd_usb;
+static linux_ioctl_function_t linux_ioctl_evdev;
 
 static struct linux_ioctl_handler cdrom_handler =
 { linux_ioctl_cdrom, LINUX_IOCTL_CDROM_MIN, LINUX_IOCTL_CDROM_MAX };
@@ -140,6 +142,8 @@ static struct linux_ioctl_handler video2_handler =
 { linux_ioctl_v4l2, LINUX_IOCTL_VIDEO2_MIN, LINUX_IOCTL_VIDEO2_MAX };
 static struct linux_ioctl_handler fbsd_usb =
 { linux_ioctl_fbsd_usb, FBSD_LUSB_MIN, FBSD_LUSB_MAX };
+static struct linux_ioctl_handler evdev_handler =
+{ linux_ioctl_evdev, LINUX_IOCTL_EVDEV_MIN, LINUX_IOCTL_EVDEV_MAX };
 
 DATA_SET(linux_ioctl_handler_set, cdrom_handler);
 DATA_SET(linux_ioctl_handler_set, vfat_handler);
@@ -155,6 +159,7 @@ DATA_SET(linux_ioctl_handler_set, sg_handler);
 DATA_SET(linux_ioctl_handler_set, video_handler);
 DATA_SET(linux_ioctl_handler_set, video2_handler);
 DATA_SET(linux_ioctl_handler_set, fbsd_usb);
+DATA_SET(linux_ioctl_handler_set, evdev_handler);
 
 struct handler_element
 {
@@ -166,7 +171,7 @@ struct handler_element
 static TAILQ_HEAD(, handler_element) handlers =
     TAILQ_HEAD_INITIALIZER(handlers);
 static struct sx linux_ioctl_sx;
-SX_SYSINIT(linux_ioctl, &linux_ioctl_sx, "linux ioctl handlers");
+SX_SYSINIT(linux_ioctl, &linux_ioctl_sx, "Linux ioctl handlers");
 
 /*
  * hdio related ioctls for VMWare support
@@ -194,7 +199,8 @@ linux_ioctl_hdio(struct thread *td, struct linux_ioctl_args *args)
 	u_int sectorsize, fwcylinders, fwheads, fwsectors;
 	off_t mediasize, bytespercyl;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	switch (args->cmd & 0xffff) {
 	case LINUX_HDIO_GET_GEO:
@@ -232,7 +238,7 @@ linux_ioctl_hdio(struct thread *td, struct linux_ioctl_args *args)
 #if defined(DEBUG)
 		linux_msg(td, "HDIO_GET_GEO: mediasize %jd, c/h/s %d/%d/%d, "
 			  "bpc %jd",
-			  (intmax_t)mediasize, fwcylinders, fwheads, fwsectors, 
+			  (intmax_t)mediasize, fwcylinders, fwheads, fwsectors,
 			  (intmax_t)bytespercyl);
 #endif
 		if ((args->cmd & 0xffff) == LINUX_HDIO_GET_GEO) {
@@ -246,6 +252,7 @@ linux_ioctl_hdio(struct thread *td, struct linux_ioctl_args *args)
 		} else if ((args->cmd & 0xffff) == LINUX_HDIO_GET_GEO_BIG) {
 			struct linux_hd_big_geometry hdbg;
 
+			memset(&hdbg, 0, sizeof(hdbg));
 			hdbg.cylinders = fwcylinders;
 			hdbg.heads = fwheads;
 			hdbg.sectors = fwsectors;
@@ -275,7 +282,8 @@ linux_ioctl_disk(struct thread *td, struct linux_ioctl_args *args)
 	u_int sectorsize;
 	off_t mediasize;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	switch (args->cmd & 0xffff) {
 	case LINUX_BLKGETSIZE:
@@ -291,6 +299,15 @@ linux_ioctl_disk(struct thread *td, struct linux_ioctl_args *args)
 		/*
 		 * XXX: How do we know we return the right size of integer ?
 		 */
+		return (copyout(&sectorsize, (void *)args->arg,
+		    sizeof(sectorsize)));
+		break;
+	case LINUX_BLKSSZGET:
+		error = fo_ioctl(fp, DIOCGSECTORSIZE,
+		    (caddr_t)&sectorsize, td->td_ucred, td);
+		fdrop(fp, td);
+		if (error)
+			return (error);
 		return (copyout(&sectorsize, (void *)args->arg,
 		    sizeof(sectorsize)));
 		break;
@@ -367,7 +384,7 @@ linux_to_bsd_speed(int code, struct speedtab *table)
 	for ( ; table->sp_code != -1; table++)
 		if (table->sp_code == code)
 			return (table->sp_speed);
-	return -1;
+	return (-1);
 }
 
 static int
@@ -376,7 +393,7 @@ bsd_to_linux_speed(int speed, struct speedtab *table)
 	for ( ; table->sp_speed != -1; table++)
 		if (table->sp_speed == speed)
 			return (table->sp_code);
-	return -1;
+	return (-1);
 }
 
 static void
@@ -701,7 +718,8 @@ linux_ioctl_termio(struct thread *td, struct linux_ioctl_args *args)
 	struct file *fp;
 	int error;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 
 	switch (args->cmd & 0xffff) {
@@ -911,6 +929,8 @@ linux_ioctl_termio(struct thread *td, struct linux_ioctl_args *args)
 
 	case LINUX_TIOCGSERIAL: {
 		struct linux_serial_struct lss;
+
+		bzero(&lss, sizeof(lss));
 		lss.type = LINUX_PORT_16550A;
 		lss.flags = 0;
 		lss.close_delay = 0;
@@ -972,7 +992,7 @@ linux_ioctl_termio(struct thread *td, struct linux_ioctl_args *args)
 		error = fo_ioctl(fp, TIOCGETD, (caddr_t)&bsd_line,
 		    td->td_ucred, td);
 		if (error)
-			return (error);
+			break;
 		switch (bsd_line) {
 		case TTYDISC:
 			linux_line = LINUX_N_TTY;
@@ -1026,7 +1046,7 @@ linux_ioctl_termio(struct thread *td, struct linux_ioctl_args *args)
 		break;
 	case LINUX_TIOCGPTN: {
 		int nb;
-		
+
 		error = fo_ioctl(fp, TIOCGPTN, (caddr_t)&nb, td->td_ucred, td);
 		if (!error)
 			error = copyout(&nb, (void *)args->arg,
@@ -1318,7 +1338,7 @@ bsd_to_linux_dvd_struct(struct dvd_struct *bp, l_dvd_struct *lp)
 		lp->manufact.len = bp->length;
 		memcpy(lp->manufact.value, bp->data,
 		    sizeof(lp->manufact.value));
-		/* lp->manufact.layer_num is unused in linux (redhat 7.0) */
+		/* lp->manufact.layer_num is unused in Linux (redhat 7.0). */
 		break;
 	default:
 		return (EINVAL);
@@ -1441,7 +1461,8 @@ linux_ioctl_cdrom(struct thread *td, struct linux_ioctl_args *args)
 	struct file *fp;
 	int error;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	switch (args->cmd & 0xffff) {
 
@@ -1637,9 +1658,32 @@ linux_ioctl_cdrom(struct thread *td, struct linux_ioctl_args *args)
 	}
 
 	case LINUX_SCSI_GET_BUS_NUMBER:
-	case LINUX_SCSI_GET_IDLUN:
-		error = linux_ioctl_sg(td, args);
+	{
+		struct sg_scsi_id id;
+
+		error = fo_ioctl(fp, SG_GET_SCSI_ID, (caddr_t)&id,
+		    td->td_ucred, td);
+		if (error)
+			break;
+		error = copyout(&id.channel, (void *)args->arg, sizeof(int));
 		break;
+	}
+
+	case LINUX_SCSI_GET_IDLUN:
+	{
+		struct sg_scsi_id id;
+		struct scsi_idlun idl;
+
+		error = fo_ioctl(fp, SG_GET_SCSI_ID, (caddr_t)&id,
+		    td->td_ucred, td);
+		if (error)
+			break;
+		idl.dev_id = (id.scsi_id & 0xff) + ((id.lun & 0xff) << 8) +
+		    ((id.channel & 0xff) << 16) + ((id.host_no & 0xff) << 24);
+		idl.host_unique_id = id.host_no;
+		error = copyout(&idl, (void *)args->arg, sizeof(idl));
+		break;
+	}
 
 	/* LINUX_CDROM_SEND_PACKET */
 	/* LINUX_CDROM_NEXT_WRITABLE */
@@ -1664,13 +1708,6 @@ linux_ioctl_vfat(struct thread *td, struct linux_ioctl_args *args)
 /*
  * Sound related ioctls
  */
-
-struct linux_mixer_info {
-	char	id[16];
-	char	name[32];
-	int	modify_counter;
-	int	fillers[10];
-};
 
 struct linux_old_mixer_info {
 	char	id[16];
@@ -1759,12 +1796,8 @@ linux_ioctl_sound(struct thread *td, struct linux_ioctl_args *args)
 		/* Key on encoded length */
 		switch ((args->cmd >> 16) & 0x1fff) {
 		case 0x005c: {	/* SOUND_MIXER_INFO */
-			struct linux_mixer_info info;
-			bzero(&info, sizeof(info));
-			strncpy(info.id, "OSS", sizeof(info.id) - 1);
-			strncpy(info.name, "FreeBSD OSS Mixer", sizeof(info.name) - 1);
-			copyout(&info, (void *)args->arg, sizeof(info));
-			return (0);
+			args->cmd = SOUND_MIXER_INFO;
+			return (sys_ioctl(td, (struct ioctl_args *)args));
 		}
 		case 0x0030: {	/* SOUND_OLD_MIXER_INFO */
 			struct linux_old_mixer_info info;
@@ -1958,15 +1991,14 @@ linux_ioctl_sound(struct thread *td, struct linux_ioctl_args *args)
  * Console related ioctls
  */
 
-#define ISSIGVALID(sig)		((sig) > 0 && (sig) < NSIG)
-
 static int
 linux_ioctl_console(struct thread *td, struct linux_ioctl_args *args)
 {
 	struct file *fp;
 	int error;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	switch (args->cmd & 0xffff) {
 
@@ -2040,8 +2072,16 @@ linux_ioctl_console(struct thread *td, struct linux_ioctl_args *args)
 		struct vt_mode mode;
 		if ((error = copyin((void *)args->arg, &mode, sizeof(mode))))
 			break;
-		if (!ISSIGVALID(mode.frsig) && ISSIGVALID(mode.acqsig))
-			mode.frsig = mode.acqsig;
+		if (LINUX_SIG_VALID(mode.relsig))
+			mode.relsig = linux_to_bsd_signal(mode.relsig);
+		else
+			mode.relsig = 0;
+		if (LINUX_SIG_VALID(mode.acqsig))
+			mode.acqsig = linux_to_bsd_signal(mode.acqsig);
+		else
+			mode.acqsig = 0;
+		/* XXX. Linux ignores frsig and set it to 0. */
+		mode.frsig = 0;
 		if ((error = copyout(&mode, (void *)args->arg, sizeof(mode))))
 			break;
 		args->cmd = VT_SETMODE;
@@ -2084,34 +2124,6 @@ linux_ioctl_console(struct thread *td, struct linux_ioctl_args *args)
 #define IFP_IS_ETH(ifp) (ifp->if_type == IFT_ETHER)
 
 /*
- * Interface function used by linprocfs (at the time of writing). It's not
- * used by the Linuxulator itself.
- */
-int
-linux_ifname(struct ifnet *ifp, char *buffer, size_t buflen)
-{
-	struct ifnet *ifscan;
-	int ethno;
-
-	IFNET_RLOCK_ASSERT();
-
-	/* Short-circuit non ethernet interfaces */
-	if (!IFP_IS_ETH(ifp))
-		return (strlcpy(buffer, ifp->if_xname, buflen));
-
-	/* Determine the (relative) unit number for ethernet interfaces */
-	ethno = 0;
-	TAILQ_FOREACH(ifscan, &V_ifnet, if_link) {
-		if (ifscan == ifp)
-			return (snprintf(buffer, buflen, "eth%d", ethno));
-		if (IFP_IS_ETH(ifscan))
-			ethno++;
-	}
-
-	return (0);
-}
-
-/*
  * Translate a Linux interface name to a FreeBSD interface name,
  * and return the associated ifnet structure
  * bsdname and lxname need to be least IFNAMSIZ bytes long, but
@@ -2138,7 +2150,7 @@ ifname_linux_to_bsd(struct thread *td, const char *lxname, char *bsdname)
 	is_eth = (len == 3 && !strncmp(lxname, "eth", len)) ? 1 : 0;
 	CURVNET_SET(TD_TO_VNET(td));
 	IFNET_RLOCK();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		/*
 		 * Allow Linux programs to use FreeBSD names. Don't presume
 		 * we never have an interface named "eth", so don't make
@@ -2154,6 +2166,49 @@ ifname_linux_to_bsd(struct thread *td, const char *lxname, char *bsdname)
 	if (ifp != NULL)
 		strlcpy(bsdname, ifp->if_xname, IFNAMSIZ);
 	return (ifp);
+}
+
+/*
+ * Implement the SIOCGIFNAME ioctl
+ */
+
+static int
+linux_ioctl_ifname(struct thread *td, struct l_ifreq *uifr)
+{
+	struct l_ifreq ifr;
+	struct ifnet *ifp;
+	int error, ethno, index;
+
+	error = copyin(uifr, &ifr, sizeof(ifr));
+	if (error != 0)
+		return (error);
+
+	CURVNET_SET(TD_TO_VNET(curthread));
+	IFNET_RLOCK();
+	index = 1;	/* ifr.ifr_ifindex starts from 1 */
+	ethno = 0;
+	error = ENODEV;
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+		if (ifr.ifr_ifindex == index) {
+			if (IFP_IS_ETH(ifp))
+				snprintf(ifr.ifr_name, LINUX_IFNAMSIZ,
+				    "eth%d", ethno);
+			else
+				strlcpy(ifr.ifr_name, ifp->if_xname,
+				    LINUX_IFNAMSIZ);
+			error = 0;
+			break;
+		}
+		if (IFP_IS_ETH(ifp))
+			ethno++;
+		index++;
+	}
+	IFNET_RUNLOCK();
+	if (error == 0)
+		error = copyout(&ifr, uifr, sizeof(ifr));
+	CURVNET_RESTORE();
+
+	return (error);
 }
 
 /*
@@ -2185,8 +2240,8 @@ linux_ifconf(struct thread *td, struct ifconf *uifc)
 	if ((l_uintptr_t)ifc.ifc_buf == PTROUT(NULL)) {
 		ifc.ifc_len = 0;
 		IFNET_RLOCK();
-		TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
-			TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+		CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+			CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 				struct sockaddr *sa = ifa->ifa_addr;
 				if (sa->sa_family == AF_INET)
 					ifc.ifc_len += sizeof(ifr);
@@ -2216,7 +2271,7 @@ again:
 
 	/* Return all AF_INET addresses of all interfaces */
 	IFNET_RLOCK();
-	TAILQ_FOREACH(ifp, &V_ifnet, if_link) {
+	CK_STAILQ_FOREACH(ifp, &V_ifnet, if_link) {
 		int addrs = 0;
 
 		bzero(&ifr, sizeof(ifr));
@@ -2227,7 +2282,7 @@ again:
 			strlcpy(ifr.ifr_name, ifp->if_xname, LINUX_IFNAMSIZ);
 
 		/* Walk the address list */
-		TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+		CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 			struct sockaddr *sa = ifa->ifa_addr;
 
 			if (sa->sa_family == AF_INET) {
@@ -2258,7 +2313,7 @@ again:
 		goto again;
 	}
 
-	ifc.ifc_len = valid_len; 
+	ifc.ifc_len = valid_len;
 	sbuf_finish(sb);
 	error = copyout(sbuf_data(sb), PTRIN(ifc.ifc_buf), ifc.ifc_len);
 	if (error == 0)
@@ -2276,7 +2331,7 @@ linux_gifflags(struct thread *td, struct ifnet *ifp, struct l_ifreq *ifr)
 
 	flags = (ifp->if_flags | ifp->if_drv_flags) & 0xffff;
 	/* these flags have no Linux equivalent */
-	flags &= ~(IFF_SMART|IFF_DRV_OACTIVE|IFF_SIMPLEX|
+	flags &= ~(IFF_DRV_OACTIVE|IFF_SIMPLEX|
 	    IFF_LINK0|IFF_LINK1|IFF_LINK2);
 	/* Linux' multicast flag is in a different bit */
 	if (flags & IFF_MULTICAST) {
@@ -2306,7 +2361,7 @@ linux_gifhwaddr(struct ifnet *ifp, struct l_ifreq *ifr)
 	if (ifp->if_type != IFT_ETHER)
 		return (ENOENT);
 
-	TAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
+	CK_STAILQ_FOREACH(ifa, &ifp->if_addrhead, ifa_link) {
 		sdl = (struct sockaddr_dl*)ifa->ifa_addr;
 		if (sdl != NULL && (sdl->sdl_family == AF_LINK) &&
 		    (sdl->sdl_type == IFT_ETHER)) {
@@ -2332,12 +2387,12 @@ bsd_to_linux_ifreq(struct ifreq *arg)
 	struct ifreq ifr;
 	size_t ifr_len = sizeof(struct ifreq);
 	int error;
-	
+
 	if ((error = copyin(arg, &ifr, ifr_len)))
 		return (error);
-	
+
 	*(u_short *)&ifr.ifr_addr = ifr.ifr_addr.sa_family;
-	
+
 	error = copyout(&ifr, arg, ifr_len);
 
 	return (error);
@@ -2358,7 +2413,8 @@ linux_ioctl_socket(struct thread *td, struct linux_ioctl_args *args)
 	ifp = NULL;
 	error = 0;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	type = fp->f_type;
 	fdrop(fp, td);
@@ -2381,6 +2437,7 @@ linux_ioctl_socket(struct thread *td, struct linux_ioctl_args *args)
 	case LINUX_SIOCADDMULTI:
 	case LINUX_SIOCATMARK:
 	case LINUX_SIOCDELMULTI:
+	case LINUX_SIOCGIFNAME:
 	case LINUX_SIOCGIFCONF:
 	case LINUX_SIOCGPGRP:
 	case LINUX_SIOCSPGRP:
@@ -2415,6 +2472,7 @@ linux_ioctl_socket(struct thread *td, struct linux_ioctl_args *args)
 		printf("%s(): ioctl %d on %.*s\n", __func__,
 		    args->cmd & 0xffff, LINUX_IFNAMSIZ, lifname);
 #endif
+		memset(ifname, 0, sizeof(ifname));
 		ifp = ifname_linux_to_bsd(td, lifname, ifname);
 		if (ifp == NULL)
 			return (EINVAL);
@@ -2465,6 +2523,10 @@ linux_ioctl_socket(struct thread *td, struct linux_ioctl_args *args)
 		break;
 
 	/* LINUX_SIOCGSTAMP */
+
+	case LINUX_SIOCGIFNAME:
+		error = linux_ioctl_ifname(td, (struct l_ifreq *)args->arg);
+		break;
 
 	case LINUX_SIOCGIFCONF:
 		error = linux_ifconf(td, (struct ifconf *)args->arg);
@@ -2584,7 +2646,8 @@ linux_ioctl_private(struct thread *td, struct linux_ioctl_args *args)
 	struct file *fp;
 	int error, type;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	type = fp->f_type;
 	fdrop(fp, td);
@@ -2600,25 +2663,123 @@ static int
 linux_ioctl_drm(struct thread *td, struct linux_ioctl_args *args)
 {
 	args->cmd = SETDIR(args->cmd);
-	return sys_ioctl(td, (struct ioctl_args *)args);
+	return (sys_ioctl(td, (struct ioctl_args *)args));
 }
+
+#ifdef COMPAT_LINUX32
+#define CP(src,dst,fld) do { (dst).fld = (src).fld; } while (0)
+#define PTRIN_CP(src,dst,fld) \
+	do { (dst).fld = PTRIN((src).fld); } while (0)
+#define PTROUT_CP(src,dst,fld) \
+	do { (dst).fld = PTROUT((src).fld); } while (0)
+
+static int
+linux_ioctl_sg_io(struct thread *td, struct linux_ioctl_args *args)
+{
+	struct sg_io_hdr io;
+	struct sg_io_hdr32 io32;
+	struct file *fp;
+	int error;
+
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0) {
+		printf("sg_linux_ioctl: fget returned %d\n", error);
+		return (error);
+	}
+
+	if ((error = copyin((void *)args->arg, &io32, sizeof(io32))) != 0)
+		goto out;
+
+	CP(io32, io, interface_id);
+	CP(io32, io, dxfer_direction);
+	CP(io32, io, cmd_len);
+	CP(io32, io, mx_sb_len);
+	CP(io32, io, iovec_count);
+	CP(io32, io, dxfer_len);
+	PTRIN_CP(io32, io, dxferp);
+	PTRIN_CP(io32, io, cmdp);
+	PTRIN_CP(io32, io, sbp);
+	CP(io32, io, timeout);
+	CP(io32, io, flags);
+	CP(io32, io, pack_id);
+	PTRIN_CP(io32, io, usr_ptr);
+	CP(io32, io, status);
+	CP(io32, io, masked_status);
+	CP(io32, io, msg_status);
+	CP(io32, io, sb_len_wr);
+	CP(io32, io, host_status);
+	CP(io32, io, driver_status);
+	CP(io32, io, resid);
+	CP(io32, io, duration);
+	CP(io32, io, info);
+
+	if ((error = fo_ioctl(fp, SG_IO, (caddr_t)&io, td->td_ucred, td)) != 0)
+		goto out;
+
+	CP(io, io32, interface_id);
+	CP(io, io32, dxfer_direction);
+	CP(io, io32, cmd_len);
+	CP(io, io32, mx_sb_len);
+	CP(io, io32, iovec_count);
+	CP(io, io32, dxfer_len);
+	PTROUT_CP(io, io32, dxferp);
+	PTROUT_CP(io, io32, cmdp);
+	PTROUT_CP(io, io32, sbp);
+	CP(io, io32, timeout);
+	CP(io, io32, flags);
+	CP(io, io32, pack_id);
+	PTROUT_CP(io, io32, usr_ptr);
+	CP(io, io32, status);
+	CP(io, io32, masked_status);
+	CP(io, io32, msg_status);
+	CP(io, io32, sb_len_wr);
+	CP(io, io32, host_status);
+	CP(io, io32, driver_status);
+	CP(io, io32, resid);
+	CP(io, io32, duration);
+	CP(io, io32, info);
+
+	error = copyout(&io32, (void *)args->arg, sizeof(io32));
+
+out:
+	fdrop(fp, td);
+	return (error);
+}
+#endif
 
 static int
 linux_ioctl_sg(struct thread *td, struct linux_ioctl_args *args)
 {
-	struct file *fp;
-	u_long cmd;
-	int error;
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0) {
-		printf("sg_linux_ioctl: fget returned %d\n", error);
-		return (error);
+	switch (args->cmd) {
+	case LINUX_SG_GET_VERSION_NUM:
+		args->cmd = SG_GET_VERSION_NUM;
+		break;
+	case LINUX_SG_SET_TIMEOUT:
+		args->cmd = SG_SET_TIMEOUT;
+		break;
+	case LINUX_SG_GET_TIMEOUT:
+		args->cmd = SG_GET_TIMEOUT;
+		break;
+	case LINUX_SG_IO:
+		args->cmd = SG_IO;
+#ifdef COMPAT_LINUX32
+		return (linux_ioctl_sg_io(td, args));
+#endif
+		break;
+	case LINUX_SG_GET_RESERVED_SIZE:
+		args->cmd = SG_GET_RESERVED_SIZE;
+		break;
+	case LINUX_SG_GET_SCSI_ID:
+		args->cmd = SG_GET_SCSI_ID;
+		break;
+	case LINUX_SG_GET_SG_TABLESIZE:
+		args->cmd = SG_GET_SG_TABLESIZE;
+		break;
+	default:
+		return (ENODEV);
 	}
-	cmd = args->cmd;
-
-	error = (fo_ioctl(fp, cmd, (caddr_t)args->arg, td->td_ucred, td));
-	fdrop(fp, td);
-	return (error);
+	return (sys_ioctl(td, (struct ioctl_args *)args));
 }
 
 /*
@@ -2735,7 +2896,7 @@ linux_v4l_clip_copy(void *lvc, struct video_clip **ppvc)
 	linux_to_bsd_v4l_clip(&l_vclip, &vclip);
 	/* XXX: If there can be no concurrency: s/M_NOWAIT/M_WAITOK/ */
 	if ((*ppvc = malloc(sizeof(**ppvc), M_LINUX, M_NOWAIT)) == NULL)
-		return (ENOMEM);    /* XXX: linux has no ENOMEM here */
+		return (ENOMEM);    /* XXX: Linux has no ENOMEM here. */
 	memcpy(*ppvc, &vclip, sizeof(vclip));
 	(*ppvc)->next = NULL;
 	return (0);
@@ -2800,7 +2961,7 @@ linux_v4l_cliplist_copy(struct l_video_window *lvw, struct video_window *vw)
 		vw->clips = NULL;
 		ppvc = &(vw->clips);
 		while (clipcount-- > 0) {
-			if (plvc == 0) {
+			if (plvc == NULL) {
 				error = EFAULT;
 				break;
 			} else {
@@ -2811,7 +2972,7 @@ linux_v4l_cliplist_copy(struct l_video_window *lvw, struct video_window *vw)
 				}
 			}
 			ppvc = &((*ppvc)->next);
-		        plvc = PTRIN(((struct l_video_clip *) plvc)->next);
+			plvc = PTRIN(((struct l_video_clip *) plvc)->next);
 		}
 	} else {
 		/*
@@ -2845,7 +3006,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 	case LINUX_VIDIOCSCHAN:		args->cmd = VIDIOCSCHAN; break;
 
 	case LINUX_VIDIOCGTUNER:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = copyin((void *) args->arg, &l_vtun, sizeof(l_vtun));
 		if (error) {
@@ -2863,7 +3026,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 		return (error);
 
 	case LINUX_VIDIOCSTUNER:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = copyin((void *) args->arg, &l_vtun, sizeof(l_vtun));
 		if (error) {
@@ -2880,7 +3045,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 	case LINUX_VIDIOCCAPTURE:	args->cmd = VIDIOCCAPTURE; break;
 
 	case LINUX_VIDIOCGWIN:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = fo_ioctl(fp, VIDIOCGWIN, &vwin, td->td_ucred, td);
 		if (!error) {
@@ -2892,7 +3059,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 		return (error);
 
 	case LINUX_VIDIOCSWIN:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = copyin((void *) args->arg, &l_vwin, sizeof(l_vwin));
 		if (error) {
@@ -2915,7 +3084,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 		return (error);
 
 	case LINUX_VIDIOCGFBUF:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = fo_ioctl(fp, VIDIOCGFBUF, &vbuf, td->td_ucred, td);
 		if (!error) {
@@ -2927,7 +3098,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 		return (error);
 
 	case LINUX_VIDIOCSFBUF:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = copyin((void *) args->arg, &l_vbuf, sizeof(l_vbuf));
 		if (error) {
@@ -2955,7 +3128,9 @@ linux_ioctl_v4l(struct thread *td, struct linux_ioctl_args *args)
 	case LINUX_VIDIOCGPLAYINFO:	args->cmd = VIDIOCGPLAYINFO; break;
 
 	case LINUX_VIDIOCSMICROCODE:
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = copyin((void *) args->arg, &l_vcode, sizeof(l_vcode));
 		if (error) {
@@ -3009,7 +3184,12 @@ linux_to_bsd_v4l2_standard(struct l_v4l2_standard *lvstd, struct v4l2_standard *
 {
 	vstd->index = lvstd->index;
 	vstd->id = lvstd->id;
-	memcpy(&vstd->name, &lvstd->name, sizeof(*lvstd) - offsetof(struct l_v4l2_standard, name));
+	CTASSERT(sizeof(vstd->name) == sizeof(lvstd->name));
+	memcpy(vstd->name, lvstd->name, sizeof(vstd->name));
+	vstd->frameperiod = lvstd->frameperiod;
+	vstd->framelines = lvstd->framelines;
+	CTASSERT(sizeof(vstd->reserved) == sizeof(lvstd->reserved));
+	memcpy(vstd->reserved, lvstd->reserved, sizeof(vstd->reserved));
 	return (0);
 }
 
@@ -3018,7 +3198,12 @@ bsd_to_linux_v4l2_standard(struct v4l2_standard *vstd, struct l_v4l2_standard *l
 {
 	lvstd->index = vstd->index;
 	lvstd->id = vstd->id;
-	memcpy(&lvstd->name, &vstd->name, sizeof(*lvstd) - offsetof(struct l_v4l2_standard, name));
+	CTASSERT(sizeof(vstd->name) == sizeof(lvstd->name));
+	memcpy(lvstd->name, vstd->name, sizeof(lvstd->name));
+	lvstd->frameperiod = vstd->frameperiod;
+	lvstd->framelines = vstd->framelines;
+	CTASSERT(sizeof(vstd->reserved) == sizeof(lvstd->reserved));
+	memcpy(lvstd->reserved, vstd->reserved, sizeof(lvstd->reserved));
 	return (0);
 }
 
@@ -3083,9 +3268,9 @@ linux_to_bsd_v4l2_format(struct l_v4l2_format *lvf, struct v4l2_format *vf)
 		 * XXX TODO - needs 32 -> 64 bit conversion:
 		 * (unused by webcams?)
 		 */
-		return EINVAL;
+		return (EINVAL);
 	memcpy(&vf->fmt, &lvf->fmt, sizeof(vf->fmt));
-	return 0;
+	return (0);
 }
 
 static int
@@ -3101,9 +3286,9 @@ bsd_to_linux_v4l2_format(struct v4l2_format *vf, struct l_v4l2_format *lvf)
 		 * XXX TODO - needs 32 -> 64 bit conversion:
 		 * (unused by webcams?)
 		 */
-		return EINVAL;
+		return (EINVAL);
 	memcpy(&lvf->fmt, &vf->fmt, sizeof(vf->fmt));
-	return 0;
+	return (0);
 }
 static int
 linux_ioctl_v4l2(struct thread *td, struct linux_ioctl_args *args)
@@ -3122,7 +3307,7 @@ linux_ioctl_v4l2(struct thread *td, struct linux_ioctl_args *args)
 	case LINUX_VIDIOC_RESERVED:
 	case LINUX_VIDIOC_LOG_STATUS:
 		if ((args->cmd & IOC_DIRMASK) != LINUX_IOC_VOID)
-			return ENOIOCTL;
+			return (ENOIOCTL);
 		args->cmd = (args->cmd & 0xffff) | IOC_VOID;
 		break;
 
@@ -3199,7 +3384,9 @@ linux_ioctl_v4l2(struct thread *td, struct linux_ioctl_args *args)
 		error = copyin((void *)args->arg, &l_vformat, sizeof(l_vformat));
 		if (error)
 			return (error);
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error)
 			return (error);
 		if (linux_to_bsd_v4l2_format(&l_vformat, &vformat) != 0)
 			error = EINVAL;
@@ -3222,7 +3409,9 @@ linux_ioctl_v4l2(struct thread *td, struct linux_ioctl_args *args)
 		if (error)
 			return (error);
 		linux_to_bsd_v4l2_standard(&l_vstd, &vstd);
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error)
 			return (error);
 		error = fo_ioctl(fp, VIDIOC_ENUMSTD, (caddr_t)&vstd,
 		    td->td_ucred, td);
@@ -3244,7 +3433,9 @@ linux_ioctl_v4l2(struct thread *td, struct linux_ioctl_args *args)
 				sizeof(struct l_v4l2_input));
 		if (error != 0)
 			return (error);
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
 			return (error);
 		error = fo_ioctl(fp, VIDIOC_ENUMINPUT, (caddr_t)&vinp,
 		    td->td_ucred, td);
@@ -3263,7 +3454,9 @@ linux_ioctl_v4l2(struct thread *td, struct linux_ioctl_args *args)
 		error = copyin((void *)args->arg, &l_vbuf, sizeof(l_vbuf));
 		if (error)
 			return (error);
-		if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error)
 			return (error);
 		linux_to_bsd_v4l2_buffer(&l_vbuf, &vbuf);
 		if ((args->cmd & 0xffff) == LINUX_VIDIOC_QUERYBUF)
@@ -3408,12 +3601,79 @@ linux_ioctl_fbsd_usb(struct thread *td, struct linux_ioctl_args *args)
 	case FBSD_LUSB_SET_TEMPLATE:
 		args->cmd = USB_SET_TEMPLATE;
 		break;
+	case FBSD_LUSB_FS_OPEN_STREAM:
+		args->cmd = USB_FS_OPEN_STREAM;
+		break;
+	case FBSD_LUSB_GET_DEV_PORT_PATH:
+		args->cmd = USB_GET_DEV_PORT_PATH;
+		break;
+	case FBSD_LUSB_GET_POWER_USAGE:
+		args->cmd = USB_GET_POWER_USAGE;
+		break;
 	default:
 		error = ENOIOCTL;
 	}
 	if (error != ENOIOCTL)
 		error = sys_ioctl(td, (struct ioctl_args *)args);
 	return (error);
+}
+
+/*
+ * Some evdev ioctls must be translated.
+ *  - EVIOCGMTSLOTS is a IOC_READ ioctl on Linux although it has input data
+ *    (must be IOC_INOUT on FreeBSD).
+ *  - On Linux, EVIOCGRAB, EVIOCREVOKE and EVIOCRMFF are defined as _IOW with
+ *    an int argument. You don't pass an int pointer to the ioctl(), however,
+ *    but just the int directly. On FreeBSD, they are defined as _IOWINT for
+ *    this to work.
+ */
+static int
+linux_ioctl_evdev(struct thread *td, struct linux_ioctl_args *args)
+{
+	struct file *fp;
+	clockid_t clock;
+	int error;
+
+	args->cmd = SETDIR(args->cmd);
+
+	switch (args->cmd) {
+	case (EVIOCGRAB & ~IOC_DIRMASK) | IOC_IN:
+		args->cmd = EVIOCGRAB;
+		break;
+	case (EVIOCREVOKE & ~IOC_DIRMASK) | IOC_IN:
+		args->cmd = EVIOCREVOKE;
+		break;
+	case (EVIOCRMFF & ~IOC_DIRMASK) | IOC_IN:
+		args->cmd = EVIOCRMFF;
+		break;
+	case EVIOCSCLOCKID: {
+		error = copyin(PTRIN(args->arg), &clock, sizeof(clock));
+		if (error != 0)
+			return (error);
+		if (clock & ~(LINUX_IOCTL_EVDEV_CLK))
+			return (EINVAL);
+		error = linux_to_native_clockid(&clock, clock);
+		if (error != 0)
+			return (error);
+
+		error = fget(td, args->fd,
+		    &cap_ioctl_rights, &fp);
+		if (error != 0)
+			return (error);
+
+		error = fo_ioctl(fp, EVIOCSCLOCKID, &clock, td->td_ucred, td);
+		fdrop(fp, td);
+		return (error);
+	}
+	default:
+		break;
+	}
+
+	if (IOCBASECMD(args->cmd) ==
+	    ((EVIOCGMTSLOTS(0) & ~IOC_DIRMASK) | IOC_OUT))
+		args->cmd = (args->cmd & ~IOC_DIRMASK) | IOC_INOUT;
+
+	return (sys_ioctl(td, (struct ioctl_args *)args));
 }
 
 /*
@@ -3433,7 +3693,8 @@ linux_ioctl(struct thread *td, struct linux_ioctl_args *args)
 		    (unsigned long)args->cmd);
 #endif
 
-	if ((error = fget(td, args->fd, CAP_IOCTL, &fp)) != 0)
+	error = fget(td, args->fd, &cap_ioctl_rights, &fp);
+	if (error != 0)
 		return (error);
 	if ((fp->f_flag & (FREAD|FWRITE)) == 0) {
 		fdrop(fp, td);
@@ -3459,9 +3720,16 @@ linux_ioctl(struct thread *td, struct linux_ioctl_args *args)
 	sx_sunlock(&linux_ioctl_sx);
 	fdrop(fp, td);
 
-	linux_msg(td, "ioctl fd=%d, cmd=0x%x ('%c',%d) is not implemented",
-	    args->fd, (int)(args->cmd & 0xffff),
-	    (int)(args->cmd & 0xff00) >> 8, (int)(args->cmd & 0xff));
+	switch (args->cmd & 0xffff) {
+	case LINUX_BTRFS_IOC_CLONE:
+		return (ENOTSUP);
+
+	default:
+		linux_msg(td, "ioctl fd=%d, cmd=0x%x ('%c',%d) is not implemented",
+		    args->fd, (int)(args->cmd & 0xffff),
+		    (int)(args->cmd & 0xff00) >> 8, (int)(args->cmd & 0xff));
+		break;
+	}
 
 	return (EINVAL);
 }

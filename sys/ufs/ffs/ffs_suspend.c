@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 The FreeBSD Foundation
  * All rights reserved.
  *
@@ -34,6 +36,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/buf.h>
 #include <sys/ioccom.h>
 #include <sys/mount.h>
 #include <sys/vnode.h>
@@ -75,7 +78,7 @@ ffs_susp_suspended(struct mount *mp)
 	sx_assert(&ffs_susp_lock, SA_LOCKED);
 
 	ump = VFSTOUFS(mp);
-	if (ump->um_writesuspended)
+	if ((ump->um_flags & UM_WRITESUSPENDED) != 0)
 		return (1);
 	return (0);
 }
@@ -176,7 +179,6 @@ out:
 static int
 ffs_susp_suspend(struct mount *mp)
 {
-	struct fs *fs;
 	struct ufsmount *ump;
 	int error;
 
@@ -188,7 +190,6 @@ ffs_susp_suspend(struct mount *mp)
 		return (EBUSY);
 
 	ump = VFSTOUFS(mp);
-	fs = ump->um_fs;
 
 	/*
 	 * Make sure the calling thread is permitted to access the mounted
@@ -206,10 +207,12 @@ ffs_susp_suspend(struct mount *mp)
 		return (EPERM);
 #endif
 
-	if ((error = vfs_write_suspend(mp)) != 0)
+	if ((error = vfs_write_suspend(mp, VS_SKIP_UNMOUNT)) != 0)
 		return (error);
 
-	ump->um_writesuspended = 1;
+	UFS_LOCK(ump);
+	ump->um_flags |= UM_WRITESUSPENDED;
+	UFS_UNLOCK(ump);
 
 	return (0);
 }
@@ -236,7 +239,7 @@ ffs_susp_dtor(void *data)
 	KASSERT((mp->mnt_kern_flag & MNTK_SUSPEND) != 0,
 	    ("MNTK_SUSPEND not set"));
 
-	error = ffs_reload(mp, curthread, 1);
+	error = ffs_reload(mp, curthread, FFSR_FORCE | FFSR_UNSUSPEND);
 	if (error != 0)
 		panic("failed to unsuspend writes on %s", fs->fs_fsmnt);
 
@@ -254,7 +257,9 @@ ffs_susp_dtor(void *data)
 
 	vfs_write_resume(mp, 0);
 	vfs_unbusy(mp);
-	ump->um_writesuspended = 0;
+	UFS_LOCK(ump);
+	ump->um_flags &= ~UM_WRITESUSPENDED;
+	UFS_UNLOCK(ump);
 
 	sx_xunlock(&ffs_susp_lock);
 }

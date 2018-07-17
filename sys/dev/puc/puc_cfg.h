@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 Marcel Moolenaar
  * All rights reserved.
  *
@@ -27,7 +29,7 @@
  */
 
 #ifndef _DEV_PUC_CFG_H_
-#define	_DEV_PUC_CFG_H
+#define	_DEV_PUC_CFG_H_
 
 #define	DEFAULT_RCLK	1843200
 

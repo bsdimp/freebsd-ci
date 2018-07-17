@@ -25,12 +25,11 @@
 #
 # $FreeBSD$
 
-.include <bsd.own.mk>
+.include <src.opts.mk>
 
-SUBDIR=		\
-		libatf-c \
-		libatf-c++
+SUBDIR=		libatf-c \
+		libatf-c++ \
 
-.ORDER: ${SUBDIR}
+SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.subdir.mk>

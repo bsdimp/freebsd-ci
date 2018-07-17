@@ -12,10 +12,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_TARGET_NVPTX_H
-#define LLVM_TARGET_NVPTX_H
+#ifndef LLVM_LIB_TARGET_NVPTX_NVPTX_H
+#define LLVM_LIB_TARGET_NVPTX_NVPTX_H
 
 #include "MCTargetDesc/NVPTXBaseInfo.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Value.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -26,6 +27,7 @@
 namespace llvm {
 class NVPTXTargetMachine;
 class FunctionPass;
+class MachineFunctionPass;
 class formatted_raw_ostream;
 
 namespace NVPTXCC {
@@ -39,40 +41,26 @@ enum CondCodes {
 };
 }
 
-inline static const char *NVPTXCondCodeToString(NVPTXCC::CondCodes CC) {
-  switch (CC) {
-  case NVPTXCC::NE:
-    return "ne";
-  case NVPTXCC::EQ:
-    return "eq";
-  case NVPTXCC::LT:
-    return "lt";
-  case NVPTXCC::LE:
-    return "le";
-  case NVPTXCC::GT:
-    return "gt";
-  case NVPTXCC::GE:
-    return "ge";
-  }
-  llvm_unreachable("Unknown condition code");
-}
+FunctionPass *createNVPTXISelDag(NVPTXTargetMachine &TM,
+                                 llvm::CodeGenOpt::Level OptLevel);
+ModulePass *createNVPTXAssignValidGlobalNamesPass();
+ModulePass *createGenericToNVVMPass();
+FunctionPass *createNVVMIntrRangePass(unsigned int SmVersion);
+FunctionPass *createNVVMReflectPass();
+MachineFunctionPass *createNVPTXPrologEpilogPass();
+MachineFunctionPass *createNVPTXReplaceImageHandlesPass();
+FunctionPass *createNVPTXImageOptimizerPass();
+FunctionPass *createNVPTXLowerArgsPass(const NVPTXTargetMachine *TM);
+BasicBlockPass *createNVPTXLowerAllocaPass();
+MachineFunctionPass *createNVPTXPeephole();
 
-FunctionPass *
-createNVPTXISelDag(NVPTXTargetMachine &TM, llvm::CodeGenOpt::Level OptLevel);
-FunctionPass *createLowerStructArgsPass(NVPTXTargetMachine &);
-FunctionPass *createNVPTXReMatPass(NVPTXTargetMachine &);
-FunctionPass *createNVPTXReMatBlockPass(NVPTXTargetMachine &);
-
-bool isImageOrSamplerVal(const Value *, const Module *);
-
-extern Target TheNVPTXTarget32;
-extern Target TheNVPTXTarget64;
+Target &getTheNVPTXTarget32();
+Target &getTheNVPTXTarget64();
 
 namespace NVPTX {
 enum DrvInterface {
   NVCL,
-  CUDA,
-  TEST
+  CUDA
 };
 
 // A field inside TSFlags needs a shift and a mask. The usage is
@@ -118,12 +106,60 @@ enum AddressSpace {
 enum FromType {
   Unsigned = 0,
   Signed,
-  Float
+  Float,
+  Untyped
 };
 enum VecType {
   Scalar = 1,
   V2 = 2,
   V4 = 4
+};
+}
+
+/// PTXCvtMode - Conversion code enumeration
+namespace PTXCvtMode {
+enum CvtMode {
+  NONE = 0,
+  RNI,
+  RZI,
+  RMI,
+  RPI,
+  RN,
+  RZ,
+  RM,
+  RP,
+
+  BASE_MASK = 0x0F,
+  FTZ_FLAG = 0x10,
+  SAT_FLAG = 0x20
+};
+}
+
+/// PTXCmpMode - Comparison mode enumeration
+namespace PTXCmpMode {
+enum CmpMode {
+  EQ = 0,
+  NE,
+  LT,
+  LE,
+  GT,
+  GE,
+  LO,
+  LS,
+  HI,
+  HS,
+  EQU,
+  NEU,
+  LTU,
+  LEU,
+  GTU,
+  GEU,
+  NUM,
+  // NAN is a MACRO
+  NotANumber,
+
+  BASE_MASK = 0xFF,
+  FTZ_FLAG = 0x100
 };
 }
 }

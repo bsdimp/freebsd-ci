@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: MIT-CMU
+ *
  * Mach Operating System
  * Copyright (c) 1991,1990 Carnegie Mellon University
  * All Rights Reserved.
@@ -38,7 +40,7 @@
  */
 
 #ifndef BKPT_INST_TYPE
-#define BKPT_INST_TYPE int
+#define	BKPT_INST_TYPE int
 #endif
 
 struct db_breakpoint {

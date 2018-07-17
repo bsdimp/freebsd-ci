@@ -13,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -45,7 +45,7 @@ __FBSDID("$FreeBSD$");
 #include "memalloc.h"
 #include "mystring.h"
 #include "alias.h"
-#include "options.h"	/* XXX for argptr (should remove?) */
+#include "options.h"
 #include "builtins.h"
 
 #define ATABSIZE 39
@@ -63,64 +63,25 @@ setalias(const char *name, const char *val)
 {
 	struct alias *ap, **app;
 
+	unalias(name);
 	app = hashalias(name);
-	for (ap = *app; ap; ap = ap->next) {
-		if (equal(name, ap->name)) {
-			INTOFF;
-			ckfree(ap->val);
-			/* See HACK below. */
-#ifdef notyet
-			ap->val	= savestr(val);
-#else
-			{
-			size_t len = strlen(val);
-			ap->val = ckmalloc(len + 2);
-			memcpy(ap->val, val, len);
-			ap->val[len] = ' ';
-			ap->val[len+1] = '\0';
-			}
-#endif
-			INTON;
-			return;
-		}
-	}
-	/* not found */
 	INTOFF;
 	ap = ckmalloc(sizeof (struct alias));
 	ap->name = savestr(name);
-	/*
-	 * XXX - HACK: in order that the parser will not finish reading the
-	 * alias value off the input before processing the next alias, we
-	 * dummy up an extra space at the end of the alias.  This is a crock
-	 * and should be re-thought.  The idea (if you feel inclined to help)
-	 * is to avoid alias recursions.  The mechanism used is: when
-	 * expanding an alias, the value of the alias is pushed back on the
-	 * input as a string and a pointer to the alias is stored with the
-	 * string.  The alias is marked as being in use.  When the input
-	 * routine finishes reading the string, it marks the alias not
-	 * in use.  The problem is synchronization with the parser.  Since
-	 * it reads ahead, the alias is marked not in use before the
-	 * resulting token(s) is next checked for further alias sub.  The
-	 * H A C K is that we add a little fluff after the alias value
-	 * so that the string will not be exhausted.  This is a good
-	 * idea ------- ***NOT***
-	 */
-#ifdef notyet
 	ap->val = savestr(val);
-#else /* hack */
-	{
-	size_t len = strlen(val);
-	ap->val = ckmalloc(len + 2);
-	memcpy(ap->val, val, len);
-	ap->val[len] = ' ';	/* fluff */
-	ap->val[len+1] = '\0';
-	}
-#endif
 	ap->flag = 0;
 	ap->next = *app;
 	*app = ap;
 	aliases++;
 	INTON;
+}
+
+static void
+freealias(struct alias *ap)
+{
+	ckfree(ap->name);
+	ckfree(ap->val);
+	ckfree(ap);
 }
 
 static int
@@ -144,9 +105,7 @@ unalias(const char *name)
 			else {
 				INTOFF;
 				*app = ap->next;
-				ckfree(ap->name);
-				ckfree(ap->val);
-				ckfree(ap);
+				freealias(ap);
 				INTON;
 			}
 			aliases--;
@@ -160,19 +119,21 @@ unalias(const char *name)
 static void
 rmaliases(void)
 {
-	struct alias *ap, *tmp;
+	struct alias *ap, **app;
 	int i;
 
 	INTOFF;
 	for (i = 0; i < ATABSIZE; i++) {
-		ap = atab[i];
-		atab[i] = NULL;
-		while (ap) {
-			ckfree(ap->name);
-			ckfree(ap->val);
-			tmp = ap;
-			ap = ap->next;
-			ckfree(tmp);
+		app = &atab[i];
+		while (*app) {
+			ap = *app;
+			if (ap->flag & ALIASINUSE) {
+				*ap->name = '\0';
+				app = &(*app)->next;
+			} else {
+				*app = ap->next;
+				freealias(ap);
+			}
 		}
 	}
 	aliases = 0;
@@ -182,9 +143,11 @@ rmaliases(void)
 struct alias *
 lookupalias(const char *name, int check)
 {
-	struct alias *ap = *hashalias(name);
+	struct alias *ap;
 
-	for (; ap; ap = ap->next) {
+	if (aliases == 0)
+		return (NULL);
+	for (ap = *hashalias(name); ap; ap = ap->next) {
 		if (equal(name, ap->name)) {
 			if (check && (ap->flag & ALIASINUSE))
 				return (NULL);
@@ -207,14 +170,8 @@ comparealiases(const void *p1, const void *p2)
 static void
 printalias(const struct alias *a)
 {
-	char *p;
-
 	out1fmt("%s=", a->name);
-	/* Don't print the space added above. */
-	p = a->val + strlen(a->val) - 1;
-	*p = '\0';
 	out1qstr(a->val);
-	*p = ' ';
 	out1c('\n');
 }
 
@@ -224,6 +181,7 @@ printaliases(void)
 	int i, j;
 	struct alias **sorted, *ap;
 
+	INTOFF;
 	sorted = ckmalloc(aliases * sizeof(*sorted));
 	j = 0;
 	for (i = 0; i < ATABSIZE; i++)
@@ -231,23 +189,29 @@ printaliases(void)
 			if (*ap->name != '\0')
 				sorted[j++] = ap;
 	qsort(sorted, aliases, sizeof(*sorted), comparealiases);
-	for (i = 0; i < aliases; i++)
+	for (i = 0; i < aliases; i++) {
 		printalias(sorted[i]);
+		if (int_pending())
+			break;
+	}
 	ckfree(sorted);
+	INTON;
 }
 
 int
-aliascmd(int argc, char **argv)
+aliascmd(int argc __unused, char **argv __unused)
 {
 	char *n, *v;
 	int ret = 0;
 	struct alias *ap;
 
-	if (argc == 1) {
+	nextopt("");
+
+	if (*argptr == NULL) {
 		printaliases();
 		return (0);
 	}
-	while ((n = *++argv) != NULL) {
+	while ((n = *argptr++) != NULL) {
 		if ((v = strchr(n+1, '=')) == NULL) /* n+1: funny ksh stuff */
 			if ((ap = lookupalias(n, 0)) == NULL) {
 				warning("%s: not found", n);
@@ -285,7 +249,7 @@ hashalias(const char *p)
 {
 	unsigned int hashval;
 
-	hashval = *p << 4;
+	hashval = (unsigned char)*p << 4;
 	while (*p)
 		hashval+= *p++;
 	return &atab[hashval % ATABSIZE];

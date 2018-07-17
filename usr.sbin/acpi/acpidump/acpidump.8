@@ -29,7 +29,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd February 14, 2005
+.Dd July 10, 2018
 .Dt ACPIDUMP 8
 .Os
 .Sh NAME
@@ -103,10 +103,13 @@ utility dumps contents of the following tables:
 .It FACS
 .It FADT
 .It HPET
+.It LPIT
 .It MADT
 .It MCFG
+.It NFIT
 .It RSD PTR
 .It RSDT
+.It WDDT
 .El
 .Pp
 The RSDT contains a pointer to the physical memory address of the FACP
@@ -181,20 +184,20 @@ and was rewritten to use
 for
 .Fx 5.2 .
 .Sh AUTHORS
-.An Doug Rabson Aq dfr@FreeBSD.org
-.An Mitsuru IWASAKI Aq iwasaki@FreeBSD.org
-.An Yasuo YOKOYAMA Aq yokoyama@jp.FreeBSD.org
-.An Nate Lawson Aq njl@FreeBSD.org
+.An Doug Rabson Aq Mt dfr@FreeBSD.org
+.An Mitsuru IWASAKI Aq Mt iwasaki@FreeBSD.org
+.An Yasuo YOKOYAMA Aq Mt yokoyama@jp.FreeBSD.org
+.An Nate Lawson Aq Mt njl@FreeBSD.org
 .Pp
 .An -nosplit
 Some contributions made by
-.An Chitoshi Ohsawa Aq ohsawa@catv1.ccn-net.ne.jp ,
-.An Takayasu IWANASHI Aq takayasu@wendy.a.perfect-liberty.or.jp ,
-.An Yoshihiko SARUMARU Aq mistral@imasy.or.jp ,
-.An Hiroki Sato Aq hrs@FreeBSD.org ,
-.An Michael Lucas Aq mwlucas@blackhelicopters.org
+.An Chitoshi Ohsawa Aq Mt ohsawa@catv1.ccn-net.ne.jp ,
+.An Takayasu IWANASHI Aq Mt takayasu@wendy.a.perfect-liberty.or.jp ,
+.An Yoshihiko SARUMARU Aq Mt mistral@imasy.or.jp ,
+.An Hiroki Sato Aq Mt hrs@FreeBSD.org ,
+.An Michael Lucas Aq Mt mwlucas@blackhelicopters.org
 and
-.An Michael Smith Aq msmith@FreeBSD.org .
+.An Michael Smith Aq Mt msmith@FreeBSD.org .
 .Sh BUGS
 The current implementation does not dump the BOOT structure or
 other miscellaneous tables.

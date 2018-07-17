@@ -26,7 +26,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 28, 2012
+.Dd November 16, 2016
 .Dt VM_PAGE_ALLOC 9
 .Os
 .Sh NAME
@@ -52,8 +52,6 @@ The page returned is inserted into the object, unless
 .Dv VM_ALLOC_NOOBJ
 is specified in the
 .Fa req .
-The page may exist in the vm object cache, in which case it will
-be reactivated instead, moving from the cache into the object page list.
 .Pp
 .Fn vm_page_alloc
 will not sleep.
@@ -89,11 +87,9 @@ than zero.
 .El
 .Pp
 The optional flags are:
-.Bl -tag -width ".Dv VM_ALLOC_IFNOTCACHED"
+.Bl -tag -width ".Dv VM_ALLOC_NOBUSY"
 .It Dv VM_ALLOC_NOBUSY
-The returned page will not have the
-.Dv VPO_BUSY
-flag set.
+The returned page will not be exclusive busy.
 .It Dv VM_ALLOC_NODUMP
 The returned page will not be included in any kernel core dumps
 regardless of whether or not it is mapped in to KVA.
@@ -102,16 +98,8 @@ Do not associate the allocated page with a vm object.
 The
 .Fa object
 argument is ignored.
-.It Dv VM_ALLOC_IFCACHED
-Allocate the page only if it is cached.
-Otherwise, return
-.Dv NULL .
-.It Dv VM_ALLOC_IFNOTCACHED
-Only allocate the page if it is not cached in the
-.Fa object .
-If the page at the specified
-.Fa pindex
-is cached, NULL is returned instead.
+.It Dv VM_ALLOC_SBUSY
+The returned page will be shared busy.
 .It Dv VM_ALLOC_WIRED
 The returned page will be wired.
 .It Dv VM_ALLOC_ZERO
@@ -136,4 +124,4 @@ unless
 is set.
 .Sh AUTHORS
 This manual page was written by
-.An Chad David Aq davidc@acns.ab.ca .
+.An Chad David Aq Mt davidc@acns.ab.ca .

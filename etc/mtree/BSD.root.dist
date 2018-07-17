@@ -10,7 +10,13 @@
     boot
         defaults
         ..
+        dtb
+            overlays              tags=package=runtime
+            ..
+        ..
         firmware
+        ..
+        lua
         ..
         kernel
         ..
@@ -24,21 +30,25 @@
     etc
         X11
         ..
-        atf
+        autofs
         ..
         bluetooth
+        ..
+        cron.d
         ..
         defaults
         ..
         devd
         ..
-        gnats
+        dma
         ..
         gss
         ..
         mail
         ..
         mtree
+        ..
+        newsyslog.conf.d
         ..
         ntp             mode=0700
         ..
@@ -54,22 +64,28 @@
             weekly
             ..
         ..
+        pkg
+        ..
         ppp
+        ..
+        rc.conf.d
         ..
         rc.d
         ..
         security
         ..
-        skel
-        ..
         ssh
         ..
         ssl
+        ..
+        syslog.d
         ..
         zfs
         ..
     ..
     lib
+        casper
+        ..
         geom
         ..
     ..
@@ -80,6 +96,8 @@
     media
     ..
     mnt
+    ..
+    net
     ..
     proc            mode=0555
     ..

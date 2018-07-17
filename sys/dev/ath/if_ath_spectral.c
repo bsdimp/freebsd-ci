@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2013 Adrian Chadd <adrian@FreeBSD.org>
  * All rights reserved.
  *
@@ -43,6 +45,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sysctl.h>
 #include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/errno.h>
 
@@ -53,6 +56,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/socket.h>
  
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_media.h>
 #include <net/if_arp.h>
 #include <net/ethernet.h>		/* XXX for ether_sprintf */
@@ -68,6 +72,7 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/ath/if_athvar.h>
 #include <dev/ath/if_ath_spectral.h>
+#include <dev/ath/if_ath_misc.h>
 
 #include <dev/ath/ath_hal/ah_desc.h>
 
@@ -189,6 +194,10 @@ ath_ioctl_spectral(struct ath_softc *sc, struct ath_diag *ad)
 	if (! ath_hal_spectral_supported(sc->sc_ah))
 		return (EINVAL);
 
+	ATH_LOCK(sc);
+	ath_power_set_power_state(sc, HAL_PM_AWAKE);
+	ATH_UNLOCK(sc);
+
 	if (ad->ad_id & ATH_DIAG_IN) {
 		/*
 		 * Copy in data.
@@ -210,7 +219,7 @@ ath_ioctl_spectral(struct ath_softc *sc, struct ath_diag *ad)
 		 * pointer for us to use below in reclaiming the buffer;
 		 * may want to be more defensive.
 		 */
-		outdata = malloc(outsize, M_TEMP, M_NOWAIT);
+		outdata = malloc(outsize, M_TEMP, M_NOWAIT | M_ZERO);
 		if (outdata == NULL) {
 			error = ENOMEM;
 			goto bad;
@@ -273,6 +282,7 @@ ath_ioctl_spectral(struct ath_softc *sc, struct ath_diag *ad)
 		break;
 		default:
 			error = EINVAL;
+			goto bad;
 	}
 	if (outsize < ad->ad_out_size)
 		ad->ad_out_size = outsize;
@@ -283,6 +293,10 @@ bad:
 		free(indata, M_TEMP);
 	if ((ad->ad_id & ATH_DIAG_DYN) && outdata != NULL)
 		free(outdata, M_TEMP);
+	ATH_LOCK(sc);
+	ath_power_restore_power_state(sc);
+	ATH_UNLOCK(sc);
+
 	return (error);
 }
 

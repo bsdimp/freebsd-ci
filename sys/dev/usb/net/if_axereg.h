@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1997, 1998, 1999, 2000-2003
  *	Bill Paul <wpaul@windriver.com>.  All rights reserved.
  *
@@ -349,7 +351,6 @@ struct axe_softc {
 	uint8_t			sc_phyaddrs[2];
 	uint16_t		sc_pwrcfg;
 	uint16_t		sc_lenmask;
-	int			sc_tx_bufsz;
 };
 
 #define	AXE_IS_178_FAMILY(sc)						  \

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1999 John D. Polstra
  * Copyright (c) 1999,2001 Peter Wemm <peter@FreeBSD.org>
  * All rights reserved.
@@ -40,20 +42,29 @@
  * For ELF, this is done by constructing a separate segment for each set.
  */
 
+#if defined(__powerpc64__)
+/*
+ * Move the symbol pointer from ".text" to ".data" segment, to make
+ * the GCC compiler happy:
+ */
+#define	__MAKE_SET_CONST
+#else
+#define	__MAKE_SET_CONST const
+#endif
+
 /*
  * Private macros, not to be used outside this header file.
  */
 #ifdef __GNUCLIKE___SECTION
-#define __MAKE_SET(set, sym)						\
-	__GLOBL(__CONCAT(__start_set_,set));				\
-	__GLOBL(__CONCAT(__stop_set_,set));				\
-	static void const * const __set_##set##_sym_##sym 		\
-	__section("set_" #set) __used = &sym
+#define __MAKE_SET_QV(set, sym, qv)			\
+	__GLOBL(__CONCAT(__start_set_,set));		\
+	__GLOBL(__CONCAT(__stop_set_,set));		\
+	static void const * qv				\
+	__set_##set##_sym_##sym __section("set_" #set)	\
+	__used = &(sym)
+#define __MAKE_SET(set, sym)	__MAKE_SET_QV(set, sym, __MAKE_SET_CONST)
 #else /* !__GNUCLIKE___SECTION */
-#ifndef lint
 #error this file needs to be ported to your compiler
-#endif /* lint */
-#define __MAKE_SET(set, sym)	extern void const * const (__set_##set##_sym_##sym)
 #endif /* __GNUCLIKE___SECTION */
 
 /*
@@ -61,6 +72,7 @@
  */
 #define TEXT_SET(set, sym)	__MAKE_SET(set, sym)
 #define DATA_SET(set, sym)	__MAKE_SET(set, sym)
+#define DATA_WSET(set, sym)	__MAKE_SET_QV(set, sym, )
 #define BSS_SET(set, sym)	__MAKE_SET(set, sym)
 #define ABS_SET(set, sym)	__MAKE_SET(set, sym)
 #define SET_ENTRY(set, sym)	__MAKE_SET(set, sym)
@@ -68,9 +80,9 @@
 /*
  * Initialize before referring to a given linker set.
  */
-#define SET_DECLARE(set, ptype)						\
-	extern ptype *__CONCAT(__start_set_,set);			\
-	extern ptype *__CONCAT(__stop_set_,set)
+#define SET_DECLARE(set, ptype)					\
+	extern ptype __weak_symbol *__CONCAT(__start_set_,set);	\
+	extern ptype __weak_symbol *__CONCAT(__stop_set_,set)
 
 #define SET_BEGIN(set)							\
 	(&__CONCAT(__start_set_,set))

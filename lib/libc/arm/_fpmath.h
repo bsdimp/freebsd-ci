@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2002, 2003 David Schultz <das@FreeBSD.ORG>
  * All rights reserved.
  *
@@ -26,7 +28,7 @@
  * $FreeBSD$
  */
 
-#if defined(__VFP_FP__)
+#if defined(__VFP_FP__) || defined(__ARM_EABI__)
 #define	_IEEE_WORD_ORDER	_BYTE_ORDER
 #else
 #define	_IEEE_WORD_ORDER	_BIG_ENDIAN

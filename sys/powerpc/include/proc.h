@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (C) 1995, 1996 Wolfgang Solfrank.
  * Copyright (C) 1995, 1996 TooLs GmbH.
  * All rights reserved.
@@ -48,18 +50,30 @@ struct mdproc {
 
 #ifdef __powerpc64__
 #define	KINFO_PROC_SIZE 1088
-#define	KINFO_PROC32_SIZE 768
+#define	KINFO_PROC32_SIZE 816
 #else
-#define	KINFO_PROC_SIZE 768
+#define	KINFO_PROC_SIZE 816
 #endif
 
-#ifdef _KERNEL
 struct syscall_args {
 	u_int code;
 	struct sysent *callp;
 	register_t args[10];
 	int narg;
 };
+
+#ifdef _KERNEL
+
+#include <machine/pcb.h>
+
+/* Get the current kernel thread stack usage. */
+#define	GET_STACK_USAGE(total, used) do {				\
+	struct thread *td = curthread;					\
+	(total) = td->td_kstack_pages * PAGE_SIZE - sizeof(struct pcb);	\
+	(used) = (char *)td->td_kstack +				\
+	    td->td_kstack_pages * PAGE_SIZE -				\
+	    (char *)&td;						\
+} while (0)
 #endif
 
 #endif /* !_MACHINE_PROC_H_ */

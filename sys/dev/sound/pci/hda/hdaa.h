@@ -1,4 +1,6 @@
-/*-7
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2006 Stephane E. Potvin <sepotvin@videotron.ca>
  * Copyright (c) 2006 Ariff Abdullah <ariff@FreeBSD.org>
  * Copyright (c) 2008-2012 Alexander Motin <mav@FreeBSD.org>
@@ -56,7 +58,7 @@
 #define HDAA_QUIRK_IVREF100	(1 << 28)
 #define HDAA_QUIRK_OVREF50	(1 << 29)
 #define HDAA_QUIRK_OVREF80	(1 << 30)
-#define HDAA_QUIRK_OVREF100	(1 << 31)
+#define HDAA_QUIRK_OVREF100	(1U << 31)
 
 #define HDAA_QUIRK_IVREF	(HDAA_QUIRK_IVREF50 | HDAA_QUIRK_IVREF80 | \
 						HDAA_QUIRK_IVREF100)

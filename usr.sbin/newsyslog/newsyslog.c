@@ -79,6 +79,7 @@ __FBSDID("$FreeBSD$");
 #include <libgen.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syslog.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -100,17 +101,22 @@ __FBSDID("$FreeBSD$");
 #define	COMPRESS_SUFFIX_XZ	".xz"
 #endif
 
+#ifndef	COMPRESS_SUFFIX_ZST
+#define	COMPRESS_SUFFIX_ZST	".zst"
+#endif
+
 #define	COMPRESS_SUFFIX_MAXLEN	MAX(MAX(sizeof(COMPRESS_SUFFIX_GZ),sizeof(COMPRESS_SUFFIX_BZ2)),sizeof(COMPRESS_SUFFIX_XZ))
 
 /*
  * Compression types
  */
-#define	COMPRESS_TYPES  4	/* Number of supported compression types */
+#define	COMPRESS_TYPES  5	/* Number of supported compression types */
 
 #define	COMPRESS_NONE	0
 #define	COMPRESS_GZIP	1
 #define	COMPRESS_BZIP2	2
 #define	COMPRESS_XZ	3
+#define COMPRESS_ZSTD	4
 
 /*
  * Bit-values for the 'flags' parsed from a config-file entry.
@@ -126,6 +132,9 @@ __FBSDID("$FreeBSD$");
 #define	CE_CREATE	0x0100	/* Create the log file if it does not exist. */
 #define	CE_NODUMP	0x0200	/* Set 'nodump' on newly created log file. */
 #define	CE_PID2CMD	0x0400	/* Replace PID file with a shell command.*/
+#define	CE_PLAIN0	0x0800	/* Do not compress zero'th history file */
+
+#define	CE_RFC5424	0x0800	/* Use RFC5424 format rotation message */
 
 #define	MIN_PID         5	/* Don't touch pids lower than this */
 #define	MAX_PID		99999	/* was lower, see /usr/include/sys/proc.h */
@@ -143,13 +152,24 @@ struct compress_types {
 	const char *flag;	/* Flag in configuration file */
 	const char *suffix;	/* Compression suffix */
 	const char *path;	/* Path to compression program */
+	char **args;		/* Compression program arguments */
 };
 
+static char f_arg[] = "-f";
+static char q_arg[] = "-q";
+static char rm_arg[] = "--rm";
+static char *gz_args[] ={ NULL, f_arg, NULL, NULL };
+#define bzip2_args gz_args
+#define xz_args gz_args
+static char *zstd_args[] = { NULL, q_arg, rm_arg, NULL, NULL };
+
+#define ARGS_NUM 4
 static const struct compress_types compress_type[COMPRESS_TYPES] = {
-	{ "", "", "" },					/* no compression */
-	{ "Z", COMPRESS_SUFFIX_GZ, _PATH_GZIP },	/* gzip compression */
-	{ "J", COMPRESS_SUFFIX_BZ2, _PATH_BZIP2 },	/* bzip2 compression */
-	{ "X", COMPRESS_SUFFIX_XZ, _PATH_XZ }		/* xz compression */
+	{ "", "", "", NULL},					/* none */
+	{ "Z", COMPRESS_SUFFIX_GZ, _PATH_GZIP, gz_args},	/* gzip */
+	{ "J", COMPRESS_SUFFIX_BZ2, _PATH_BZIP2, bzip2_args},	/* bzip2 */
+	{ "X", COMPRESS_SUFFIX_XZ, _PATH_XZ, xz_args },		/* xz */
+	{ "Y", COMPRESS_SUFFIX_ZST, _PATH_ZSTD, zstd_args }	/* zst */
 };
 
 struct conf_entry {
@@ -241,7 +261,17 @@ static struct ptime_data *timenow; /* The time to use for checking at-fields */
 #define	DAYTIME_LEN	16
 static char daytime[DAYTIME_LEN];/* The current time in human readable form,
 				  * used for rotation-tracking messages. */
+
+/* Another buffer to hold the current time in RFC5424 format. Fractional
+ * seconds are allowed by the RFC, but are not included in the
+ * rotation-tracking messages written by newsyslog and so are not accounted for
+ * in the length below.
+ */
+#define	DAYTIME_RFC5424_LEN	sizeof("YYYY-MM-DDTHH:MM:SS+00:00")
+static char daytime_rfc5424[DAYTIME_RFC5424_LEN];
+
 static char hostname[MAXHOSTNAMELEN]; /* hostname */
+static size_t hostname_shortlen;
 
 static const char *path_syslogpid = _PATH_SYSLOGPID;
 
@@ -280,6 +310,7 @@ static int age_old_log(const char *file);
 static void savelog(char *from, char *to);
 static void createdir(const struct conf_entry *ent, char *dirpart);
 static void createlog(const struct conf_entry *ent);
+static int parse_signal(const char *str);
 
 /*
  * All the following take a parameter of 'int', but expect values in the
@@ -332,13 +363,15 @@ main(int argc, char **argv)
 			printf("Signal all daemon process(es)...\n");
 		SLIST_FOREACH(stmp, &swhead, sw_nextp)
 			do_sigwork(stmp);
-		if (noaction)
-			printf("\tsleep 10\n");
-		else {
-			if (verbose)
-				printf("Pause 10 seconds to allow daemon(s)"
-				    " to close log file(s)\n");
-			sleep(10);
+		if (!(rotatereq && nosignal)) {
+			if (noaction)
+				printf("\tsleep 10\n");
+			else {
+				if (verbose)
+					printf("Pause 10 seconds to allow "
+					    "daemon(s) to close log file(s)\n");
+				sleep(10);
+			}
 		}
 	}
 	/*
@@ -621,13 +654,11 @@ parse_args(int argc, char **argv)
 	timenow = ptime_init(NULL);
 	ptimeset_time(timenow, time(NULL));
 	strlcpy(daytime, ptimeget_ctime(timenow) + 4, DAYTIME_LEN);
+	ptimeget_ctime_rfc5424(timenow, daytime_rfc5424, DAYTIME_RFC5424_LEN);
 
 	/* Let's get our hostname */
 	(void)gethostname(hostname, sizeof(hostname));
-
-	/* Truncate domain */
-	if ((p = strchr(hostname, '.')) != NULL)
-		*p = '\0';
+	hostname_shortlen = strcspn(hostname, ".");
 
 	/* Parse command line options. */
 	while ((ch = getopt(argc, argv, "a:d:f:nrst:vCD:FNPR:S:")) != -1)
@@ -1083,7 +1114,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 		 * at any time, etc).
 		 */
 		if (strcasecmp(DEBUG_MARKER, q) == 0) {
-			q = parse = missing_field(sob(++parse), errline);
+			q = parse = missing_field(sob(parse + 1), errline);
 			parse = son(parse);
 			if (!*parse)
 				warnx("debug line specifies no option:\n%s",
@@ -1096,7 +1127,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 		} else if (strcasecmp(INCLUDE_MARKER, q) == 0) {
 			if (verbose)
 				printf("Found: %s", errline);
-			q = parse = missing_field(sob(++parse), errline);
+			q = parse = missing_field(sob(parse + 1), errline);
 			parse = son(parse);
 			if (!*parse) {
 				warnx("include line missing argument:\n%s",
@@ -1138,7 +1169,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 			defconf_p = working;
 		}
 
-		q = parse = missing_field(sob(++parse), errline);
+		q = parse = missing_field(sob(parse + 1), errline);
 		parse = son(parse);
 		if (!*parse)
 			errx(1, "malformed line (missing fields):\n%s",
@@ -1172,7 +1203,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 			} else
 				working->gid = (gid_t)-1;
 
-			q = parse = missing_field(sob(++parse), errline);
+			q = parse = missing_field(sob(parse + 1), errline);
 			parse = son(parse);
 			if (!*parse)
 				errx(1, "malformed line (missing fields):\n%s",
@@ -1187,7 +1218,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 			errx(1, "error in config file; bad permissions:\n%s",
 			    errline);
 
-		q = parse = missing_field(sob(++parse), errline);
+		q = parse = missing_field(sob(parse + 1), errline);
 		parse = son(parse);
 		if (!*parse)
 			errx(1, "malformed line (missing fields):\n%s",
@@ -1197,7 +1228,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 			errx(1, "error in config file; bad value for count of logs to save:\n%s",
 			    errline);
 
-		q = parse = missing_field(sob(++parse), errline);
+		q = parse = missing_field(sob(parse + 1), errline);
 		parse = son(parse);
 		if (!*parse)
 			errx(1, "malformed line (missing fields):\n%s",
@@ -1215,7 +1246,7 @@ parse_file(FILE *cf, struct cflist *work_p, struct cflist *glob_p,
 
 		working->flags = 0;
 		working->compress = COMPRESS_NONE;
-		q = parse = missing_field(sob(++parse), errline);
+		q = parse = missing_field(sob(parse + 1), errline);
 		parse = son(parse);
 		eol = !*parse;
 		*parse = '\0';
@@ -1257,7 +1288,7 @@ no_trimat:
 		if (eol)
 			q = NULL;
 		else {
-			q = parse = sob(++parse);	/* Optional field */
+			q = parse = sob(parse + 1);	/* Optional field */
 			parse = son(parse);
 			if (!*parse)
 				eol = 1;
@@ -1270,20 +1301,6 @@ no_trimat:
 				working->flags |= CE_BINARY;
 				break;
 			case 'c':
-				/*
-				 * XXX - 	Ick! Ugly! Remove ASAP!
-				 * We want `c' and `C' for "create".  But we
-				 * will temporarily treat `c' as `g', because
-				 * FreeBSD releases <= 4.8 have a typo of
-				 * checking  ('G' || 'c')  for CE_GLOB.
-				 */
-				if (*q == 'c') {
-					warnx("Assuming 'g' for 'c' in flags for line:\n%s",
-					    errline);
-					warnx("The 'c' flag will eventually mean 'CREATE'");
-					working->flags |= CE_GLOB;
-					break;
-				}
 				working->flags |= CE_CREATE;
 				break;
 			case 'd':
@@ -1298,17 +1315,26 @@ no_trimat:
 			case 'n':
 				working->flags |= CE_NOSIGNAL;
 				break;
+			case 'p':
+				working->flags |= CE_PLAIN0;
+				break;
 			case 'r':
 				working->flags |= CE_PID2CMD;
+				break;
+			case 't':
+				working->flags |= CE_RFC5424;
 				break;
 			case 'u':
 				working->flags |= CE_SIGNALGROUP;
 				break;
 			case 'w':
-				/* Depreciated flag - keep for compatibility purposes */
+				/* Deprecated flag - keep for compatibility purposes */
 				break;
 			case 'x':
 				working->compress = COMPRESS_XZ;
+				break;
+			case 'y':
+				working->compress = COMPRESS_ZSTD;
 				break;
 			case 'z':
 				working->compress = COMPRESS_GZIP;
@@ -1317,7 +1343,6 @@ no_trimat:
 				break;
 			case 'f':	/* Used by OpenBSD for "CE_FOLLOW" */
 			case 'm':	/* Used by OpenBSD for "CE_MONITOR" */
-			case 'p':	/* Used by NetBSD  for "CE_PLAIN0" */
 			default:
 				errx(1, "illegal flag in config file -- %c",
 				    *q);
@@ -1327,7 +1352,7 @@ no_trimat:
 		if (eol)
 			q = NULL;
 		else {
-			q = parse = sob(++parse);	/* Optional field */
+			q = parse = sob(parse + 1);	/* Optional field */
 			parse = son(parse);
 			if (!*parse)
 				eol = 1;
@@ -1338,33 +1363,30 @@ no_trimat:
 		if (q && *q) {
 			if (*q == '/')
 				working->pid_cmd_file = strdup(q);
-			else if (isdigit(*q))
+			else if (isalnum(*q))
 				goto got_sig;
-			else
+			else {
 				errx(1,
-			"illegal pid file or signal number in config file:\n%s",
+			"illegal pid file or signal in config file:\n%s",
 				    errline);
+			}
 		}
 		if (eol)
 			q = NULL;
 		else {
-			q = parse = sob(++parse);	/* Optional field */
+			q = parse = sob(parse + 1);	/* Optional field */
 			*(parse = son(parse)) = '\0';
 		}
 
 		working->sig = SIGHUP;
 		if (q && *q) {
-			if (isdigit(*q)) {
-		got_sig:
-				working->sig = atoi(q);
-			} else {
-		err_sig:
+got_sig:
+			working->sig = parse_signal(q);
+			if (working->sig < 1 || working->sig >= sys_nsig) {
 				errx(1,
-				    "illegal signal number in config file:\n%s",
+				    "illegal signal in config file:\n%s",
 				    errline);
 			}
-			if (working->sig < 1 || working->sig >= NSIG)
-				goto err_sig;
 		}
 
 		/*
@@ -1452,16 +1474,27 @@ oldlog_entry_compare(const void *a, const void *b)
  * tm if this is the case; otherwise return false.
  */
 static int
-validate_old_timelog(const struct dirent *dp, const char *logfname, struct tm *tm)
+validate_old_timelog(int fd, const struct dirent *dp, const char *logfname,
+    struct tm *tm)
 {
+	struct stat sb;
 	size_t logfname_len;
 	char *s;
 	int c;
 
 	logfname_len = strlen(logfname);
 
-	if (dp->d_type != DT_REG)
-		return (0);
+	if (dp->d_type != DT_REG) {
+		/*
+		 * Some filesystems (e.g. NFS) don't fill out the d_type field
+		 * and leave it set to DT_UNKNOWN; in this case we must obtain
+		 * the file type ourselves.
+		 */
+		if (dp->d_type != DT_UNKNOWN ||
+		    fstatat(fd, dp->d_name, &sb, AT_SYMLINK_NOFOLLOW) != 0 ||
+		    !S_ISREG(sb.st_mode))
+			return (0);
+	}
 	/* Ignore everything but files with our logfile prefix. */
 	if (strncmp(dp->d_name, logfname, logfname_len) != 0)
 		return (0);
@@ -1480,6 +1513,7 @@ validate_old_timelog(const struct dirent *dp, const char *logfname, struct tm *t
 			    &dp->d_name[logfname_len]);
 		return (0);
 	}
+	memset(tm, 0, sizeof(*tm));
 	if ((s = strptime(&dp->d_name[logfname_len + 1],
 	    timefnamefmt, tm)) == NULL) {
 		/*
@@ -1512,11 +1546,11 @@ validate_old_timelog(const struct dirent *dp, const char *logfname, struct tm *t
 static void
 delete_oldest_timelog(const struct conf_entry *ent, const char *archive_dir)
 {
-	char *logfname, *s, *dir, errbuf[80];
+	char *basebuf, *dirbuf, errbuf[80];
+	const char *base, *dir;
 	int dir_fd, i, logcnt, max_logcnt;
 	struct oldlog_entry *oldlogs;
 	struct dirent *dp;
-	const char *cdir;
 	struct tm tm;
 	DIR *dirp;
 
@@ -1524,19 +1558,19 @@ delete_oldest_timelog(const struct conf_entry *ent, const char *archive_dir)
 	max_logcnt = MAX_OLDLOGS;
 	logcnt = 0;
 
-	if (archive_dir != NULL && archive_dir[0] != '\0')
-		cdir = archive_dir;
-	else
-		if ((cdir = dirname(ent->log)) == NULL)
-			err(1, "dirname()");
-	if ((dir = strdup(cdir)) == NULL)
-		err(1, "strdup()");
+	if (archive_dir != NULL && archive_dir[0] != '\0') {
+		dirbuf = NULL;
+		dir = archive_dir;
+	} else {
+		if ((dirbuf = strdup(ent->log)) == NULL)
+			err(1, "strdup()");
+		dir = dirname(dirbuf);
+	}
 
-	if ((s = basename(ent->log)) == NULL)
-		err(1, "basename()");
-	if ((logfname = strdup(s)) == NULL)
+	if ((basebuf = strdup(ent->log)) == NULL)
 		err(1, "strdup()");
-	if (strcmp(logfname, "/") == 0)
+	base = basename(basebuf);
+	if (strcmp(base, "/") == 0)
 		errx(1, "Invalid log filename - became '/'");
 
 	if (verbose > 2)
@@ -1547,7 +1581,7 @@ delete_oldest_timelog(const struct conf_entry *ent, const char *archive_dir)
 		err(1, "Cannot open log directory '%s'", dir);
 	dir_fd = dirfd(dirp);
 	while ((dp = readdir(dirp)) != NULL) {
-		if (validate_old_timelog(dp, logfname, &tm) == 0)
+		if (validate_old_timelog(dir_fd, dp, base, &tm) == 0)
 			continue;
 
 		/*
@@ -1612,8 +1646,8 @@ delete_oldest_timelog(const struct conf_entry *ent, const char *archive_dir)
 		free(oldlogs[i].fname);
 	}
 	free(oldlogs);
-	free(logfname);
-	free(dir);
+	free(dirbuf);
+	free(basebuf);
 }
 
 /*
@@ -1813,8 +1847,18 @@ do_rotate(const struct conf_entry *ent)
 		else {
 			/* XXX - Ought to be checking for failure! */
 			(void)rename(zfile1, zfile2);
+			change_attrs(zfile2, ent);
+			if (ent->compress && !strlen(logfile_suffix)) {
+				/* compress old rotation */
+				struct zipwork_entry zwork;
+
+				memset(&zwork, 0, sizeof(zwork));
+				zwork.zw_conf = ent;
+				zwork.zw_fsize = sizefile(zfile2);
+				strcpy(zwork.zw_fname, zfile2);
+				do_zipwork(&zwork);
+			}
 		}
-		change_attrs(zfile2, ent);
 	}
 
 	if (ent->numlogs > 0) {
@@ -1863,12 +1907,15 @@ do_rotate(const struct conf_entry *ent)
 	if (ent->pid_cmd_file != NULL)
 		swork = save_sigwork(ent);
 	if (ent->numlogs > 0 && ent->compress > COMPRESS_NONE) {
-		/*
-		 * The zipwork_entry will include a pointer to this
-		 * conf_entry, so the conf_entry should not be freed.
-		 */
-		free_or_keep = KEEP_ENT;
-		save_zipwork(ent, swork, ent->fsize, file1);
+		if (!(ent->flags & CE_PLAIN0) ||
+		    strcmp(&file1[strlen(file1) - 2], ".0") != 0) {
+			/*
+			 * The zipwork_entry will include a pointer to this
+			 * conf_entry, so the conf_entry should not be freed.
+			 */
+			free_or_keep = KEEP_ENT;
+			save_zipwork(ent, swork, ent->fsize, file1);
+		}
 	}
 
 	return (free_or_keep);
@@ -1903,7 +1950,7 @@ do_sigwork(struct sigwork_entry *swork)
 	/*
 	 * Compute the pause between consecutive signals.  Use a longer
 	 * sleep time if we will be sending two signals to the same
-	 * deamon or process-group.
+	 * daemon or process-group.
 	 */
 	secs = 0;
 	nextsig = SLIST_NEXT(swork, sw_nextp);
@@ -1956,8 +2003,8 @@ do_sigwork(struct sigwork_entry *swork)
 		 */
 		if (errno != ESRCH)
 			swork->sw_pidok = 0;
-		warn("can't notify %s, pid %d", swork->sw_pidtype,
-		    (int)swork->sw_pid);
+		warn("can't notify %s, pid %d = %s", swork->sw_pidtype,
+		    (int)swork->sw_pid, swork->sw_fname);
 	} else {
 		if (verbose)
 			printf("Notified %s pid %d = %s\n", swork->sw_pidtype,
@@ -1978,11 +2025,16 @@ do_zipwork(struct zipwork_entry *zwork)
 	int errsav, fcount, zstatus;
 	pid_t pidzip, wpid;
 	char zresult[MAXPATHLEN];
+	char command[BUFSIZ];
+	char **args;
 	int c;
 
 	assert(zwork != NULL);
 	pgm_path = NULL;
 	strlcpy(zresult, zwork->zw_fname, sizeof(zresult));
+	args = calloc(ARGS_NUM, sizeof(*args));
+	if (args == NULL)
+		err(1, "calloc()");
 	if (zwork->zw_conf != NULL &&
 	    zwork->zw_conf->compress > COMPRESS_NONE)
 		for (c = 1; c < COMPRESS_TYPES; c++) {
@@ -1990,6 +2042,12 @@ do_zipwork(struct zipwork_entry *zwork)
 				pgm_path = compress_type[c].path;
 				(void) strlcat(zresult,
 				    compress_type[c].suffix, sizeof(zresult));
+				/* the first argument is always NULL, skip it */
+				for (c = 1; c < ARGS_NUM; c++) {
+					if (compress_type[c].args[c] == NULL)
+						break;
+					args[c] = compress_type[c].args[c];
+				}
 				break;
 			}
 		}
@@ -2003,6 +2061,13 @@ do_zipwork(struct zipwork_entry *zwork)
 	else
 		pgm_name++;
 
+	args[0] = strdup(pgm_name);
+	if (args[0] == NULL)
+		err(1, "strdup()");
+	for (c = 0; args[c] != NULL; c++)
+		;
+	args[c] = zwork->zw_fname;
+
 	if (zwork->zw_swork != NULL && zwork->zw_swork->sw_runcmd == 0 &&
 	    zwork->zw_swork->sw_pidok <= 0) {
 		warnx(
@@ -2012,12 +2077,20 @@ do_zipwork(struct zipwork_entry *zwork)
 		return;
 	}
 
+	strlcpy(command, pgm_path, sizeof(command));
+	for (c = 1; args[c] != NULL; c++) {
+		strlcat(command, " ", sizeof(command));
+		strlcat(command, args[c], sizeof(command));
+	}
 	if (noaction) {
 		printf("\t%s %s\n", pgm_name, zwork->zw_fname);
 		change_attrs(zresult, zwork->zw_conf);
 		return;
 	}
 
+	if (verbose) {
+		printf("Executing: %s\n", command);
+	}
 	fcount = 1;
 	pidzip = fork();
 	while (pidzip < 0) {
@@ -2035,8 +2108,8 @@ do_zipwork(struct zipwork_entry *zwork)
 	}
 	if (!pidzip) {
 		/* The child process executes the compression command */
-		execl(pgm_path, pgm_path, "-f", zwork->zw_fname, (char *)0);
-		err(1, "execl(`%s -f %s')", pgm_path, zwork->zw_fname);
+		execv(pgm_path, (char *const*) args);
+		err(1, "execv(`%s')", command);
 	}
 
 	wpid = waitpid(pidzip, &zstatus, 0);
@@ -2046,16 +2119,21 @@ do_zipwork(struct zipwork_entry *zwork)
 		return;
 	}
 	if (!WIFEXITED(zstatus)) {
-		warnx("`%s -f %s' did not terminate normally", pgm_name,
-		    zwork->zw_fname);
+		warnx("`%s' did not terminate normally", command);
+		free(args[0]);
+		free(args);
 		return;
 	}
 	if (WEXITSTATUS(zstatus)) {
-		warnx("`%s -f %s' terminated with a non-zero status (%d)",
-		    pgm_name, zwork->zw_fname, WEXITSTATUS(zstatus));
+		warnx("`%s' terminated with a non-zero status (%d)", command,
+		    WEXITSTATUS(zstatus));
+		free(args[0]);
+		free(args);
 		return;
 	}
 
+	free(args[0]);
+	free(args);
 	/* Compression was successful, set file attributes on the result. */
 	change_attrs(zresult, zwork->zw_conf);
 }
@@ -2064,7 +2142,7 @@ do_zipwork(struct zipwork_entry *zwork)
  * Save information on any process we need to signal.  Any single
  * process may need to be sent different signal-values for different
  * log files, but usually a single signal-value will cause the process
- * to close and re-open all of it's log files.
+ * to close and re-open all of its log files.
  */
 static struct sigwork_entry *
 save_sigwork(const struct conf_entry *ent)
@@ -2094,7 +2172,7 @@ save_sigwork(const struct conf_entry *ent)
 
 	tmpsiz = sizeof(struct sigwork_entry) + strlen(ent->pid_cmd_file) + 1;
 	stmp = malloc(tmpsiz);
-	
+
 	stmp->sw_runcmd = 0;
 	/* If this is a command to run we just set the flag and run command */
 	if (ent->flags & CE_PID2CMD) {
@@ -2250,15 +2328,40 @@ log_trim(const char *logname, const struct conf_entry *log_ent)
 	xtra = "";
 	if (log_ent->def_cfg)
 		xtra = " using <default> rule";
-	if (log_ent->firstcreate)
-		fprintf(f, "%s %s newsyslog[%d]: logfile first created%s\n",
-		    daytime, hostname, (int) getpid(), xtra);
-	else if (log_ent->r_reason != NULL)
-		fprintf(f, "%s %s newsyslog[%d]: logfile turned over%s%s\n",
-		    daytime, hostname, (int) getpid(), log_ent->r_reason, xtra);
-	else
-		fprintf(f, "%s %s newsyslog[%d]: logfile turned over%s\n",
-		    daytime, hostname, (int) getpid(), xtra);
+	if (log_ent->flags & CE_RFC5424) {
+		if (log_ent->firstcreate) {
+			fprintf(f, "<%d>1 %s %s newsyslog %d - - %s%s\n",
+			    LOG_MAKEPRI(LOG_USER, LOG_INFO),
+			    daytime_rfc5424, hostname, getpid(),
+			    "logfile first created", xtra);
+		} else if (log_ent->r_reason != NULL) {
+			fprintf(f, "<%d>1 %s %s newsyslog %d - - %s%s%s\n",
+			    LOG_MAKEPRI(LOG_USER, LOG_INFO),
+			    daytime_rfc5424, hostname, getpid(),
+			    "logfile turned over", log_ent->r_reason, xtra);
+		} else {
+			fprintf(f, "<%d>1 %s %s newsyslog %d - - %s%s\n",
+			    LOG_MAKEPRI(LOG_USER, LOG_INFO),
+			    daytime_rfc5424, hostname, getpid(),
+			    "logfile turned over", xtra);
+		}
+	} else {
+		if (log_ent->firstcreate)
+			fprintf(f,
+			    "%s %.*s newsyslog[%d]: logfile first created%s\n",
+			    daytime, (int)hostname_shortlen, hostname, getpid(),
+			    xtra);
+		else if (log_ent->r_reason != NULL)
+			fprintf(f,
+			    "%s %.*s newsyslog[%d]: logfile turned over%s%s\n",
+			    daytime, (int)hostname_shortlen, hostname, getpid(),
+			    log_ent->r_reason, xtra);
+		else
+			fprintf(f,
+			    "%s %.*s newsyslog[%d]: logfile turned over%s\n",
+			    daytime, (int)hostname_shortlen, hostname, getpid(),
+			    xtra);
+	}
 	if (fclose(f) == EOF)
 		err(1, "log_trim: fclose");
 	return (0);
@@ -2272,7 +2375,7 @@ sizefile(const char *file)
 
 	if (stat(file, &sb) < 0)
 		return (-1);
-	return (kbytes(dbtob(sb.st_blocks)));
+	return (kbytes(sb.st_size));
 }
 
 /*
@@ -2288,34 +2391,37 @@ mtime_old_timelog(const char *file)
 	time_t t;
 	struct dirent *dp;
 	DIR *dirp;
-	char *s, *logfname, *dir;
+	char *logfname, *logfnamebuf, *dir, *dirbuf;
 
 	t = -1;
 
-	if ((dir = dirname(file)) == NULL) {
-		warn("dirname() of '%s'", file);
+	if ((dirbuf = strdup(file)) == NULL) {
+		warn("strdup() of '%s'", file);
 		return (t);
 	}
-	if ((s = basename(file)) == NULL) {
-		warn("basename() of '%s'", file);
+	dir = dirname(dirbuf);
+	if ((logfnamebuf = strdup(file)) == NULL) {
+		warn("strdup() of '%s'", file);
+		free(dirbuf);
 		return (t);
-	} else if (s[0] == '/') {
-		warnx("Invalid log filename '%s'", s);
-		return (t);
-	} else if ((logfname = strdup(s)) == NULL)
-		err(1, "strdup()");
+	}
+	logfname = basename(logfnamebuf);
+	if (logfname[0] == '/') {
+		warnx("Invalid log filename '%s'", logfname);
+		goto out;
+	}
 
 	if ((dirp = opendir(dir)) == NULL) {
 		warn("Cannot open log directory '%s'", dir);
-		return (t);
+		goto out;
 	}
 	dir_fd = dirfd(dirp);
 	/* Open the archive dir and find the most recent archive of logfname. */
 	while ((dp = readdir(dirp)) != NULL) {
-		if (validate_old_timelog(dp, logfname, &tm) == 0)
+		if (validate_old_timelog(dir_fd, dp, logfname, &tm) == 0)
 			continue;
 
-		if (fstatat(dir_fd, logfname, &sb, 0) == -1) {
+		if (fstatat(dir_fd, dp->d_name, &sb, AT_SYMLINK_NOFOLLOW) == -1) {
 			warn("Cannot stat '%s'", file);
 			continue;
 		}
@@ -2324,6 +2430,9 @@ mtime_old_timelog(const char *file)
 	}
 	closedir(dirp);
 
+out:
+	free(dirbuf);
+	free(logfnamebuf);
 	return (t);
 }
 
@@ -2649,4 +2758,29 @@ change_attrs(const char *fname, const struct conf_entry *ent)
 		if (failed)
 			warn("can't chflags %s NODUMP", fname);
 	}
+}
+
+/*
+ * Parse a signal number or signal name. Returns the signal number parsed or -1
+ * on failure.
+ */
+static int
+parse_signal(const char *str)
+{
+	int sig, i;
+	const char *errstr;
+
+	sig = strtonum(str, 1, sys_nsig - 1, &errstr);
+
+	if (errstr == NULL)
+		return (sig);
+	if (strncasecmp(str, "SIG", 3) == 0)
+		str += 3;
+
+	for (i = 1; i < sys_nsig; i++) {
+		if (strcasecmp(str, sys_signame[i]) == 0)
+			return (i);
+	}
+
+	return (-1);
 }

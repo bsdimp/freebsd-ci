@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990 The Regents of the University of California.
  * All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -33,26 +35,15 @@
  * $FreeBSD$
  */
 
-#include <machine/_align.h>
 
 #ifndef _I386_INCLUDE_PARAM_H_
 #define	_I386_INCLUDE_PARAM_H_
 
+#include <machine/_align.h>
+
 /*
  * Machine dependent constants for Intel 386.
  */
-
-/*
- * Round p (pointer or byte index) up to a correctly-aligned value
- * for all data types (int, long, ...).   The result is unsigned int
- * and must be cast to any desired pointer type.
- */
-#ifndef _ALIGNBYTES
-#define _ALIGNBYTES	(sizeof(int) - 1)
-#endif
-#ifndef _ALIGN
-#define _ALIGN(p)	(((unsigned)(p) + _ALIGNBYTES) & ~_ALIGNBYTES)
-#endif
 
 
 #define __HAVE_ACPI
@@ -75,6 +66,10 @@
 #define MAXCPU		1
 #endif /* SMP || KLD_MODULE */
 
+#ifndef MAXMEMDOM
+#define	MAXMEMDOM	1
+#endif
+
 #define ALIGNBYTES	_ALIGNBYTES
 #define ALIGN(p)	_ALIGN(p)
 /*
@@ -89,7 +84,7 @@
  * CACHE_LINE_SIZE is the compile-time maximum cache line size for an
  * architecture.  It should be used with appropriate caution.
  */
-#define	CACHE_LINE_SHIFT	7
+#define	CACHE_LINE_SHIFT	6
 #define	CACHE_LINE_SIZE		(1 << CACHE_LINE_SHIFT)
 
 #define PAGE_SHIFT	12		/* LOG2(PAGE_SIZE) */
@@ -97,7 +92,7 @@
 #define PAGE_MASK	(PAGE_SIZE-1)
 #define NPTEPG		(PAGE_SIZE/(sizeof (pt_entry_t)))
 
-#ifdef PAE
+#if defined(PAE) || defined(PAE_TABLES)
 #define NPGPTD		4
 #define PDRSHIFT	21		/* LOG2(NBPDR) */
 #define NPGPTD_SHIFT	9
@@ -118,9 +113,14 @@
 #define IOPAGES	2		/* pages of i/o permission bitmap */
 
 #ifndef KSTACK_PAGES
-#define KSTACK_PAGES 2		/* Includes pcb! */
+#define KSTACK_PAGES 4		/* Includes pcb! */
 #endif
 #define KSTACK_GUARD_PAGES 1	/* pages of kstack guard; 0 disables */
+#if KSTACK_PAGES < 4
+#define	TD0_KSTACK_PAGES 4
+#else
+#define	TD0_KSTACK_PAGES KSTACK_PAGES
+#endif
 
 /*
  * Ceiling on amount of swblock kva space, can be changed via
@@ -163,5 +163,7 @@
 #define i386_ptob(x)		((x) << PAGE_SHIFT)
 
 #define	pgtok(x)		((x) * (PAGE_SIZE / 1024))
+
+#define INKERNEL(va)		(TRUE)
 
 #endif /* !_I386_INCLUDE_PARAM_H_ */

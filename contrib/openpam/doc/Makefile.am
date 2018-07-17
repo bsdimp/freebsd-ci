@@ -1,3 +1,3 @@
-# $Id: Makefile.am 320 2006-02-16 20:33:19Z des $
+# $OpenPAM: Makefile.am 938 2017-04-30 21:34:42Z des $
 
 SUBDIRS = man

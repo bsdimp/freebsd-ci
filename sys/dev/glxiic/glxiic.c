@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011 Henrik Brix Andersen <brix@FreeBSD.org>
  * All rights reserved.
  *
@@ -314,7 +316,6 @@ glxiic_attach(device_t dev)
 	struct sysctl_oid *tree;
 	int error, irq, unit;
 	uint32_t irq_map;
-	char tn[32];
 
 	sc = device_get_softc(dev);
 	sc->dev = dev;
@@ -402,20 +403,17 @@ glxiic_attach(device_t dev)
 	tree = device_get_sysctl_tree(dev);
 
 	sc->timeout = GLXIIC_DEFAULT_TIMEOUT;
-	snprintf(tn, sizeof(tn), "dev.glxiic.%d.timeout", unit);
-	TUNABLE_INT_FETCH(tn, &sc->timeout);
 	SYSCTL_ADD_INT(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
-	    "timeout", CTLFLAG_RW | CTLFLAG_TUN, &sc->timeout, 0,
+	    "timeout", CTLFLAG_RWTUN, &sc->timeout, 0,
 	    "activity timeout in ms");
 
 	glxiic_gpio_enable(sc);
 	glxiic_smb_enable(sc, IIC_FASTEST, 0);
 
-	error = bus_generic_attach(dev);
-	if (error != 0) {
-		device_printf(dev, "Could not probe and attach children\n");
-		error = ENXIO;
-	}
+	/* Probe and attach the iicbus when interrupts are available. */
+	config_intrhook_oneshot((ich_func_t)bus_generic_attach, dev);
+	error = 0;
+
 out:
 	if (error != 0) {
 		callout_drain(&sc->callout);
@@ -562,8 +560,8 @@ glxiic_start_timeout_locked(struct glxiic_softc *sc)
 
 	GLXIIC_ASSERT_LOCKED(sc);
 
-	callout_reset(&sc->callout, sc->timeout * 1000 / hz, glxiic_timeout,
-	    sc);
+	callout_reset_sbt(&sc->callout, SBT_1MS * sc->timeout, 0,
+	    glxiic_timeout, sc, 0);
 }
 
 static void
@@ -711,6 +709,7 @@ static int
 glxiic_state_master_addr_callback(struct glxiic_softc *sc, uint8_t status)
 {
 	uint8_t slave;
+	uint8_t ctrl1;
 
 	GLXIIC_ASSERT_LOCKED(sc);
 
@@ -745,6 +744,13 @@ glxiic_state_master_addr_callback(struct glxiic_softc *sc, uint8_t status)
 		glxiic_set_state_locked(sc, GLXIIC_STATE_MASTER_STOP);
 
 	bus_write_1(sc->smb_res, GLXIIC_SMB_SDA, slave);
+
+	if ((sc->msg->flags & IIC_M_RD) != 0 && sc->ndata == 1) {
+		/* Last byte from slave, set NACK. */
+		ctrl1 = bus_read_1(sc->smb_res, GLXIIC_SMB_CTRL1);
+		bus_write_1(sc->smb_res, GLXIIC_SMB_CTRL1,
+		    ctrl1 | GLXIIC_SMB_CTRL1_ACK_BIT);
+	}
 
 	return (IIC_NOERR);
 }
@@ -811,13 +817,6 @@ glxiic_state_master_rx_callback(struct glxiic_softc *sc, uint8_t status)
 		return (IIC_ENOACK);
 	}
 
-	if (sc->ndata == 1) {
-		/* Last byte from slave, set NACK. */
-		ctrl1 = bus_read_1(sc->smb_res, GLXIIC_SMB_CTRL1);
-		bus_write_1(sc->smb_res, GLXIIC_SMB_CTRL1,
-		    ctrl1 | GLXIIC_SMB_CTRL1_ACK_BIT);
-	}
-
 	if ((status & GLXIIC_SMB_STS_STASTR_BIT) != 0) {
 		/* Bus is stalled, clear and wait for data. */
 		bus_write_1(sc->smb_res, GLXIIC_SMB_STS,
@@ -835,6 +834,13 @@ glxiic_state_master_rx_callback(struct glxiic_softc *sc, uint8_t status)
 		/* Proceed with stop on reading last byte. */
 		glxiic_set_state_locked(sc, GLXIIC_STATE_MASTER_STOP);
 		return (glxiic_state_table[sc->state].callback(sc, status));
+	}
+
+	if (sc->ndata == 1) {
+		/* Last byte from slave, set NACK. */
+		ctrl1 = bus_read_1(sc->smb_res, GLXIIC_SMB_CTRL1);
+		bus_write_1(sc->smb_res, GLXIIC_SMB_CTRL1,
+		    ctrl1 | GLXIIC_SMB_CTRL1_ACK_BIT);
 	}
 
 	glxiic_start_timeout_locked(sc);

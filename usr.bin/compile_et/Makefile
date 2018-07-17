@@ -1,14 +1,11 @@
 # $FreeBSD$
 
-.PATH: ${.CURDIR}/../../contrib/com_err
-
-LIBVERS=	${.OBJDIR}/../../kerberos5/lib/libvers/libvers.a
+.PATH: ${SRCTOP}/contrib/com_err
 
 PROG=	compile_et
 SRCS=	compile_et.c parse.y lex.l
-LDADD=	-lroken ${LIBVERS}
-DPADD=	${LIBROKEN} ${LIBVERS}
-CFLAGS+=-I. -I${.CURDIR}/../../contrib/com_err
+LIBADD=	roken vers
+CFLAGS+=-I. -I${SRCTOP}/contrib/com_err
 
 WARNS?=	0
 

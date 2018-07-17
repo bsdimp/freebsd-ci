@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2011-2012 Robert N. M. Watson
  * All rights reserved.
  *
@@ -75,7 +77,7 @@ struct altera_jtag_uart_softc {
 	u_int			*ajus_jtag_missedp;
 };
 
-#define	AJU_TTYNAME	"ttyu"
+#define	AJU_TTYNAME	"ttyj"
 
 /*
  * Flag values for ajus_flags.

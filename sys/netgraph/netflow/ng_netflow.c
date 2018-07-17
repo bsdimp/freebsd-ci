@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2010-2011 Alexander V. Chernikov <melifaro@ipfw.ru>
  * Copyright (c) 2004-2005 Gleb Smirnoff <glebius@FreeBSD.org>
  * Copyright (c) 2001-2003 Roman V. Palagin <romanp@unshadow.net>
@@ -28,20 +30,24 @@
  * $SourceForge: ng_netflow.c,v 1.30 2004/09/05 11:37:43 glebius Exp $
  */
 
-static const char rcs_id[] =
-    "@(#) $FreeBSD$";
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include "opt_inet6.h"
 #include "opt_route.h"
 
 #include <sys/param.h>
 #include <sys/systm.h>
+#include <sys/counter.h>
 #include <sys/kernel.h>
+#include <sys/ktr.h>
 #include <sys/limits.h>
+#include <sys/malloc.h>
 #include <sys/mbuf.h>
 #include <sys/socket.h>
 #include <sys/syslog.h>
 #include <sys/ctype.h>
+#include <vm/uma.h>
 
 #include <net/if.h>
 #include <net/ethernet.h>
@@ -250,15 +256,15 @@ ng_netflow_constructor(node_p node)
 	priv->node = node;
 
 	/* Initialize timeouts to default values */
-	priv->info.nfinfo_inact_t = INACTIVE_TIMEOUT;
-	priv->info.nfinfo_act_t = ACTIVE_TIMEOUT;
+	priv->nfinfo_inact_t = INACTIVE_TIMEOUT;
+	priv->nfinfo_act_t = ACTIVE_TIMEOUT;
 
 	/* Set default config */
 	for (i = 0; i < NG_NETFLOW_MAXIFACES; i++)
 		priv->ifaces[i].info.conf = NG_NETFLOW_CONF_INGRESS;
 
 	/* Initialize callout handle */
-	callout_init(&priv->exp_callout, CALLOUT_MPSAFE);
+	callout_init(&priv->exp_callout, 1);
 
 	/* Allocate memory and set up flow cache */
 	ng_netflow_cache_init(priv);
@@ -475,8 +481,8 @@ ng_netflow_rcvmsg (node_p node, item_p item, hook_p lasthook)
 
 			set = (struct ng_netflow_settimeouts *)msg->data;
 
-			priv->info.nfinfo_inact_t = set->inactive_timeout;
-			priv->info.nfinfo_act_t = set->active_timeout;
+			priv->nfinfo_inact_t = set->inactive_timeout;
+			priv->nfinfo_act_t = set->active_timeout;
 
 			break;
 		    }
@@ -605,7 +611,7 @@ ng_netflow_rcvdata (hook_p hook, item_p item)
 		 */
 		log(LOG_ERR, "ng_netflow: incoming data on export hook!\n");
 		ERROUT(EINVAL);
-	};
+	}
 
 	if (hook == iface->hook) {
 		if ((iface->info.conf & NG_NETFLOW_CONF_INGRESS) == 0)
@@ -822,7 +828,7 @@ ng_netflow_rcvdata (hook_p hook, item_p item)
 			goto bypass;
 
 		/*
-		 * Loop thru IPv6 extended headers to get upper
+		 * Loop through IPv6 extended headers to get upper
 		 * layer header / frag.
 		 */
 		for (;;) {
@@ -895,7 +901,7 @@ loopend:
 #endif
 	/* Just in case of real reallocation in M_CHECK() / m_pullup() */
 	if (m != m_old) {
-		atomic_fetchadd_32(&priv->info.nfinfo_realloc_mbuf, 1);
+		priv->nfinfo_realloc_mbuf++;
 		/* Restore ip/ipv6 pointer */
 		if (ip != NULL)
 			ip = (struct ip *)(mtod(m, caddr_t) + l3_off);
@@ -949,13 +955,13 @@ bypass:
 		if (acct == 0) {
 			/* Accounting failure */
 			if (ip != NULL) {
-				atomic_fetchadd_32(&priv->info.nfinfo_spackets,
-				    1);
-				priv->info.nfinfo_sbytes += m_length(m, NULL);
+				counter_u64_add(priv->nfinfo_spackets, 1);
+				counter_u64_add(priv->nfinfo_sbytes,
+				    m->m_pkthdr.len);
 			} else if (ip6 != NULL) {
-				atomic_fetchadd_32(&priv->info.nfinfo_spackets6,
-				    1);
-				priv->info.nfinfo_sbytes6 += m_length(m, NULL);
+				counter_u64_add(priv->nfinfo_spackets6, 1);
+				counter_u64_add(priv->nfinfo_sbytes6,
+				    m->m_pkthdr.len);
 			}
 		}
 

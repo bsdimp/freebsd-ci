@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2004 Atheros Communications, Inc.
  *
@@ -315,6 +317,7 @@ ar5210WriteAssocid(struct ath_hal *ah, const uint8_t *bssid, uint16_t assocId)
 
 	/* XXX save bssid for possible re-use on reset */
 	OS_MEMCPY(ahp->ah_bssid, bssid, IEEE80211_ADDR_LEN);
+	ahp->ah_associd = assocId;
 	OS_REG_WRITE(ah, AR_BSS_ID0, LE_READ_4(ahp->ah_bssid));
 	OS_REG_WRITE(ah, AR_BSS_ID1, LE_READ_2(ahp->ah_bssid+4) |
 				     ((assocId & 0x3fff)<<AR_BSS_ID1_AID_S));
@@ -549,6 +552,13 @@ ar5210SetDecompMask(struct ath_hal *ah, uint16_t keyidx, int en)
 void
 ar5210SetCoverageClass(struct ath_hal *ah, uint8_t coverageclass, int now)
 {
+}
+
+HAL_STATUS
+ar5210SetQuiet(struct ath_hal *ah, uint32_t period, uint32_t duration,
+    uint32_t next_start, HAL_QUIET_FLAG flags)
+{
+	return HAL_OK;
 }
 
 /*

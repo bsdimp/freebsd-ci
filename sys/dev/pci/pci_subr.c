@@ -1,5 +1,7 @@
 /*-
- * Copyright (c) 2011 Advanced Computing Technologies LLC
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
+ * Copyright (c) 2011 Hudson River Trading LLC
  * Written by: John H. Baldwin <jhb@FreeBSD.org>
  * All rights reserved.
  *
@@ -35,6 +37,7 @@ __FBSDID("$FreeBSD$");
 
 #include <sys/param.h>
 #include <sys/bus.h>
+#include <sys/malloc.h>
 #include <sys/rman.h>
 #include <sys/systm.h>
 
@@ -72,7 +75,7 @@ host_pcib_get_busno(pci_read_config_fn read_config, int bus, int slot, int func,
 		 * For the 450nx chipset, there is a whole bundle of
 		 * things pretending to be host bridges. The MIOC will 
 		 * be seen first and isn't really a pci bridge (the
-		 * actual busses are attached to the PXB's). We need to 
+		 * actual buses are attached to the PXB's). We need to 
 		 * read the registers of the MIOC to figure out the
 		 * bus numbers for the PXB channels.
 		 *
@@ -151,7 +154,7 @@ pcib_child_name(device_t child)
 /*
  * Some Host-PCI bridge drivers know which resource ranges they can
  * decode and should only allocate subranges to child PCI devices.
- * This API provides a way to manage this.  The bridge drive should
+ * This API provides a way to manage this.  The bridge driver should
  * initialize this structure during attach and call
  * pcib_host_res_decodes() on each resource range it decodes.  It can
  * then use pcib_host_res_alloc() and pcib_host_res_adjust() as helper
@@ -177,14 +180,14 @@ pcib_host_res_free(device_t pcib, struct pcib_host_resources *hr)
 }
 
 int
-pcib_host_res_decodes(struct pcib_host_resources *hr, int type, u_long start,
-    u_long end, u_int flags)
+pcib_host_res_decodes(struct pcib_host_resources *hr, int type, rman_res_t start,
+    rman_res_t end, u_int flags)
 {
 	struct resource_list_entry *rle;
 	int rid;
 
 	if (bootverbose)
-		device_printf(hr->hr_pcib, "decoding %d %srange %#lx-%#lx\n",
+		device_printf(hr->hr_pcib, "decoding %d %srange %#jx-%#jx\n",
 		    type, flags & RF_PREFETCHABLE ? "prefetchable ": "", start,
 		    end);
 	rid = resource_list_add_next(&hr->hr_rl, type, start, end,
@@ -200,11 +203,11 @@ pcib_host_res_decodes(struct pcib_host_resources *hr, int type, u_long start,
 
 struct resource *
 pcib_host_res_alloc(struct pcib_host_resources *hr, device_t dev, int type,
-    int *rid, u_long start, u_long end, u_long count, u_int flags)
+    int *rid, rman_res_t start, rman_res_t end, rman_res_t count, u_int flags)
 {
 	struct resource_list_entry *rle;
 	struct resource *r;
-	u_long new_start, new_end;
+	rman_res_t new_start, new_end;
 
 	if (flags & RF_PREFETCHABLE)
 		KASSERT(type == SYS_RES_MEMORY,
@@ -228,8 +231,8 @@ restart:
 		if (((flags & RF_PREFETCHABLE) != 0) !=
 		    ((rle->flags & RLE_PREFETCH) != 0))
 			continue;
-		new_start = ulmax(start, rle->start);
-		new_end = ulmin(end, rle->end);
+		new_start = ummax(start, rle->start);
+		new_end = ummin(end, rle->end);
 		if (new_start > new_end ||
 		    new_start + count - 1 > new_end ||
 		    new_start + count < new_start)
@@ -239,7 +242,7 @@ restart:
 		if (r != NULL) {
 			if (bootverbose)
 				device_printf(hr->hr_pcib,
-			    "allocated type %d (%#lx-%#lx) for rid %x of %s\n",
+			    "allocated type %d (%#jx-%#jx) for rid %x of %s\n",
 				    type, rman_get_start(r), rman_get_end(r),
 				    *rid, pcib_child_name(dev));
 			return (r);
@@ -260,7 +263,7 @@ restart:
 
 int
 pcib_host_res_adjust(struct pcib_host_resources *hr, device_t dev, int type,
-    struct resource *r, u_long start, u_long end)
+    struct resource *r, rman_res_t start, rman_res_t end)
 {
 	struct resource_list_entry *rle;
 
@@ -282,4 +285,102 @@ pcib_host_res_adjust(struct pcib_host_resources *hr, device_t dev, int type,
 	}
 	return (ERANGE);
 }
+
+#ifdef PCI_RES_BUS
+struct pci_domain {
+	int	pd_domain;
+	struct rman pd_bus_rman;
+	TAILQ_ENTRY(pci_domain) pd_link;
+};
+
+static TAILQ_HEAD(, pci_domain) domains = TAILQ_HEAD_INITIALIZER(domains);
+
+/*
+ * Each PCI domain maintains its own resource manager for PCI bus
+ * numbers in that domain.  Domain objects are created on first use.
+ * Host to PCI bridge drivers and PCI-PCI bridge drivers should
+ * allocate their bus ranges from their domain.
+ */
+static struct pci_domain *
+pci_find_domain(int domain)
+{
+	struct pci_domain *d;
+	char buf[64];
+	int error;
+
+	TAILQ_FOREACH(d, &domains, pd_link) {
+		if (d->pd_domain == domain)
+			return (d);
+	}
+
+	snprintf(buf, sizeof(buf), "PCI domain %d bus numbers", domain);
+	d = malloc(sizeof(*d) + strlen(buf) + 1, M_DEVBUF, M_WAITOK | M_ZERO);
+	d->pd_domain = domain;
+	d->pd_bus_rman.rm_start = 0;
+	d->pd_bus_rman.rm_end = PCI_BUSMAX;
+	d->pd_bus_rman.rm_type = RMAN_ARRAY;
+	strcpy((char *)(d + 1), buf);
+	d->pd_bus_rman.rm_descr = (char *)(d + 1);
+	error = rman_init(&d->pd_bus_rman);
+	if (error == 0)
+		error = rman_manage_region(&d->pd_bus_rman, 0, PCI_BUSMAX);
+	if (error)
+		panic("Failed to initialize PCI domain %d rman", domain);
+	TAILQ_INSERT_TAIL(&domains, d, pd_link);
+	return (d);
+}
+
+struct resource *
+pci_domain_alloc_bus(int domain, device_t dev, int *rid, rman_res_t start,
+    rman_res_t end, rman_res_t count, u_int flags)
+{
+	struct pci_domain *d;
+	struct resource *res;
+
+	if (domain < 0 || domain > PCI_DOMAINMAX)
+		return (NULL);
+	d = pci_find_domain(domain);
+	res = rman_reserve_resource(&d->pd_bus_rman, start, end, count, flags,
+	    dev);
+	if (res == NULL)
+		return (NULL);
+
+	rman_set_rid(res, *rid);
+	return (res);
+}
+
+int
+pci_domain_adjust_bus(int domain, device_t dev, struct resource *r,
+    rman_res_t start, rman_res_t end)
+{
+#ifdef INVARIANTS
+	struct pci_domain *d;
+#endif
+
+	if (domain < 0 || domain > PCI_DOMAINMAX)
+		return (EINVAL);
+#ifdef INVARIANTS
+	d = pci_find_domain(domain);
+	KASSERT(rman_is_region_manager(r, &d->pd_bus_rman), ("bad resource"));
+#endif
+	return (rman_adjust_resource(r, start, end));
+}
+
+int
+pci_domain_release_bus(int domain, device_t dev, int rid, struct resource *r)
+{
+#ifdef INVARIANTS
+	struct pci_domain *d;
+#endif
+
+	if (domain < 0 || domain > PCI_DOMAINMAX)
+		return (EINVAL);
+#ifdef INVARIANTS
+	d = pci_find_domain(domain);
+	KASSERT(rman_is_region_manager(r, &d->pd_bus_rman), ("bad resource"));
+#endif
+	return (rman_release_resource(r));
+}
+#endif /* PCI_RES_BUS */
+
 #endif /* NEW_PCIB */

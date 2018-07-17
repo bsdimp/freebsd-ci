@@ -2,11 +2,11 @@
 
 BINDIR?=	/usr/sbin
 
-WPA_DISTDIR?= 		${.CURDIR}/../../../contrib/wpa/
+WPA_DISTDIR?= 		${SRCTOP}/contrib/wpa/
 WPA_SUPPLICANT_DISTDIR?=${WPA_DISTDIR}/wpa_supplicant
 HOSTAPD_DISTDIR?=	${WPA_DISTDIR}/hostapd
 
-.PATH.c:${.CURDIR}/.. \
+.PATH.c:${.CURDIR:H} \
 	${WPA_DISTDIR}/src/ap \
 	${WPA_DISTDIR}/src/common \
 	${WPA_DISTDIR}/src/crypto \
@@ -19,7 +19,8 @@ HOSTAPD_DISTDIR?=	${WPA_DISTDIR}/hostapd
 	${WPA_DISTDIR}/src/radius \
 	${WPA_DISTDIR}/src/rsn_supp \
 	${WPA_DISTDIR}/src/tls \
-	${WPA_DISTDIR}/src/utils
+	${WPA_DISTDIR}/src/utils \
+	${WPA_DISTDIR}/src/wps
 
 CFLAGS+=-I${.CURDIR}
 CFLAGS+=-I${HOSTAPD_DISTDIR}
@@ -29,8 +30,10 @@ CFLAGS+=-I${WPA_DISTDIR}/src/crypto
 CFLAGS+=-I${WPA_DISTDIR}/src/drivers
 CFLAGS+=-I${WPA_DISTDIR}/src/l2_packet
 CFLAGS+=-I${WPA_DISTDIR}/src/utils
+CFLAGS+=-I${WPA_DISTDIR}/src/wps
 
 CFLAGS+= -DCONFIG_CTRL_IFACE
 CFLAGS+= -DCONFIG_CTRL_IFACE_UNIX
+CFLAGS+= -DNEED_AP_MLME
 
 .include <bsd.own.mk>

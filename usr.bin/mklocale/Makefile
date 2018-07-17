@@ -3,6 +3,8 @@
 
 PROG=	mklocale
 SRCS=	yacc.y lex.l y.tab.h
-CFLAGS+= -I. -I${.CURDIR} -I${.CURDIR}/../../lib/libc/locale
+CFLAGS+= -I. -I${.CURDIR} -I${SRCTOP}/lib/libc/locale
+
+NO_WMISSING_VARIABLE_DECLARATIONS=
 
 .include <bsd.prog.mk>

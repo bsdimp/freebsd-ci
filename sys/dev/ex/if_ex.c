@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1996, Javier Martín Rueda (jmrueda@diatel.upm.es)
  * All rights reserved.
  *
@@ -56,6 +58,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/rman.h>
 
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_media.h> 
@@ -570,7 +573,7 @@ ex_start_locked(struct ifnet *ifp)
 			BPF_MTAP(ifp, opkt);
 
 			sc->tx_timeout = 2;
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 			m_freem(opkt);
 		} else {
 			ifp->if_drv_flags |= IFF_DRV_OACTIVE;
@@ -683,12 +686,12 @@ ex_tx_intr(struct ex_softc *sc)
 		sc->tx_head = CSR_READ_2(sc, IO_PORT_REG);
 
 		if (tx_status & TX_OK_bit) {
-			ifp->if_opackets++;
+			if_inc_counter(ifp, IFCOUNTER_OPACKETS, 1);
 		} else {
-			ifp->if_oerrors++;
+			if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		}
 
-		ifp->if_collisions += tx_status & No_Collisions_bits;
+		if_inc_counter(ifp, IFCOUNTER_COLLISIONS, tx_status & No_Collisions_bits);
 	}
 
 	/*
@@ -736,7 +739,7 @@ ex_rx_intr(struct ex_softc *sc)
 			MGETHDR(m, M_NOWAIT, MT_DATA);
 			ipkt = m;
 			if (ipkt == NULL) {
-				ifp->if_iqdrops++;
+				if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 			} else {
 				ipkt->m_pkthdr.rcvif = ifp;
 				ipkt->m_pkthdr.len = pkt_len;
@@ -744,12 +747,11 @@ ex_rx_intr(struct ex_softc *sc)
 
 				while (pkt_len > 0) {
 					if (pkt_len >= MINCLSIZE) {
-						MCLGET(m, M_NOWAIT);
-						if (m->m_flags & M_EXT) {
+						if (MCLGET(m, M_NOWAIT)) {
 							m->m_len = MCLBYTES;
 						} else {
 							m_freem(ipkt);
-							ifp->if_iqdrops++;
+							if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 							goto rx_another;
 						}
 					}
@@ -772,7 +774,7 @@ ex_rx_intr(struct ex_softc *sc)
 						MGET(m->m_next, M_NOWAIT, MT_DATA);
 						if (m->m_next == NULL) {
 							m_freem(ipkt);
-							ifp->if_iqdrops++;
+							if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 							goto rx_another;
 						}
 						m = m->m_next;
@@ -791,10 +793,10 @@ ex_rx_intr(struct ex_softc *sc)
 				EX_UNLOCK(sc);
 				(*ifp->if_input)(ifp, ipkt);
 				EX_LOCK(sc);
-				ifp->if_ipackets++;
+				if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 			}
 		} else {
-			ifp->if_ierrors++;
+			if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
 		}
 		CSR_WRITE_2(sc, HOST_ADDR_REG, sc->rx_head);
 rx_another: ;
@@ -812,7 +814,7 @@ rx_another: ;
 
 
 static int
-ex_ioctl(register struct ifnet *ifp, u_long cmd, caddr_t data)
+ex_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct ex_softc *	sc = ifp->if_softc;
 	struct ifreq *		ifr = (struct ifreq *)data;
@@ -821,12 +823,6 @@ ex_ioctl(register struct ifnet *ifp, u_long cmd, caddr_t data)
 	DODEBUG(Start_End, printf("%s: ex_ioctl: start ", ifp->if_xname););
 
 	switch(cmd) {
-		case SIOCSIFADDR:
-		case SIOCGIFADDR:
-		case SIOCSIFMTU:
-			error = ether_ioctl(ifp, cmd, data);
-			break;
-
 		case SIOCSIFFLAGS:
 			DODEBUG(Start_End, printf("SIOCSIFFLAGS"););
 			EX_LOCK(sc);
@@ -848,8 +844,8 @@ ex_ioctl(register struct ifnet *ifp, u_long cmd, caddr_t data)
 			error = ifmedia_ioctl(ifp, ifr, &sc->ifmedia, cmd);
 			break;
 		default:
-			DODEBUG(Start_End, printf("unknown"););
-			error = EINVAL;
+			error = ether_ioctl(ifp, cmd, data);
+			break;
 	}
 
 	DODEBUG(Start_End, printf("\n%s: ex_ioctl: finish\n", ifp->if_xname););
@@ -870,7 +866,7 @@ ex_setmulti(struct ex_softc *sc)
 
 	count = 0;
 	if_maddr_rlock(ifp);
-	TAILQ_FOREACH(maddr, &ifp->if_multiaddrs, ifma_link) {
+	CK_STAILQ_FOREACH(maddr, &ifp->if_multiaddrs, ifma_link) {
 		if (maddr->ifma_addr->sa_family != AF_LINK)
 			continue;
 		count++;
@@ -904,7 +900,7 @@ ex_setmulti(struct ex_softc *sc)
 		CSR_WRITE_2(sc, IO_PORT_REG, (count + 1) * 6);
 
 		if_maddr_rlock(ifp);
-		TAILQ_FOREACH(maddr, &ifp->if_multiaddrs, ifma_link) {
+		CK_STAILQ_FOREACH(maddr, &ifp->if_multiaddrs, ifma_link) {
 			if (maddr->ifma_addr->sa_family != AF_LINK)
 				continue;
 
@@ -982,7 +978,7 @@ ex_watchdog(void *arg)
 
 		DODEBUG(Status, printf("OIDLE watchdog\n"););
 
-		ifp->if_oerrors++;
+		if_inc_counter(ifp, IFCOUNTER_OERRORS, 1);
 		ex_reset(sc);
 		ex_start_locked(ifp);
 

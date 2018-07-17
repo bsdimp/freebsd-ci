@@ -4,14 +4,14 @@
 
 PROG=	bhyvectl
 SRCS=	bhyvectl.c
+PACKAGE=	bhyve
 
-NO_MAN=
+MAN=	bhyvectl.8
 
-DPADD=	${LIBVMMAPI}
-LDADD=	-lvmmapi
+LIBADD=	vmmapi util
 
 WARNS?=	3
 
-CFLAGS+= -I${.CURDIR}/../../sys/amd64/vmm
+CFLAGS+= -I${SRCTOP}/sys/amd64/vmm
 
 .include <bsd.prog.mk>

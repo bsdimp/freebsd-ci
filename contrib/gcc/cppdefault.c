@@ -33,7 +33,7 @@ Foundation, 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.  */
 #define STANDARD_INCLUDE_COMPONENT 0
 #endif
 
-#if defined (CROSS_COMPILE) && !defined (TARGET_SYSTEM_ROOT)
+#if defined (CROSS_DIRECTORY_STRUCTURE) && !defined (TARGET_SYSTEM_ROOT)
 # undef LOCAL_INCLUDE_DIR
 # undef SYSTEM_INCLUDE_DIR
 # undef STANDARD_INCLUDE_DIR
@@ -48,7 +48,7 @@ const struct default_include cpp_include_defaults[]
 = {
 #ifdef GPLUSPLUS_INCLUDE_DIR
     /* Pick up GNU C++ generic include files.  */
-    { GPLUSPLUS_INCLUDE_DIR, "G++", 1, 1, 0, 0 },
+    { GPLUSPLUS_INCLUDE_DIR, "G++", 1, 1, 1, 0 },
 #endif
 #ifdef GPLUSPLUS_TOOL_INCLUDE_DIR
     /* Pick up GNU C++ target-dependent include files.  */
@@ -56,7 +56,7 @@ const struct default_include cpp_include_defaults[]
 #endif
 #ifdef GPLUSPLUS_BACKWARD_INCLUDE_DIR
     /* Pick up GNU C++ backward and deprecated include files.  */
-    { GPLUSPLUS_BACKWARD_INCLUDE_DIR, "G++", 1, 1, 0, 0 },
+    { GPLUSPLUS_BACKWARD_INCLUDE_DIR, "G++", 1, 1, 1, 0 },
 #endif
 #ifdef LOCAL_INCLUDE_DIR
     /* /usr/local/include comes before the fixincluded header files.  */

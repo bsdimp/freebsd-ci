@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: ISC
+ *
  * Copyright (c) 2002-2009 Sam Leffler, Errno Consulting
  * Copyright (c) 2002-2008 Atheros Communications, Inc.
  *
@@ -24,12 +26,6 @@
 #include "ah_eeprom_v14.h"	/* for CAL_TARGET_POWER_* */
 
 #define	AR5416_MAGIC	0x20065416
-
-enum {
-	HAL_RESET_POWER_ON,
-	HAL_RESET_WARM,
-	HAL_RESET_COLD,
-};
 
 typedef struct {
 	uint16_t	synth_center;
@@ -132,7 +128,12 @@ struct ath_hal_5416 {
 	struct ar5416NfLimits nf_2g;
 	struct ar5416NfLimits nf_5g;
 
+	/*
+	 * TX power configuration related structures
+	 */
 	int		initPDADC;
+	int		ah_ht40PowerIncForPdadc;
+	int16_t		ah_ratesArray[Ar5416RateSize];
 
 	int		ah_need_an_top2_fixup;	/* merlin or later chips that may need this workaround */
 
@@ -298,7 +299,9 @@ extern	HAL_STATUS ar5416ProcRxDesc(struct ath_hal *ah, struct ath_desc *,
 
 extern	HAL_BOOL ar5416Reset(struct ath_hal *ah, HAL_OPMODE opmode,
 		struct ieee80211_channel *chan,
-		HAL_BOOL bChannelChange, HAL_STATUS *status);
+		HAL_BOOL bChannelChange,
+		HAL_RESET_TYPE,
+		HAL_STATUS *status);
 extern	HAL_BOOL ar5416PhyDisable(struct ath_hal *ah);
 extern	HAL_RFGAIN ar5416GetRfgain(struct ath_hal *ah);
 extern	HAL_BOOL ar5416Disable(struct ath_hal *ah);

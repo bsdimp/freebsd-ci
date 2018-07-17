@@ -1,6 +1,8 @@
 /*	$NetBSD: puc.c,v 1.7 2000/07/29 17:43:38 jlam Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND BSD-3-Clause
+ *
  * Copyright (c) 2002 JF Hay.  All rights reserved.
  * Copyright (c) 2000 M. Warner Losh.  All rights reserved.
  *
@@ -67,6 +69,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/bus.h>
 #include <sys/conf.h>
 #include <sys/malloc.h>
+#include <sys/sysctl.h>
 
 #include <machine/bus.h>
 #include <machine/resource.h>
@@ -77,6 +80,11 @@ __FBSDID("$FreeBSD$");
 
 #include <dev/puc/puc_cfg.h>
 #include <dev/puc/puc_bfe.h>
+#include <dev/puc/pucdata.c>
+
+static int puc_msi_disable;
+SYSCTL_INT(_hw_puc, OID_AUTO, msi_disable, CTLFLAG_RDTUN,
+    &puc_msi_disable, 0, "Disable use of MSI interrupts by puc(9)");
 
 static const struct puc_cfg *
 puc_pci_match(device_t dev, const struct puc_cfg *desc)
@@ -120,11 +128,56 @@ puc_pci_probe(device_t dev)
 	return (puc_bfe_probe(dev, desc));
 }
 
+static int
+puc_pci_attach(device_t dev)
+{
+	struct puc_softc *sc;
+	int error, count;
+
+	sc = device_get_softc(dev);
+
+	if (!puc_msi_disable) {
+		count = 1;
+
+		if (pci_alloc_msi(dev, &count) == 0) {
+			sc->sc_msi = 1;
+			sc->sc_irid = 1;
+		}
+	}
+
+	error = puc_bfe_attach(dev);
+
+	if (error != 0 && sc->sc_msi)
+		pci_release_msi(dev);
+
+	return (error);
+}
+
+static int
+puc_pci_detach(device_t dev)
+{
+	struct puc_softc *sc;
+	int error;
+
+	sc = device_get_softc(dev);
+	
+	error = puc_bfe_detach(dev);
+
+	if (error != 0)
+		return (error);
+
+	if (sc->sc_msi)
+		error = pci_release_msi(dev);
+
+	return (error);
+}
+
+
 static device_method_t puc_pci_methods[] = {
     /* Device interface */
     DEVMETHOD(device_probe,		puc_pci_probe),
-    DEVMETHOD(device_attach,		puc_bfe_attach),
-    DEVMETHOD(device_detach,		puc_bfe_detach),
+    DEVMETHOD(device_attach,		puc_pci_attach),
+    DEVMETHOD(device_detach,		puc_pci_detach),
 
     DEVMETHOD(bus_alloc_resource,	puc_bus_alloc_resource),
     DEVMETHOD(bus_release_resource,	puc_bus_release_resource),
@@ -146,3 +199,5 @@ static driver_t puc_pci_driver = {
 };
 
 DRIVER_MODULE(puc, pci, puc_pci_driver, puc_devclass, 0, 0);
+MODULE_PNP_INFO("U16:vendor;U16:device;U16:#;U16:#;D:#", pci, puc,
+    puc_pci_devices, sizeof(puc_pci_devices[0]), nitems(puc_pci_devices) - 1);

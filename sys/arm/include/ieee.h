@@ -1,6 +1,8 @@
 /*	$NetBSD: ieee754.h,v 1.4 2003/10/27 02:30:26 simonb Exp $	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1992, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -91,7 +93,7 @@
 #define	DBL_EXPBITS	11
 #define	DBL_FRACBITS	52
 
-#if defined(__VFP_FP__)
+#if defined(__VFP_FP__) || defined(__ARM_EABI__)
 #define	_IEEE_WORD_ORDER	_BYTE_ORDER
 #else
 #define	_IEEE_WORD_ORDER	_BIG_ENDIAN

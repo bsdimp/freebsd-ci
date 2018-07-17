@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 1996 - 2001 Brian Somers <brian@Awfulhak.org>
  *          based on work by Toshiharu OHNO <tony-o@iij.ad.jp>
  *                           Internet Initiative Japan, Inc (IIJ)
@@ -416,7 +418,7 @@ DialCommand(struct cmdargs const *arg)
 static char *
 strstrword(char *big, const char *little)
 {
-  /* Get the first occurrance of the word ``little'' in ``big'' */
+  /* Get the first occurrence of the word ``little'' in ``big'' */
   char *pos;
   int len;
 
@@ -651,7 +653,7 @@ ShellCommand(struct cmdargs const *arg, int bg)
   if ((shpid = fork()) == 0) {
     int i, fd;
 
-    if ((shell = getenv("SHELL")) == 0)
+    if ((shell = getenv("SHELL")) == NULL)
       shell = _PATH_BSHELL;
 
     timer_TermService();
@@ -2051,7 +2053,7 @@ SetVariable(struct cmdargs const *arg)
       res = 1;
     } else {
       arg->bundle->radius.alive.interval = atoi(argp);
-      if (arg->bundle->radius.alive.interval && !arg->bundle->radius.cfg.file) {
+      if (arg->bundle->radius.alive.interval && !*arg->bundle->radius.cfg.file) {
         log_Printf(LogWARN, "rad_alive requires radius to be configured\n");
 	res = 1;
       } else if (arg->bundle->ncp.ipcp.fsm.state == ST_OPENED) {
@@ -2335,7 +2337,7 @@ SetVariable(struct cmdargs const *arg)
 	   res = 1;
     }
 
-    if (arg->bundle->radius.port_id_type && !arg->bundle->radius.cfg.file) {
+    if (arg->bundle->radius.port_id_type && !*arg->bundle->radius.cfg.file) {
 	    log_Printf(LogWARN, "rad_port_id requires radius to be configured\n");
 	    res = 1;
     }

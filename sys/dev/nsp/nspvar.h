@@ -3,6 +3,8 @@
 /*	$NetBSD$	*/
 
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * [NetBSD for NEC PC-98 series]
  *  Copyright (c) 1998, 1999, 2000, 2001
  *	NetBSD/pc98 porting staff. All rights reserved.
@@ -42,11 +44,6 @@
  *****************************************************************/
 struct nsp_softc {
 	struct scsi_low_softc sc_sclow;		/* generic data */
-
-	bus_space_tag_t sc_iot;
-	bus_space_handle_t sc_ioh;
-	bus_space_tag_t sc_memt;
-	bus_space_handle_t sc_memh;
 
 	int port_rid;
 	int irq_rid;
@@ -89,7 +86,7 @@ struct nsp_targ_info {
 /*****************************************************************
  * Proto
  *****************************************************************/
-int nspprobesubr(bus_space_tag_t, bus_space_handle_t, u_int);
+int nspprobesubr(struct resource *, u_int);
 void nspattachsubr(struct nsp_softc *);
 int nspintr(void *);
 

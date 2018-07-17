@@ -1,5 +1,7 @@
 /* $FreeBSD$ */
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1990, 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -16,7 +18,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -45,6 +47,7 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <net/if.h>
+#include <net/if_var.h>
 #include <net/if_types.h>
 #include <net/if_clone.h>
 #include <net/bpf.h>
@@ -182,7 +185,6 @@ usbpf_clone_create(struct if_clone *ifc, char *name, size_t len, caddr_t params)
 
 	error = ifc_alloc_unit(ifc, &unit);
 	if (error) {
-		ifc_free_unit(ifc, unit);
 		device_printf(ubus->parent, "usbpf: Could not allocate "
 		    "instance\n");
 		return (error);
@@ -221,7 +223,13 @@ usbpf_clone_destroy(struct if_clone *ifc, struct ifnet *ifp)
 	ubus = ifp->if_softc;
 	unit = ifp->if_dunit;
 
+	/*
+	 * Lock USB before clearing the "ifp" pointer, to avoid
+	 * clearing the pointer in the middle of a TAP operation:
+	 */
+	USB_BUS_LOCK(ubus);
 	ubus->ifp = NULL;
+	USB_BUS_UNLOCK(ubus);
 	bpfdetach(ifp);
 	if_detach(ifp);
 	if_free(ifp);
@@ -395,7 +403,7 @@ usbpf_xfertap(struct usb_xfer *xfer, int type)
 	bus = xfer->xroot->bus;
 
 	/* sanity checks */
-	if (bus->ifp == NULL)
+	if (bus->ifp == NULL || bus->ifp->if_bpf == NULL)
 		return;
 	if (!bpf_peers_present(bus->ifp->if_bpf))
 		return;

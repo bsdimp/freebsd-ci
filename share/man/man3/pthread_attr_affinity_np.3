@@ -1,6 +1,5 @@
 .\"-
 .\" Copyright (c) 2010 Xin LI <delphij@FreeBSD.org>
-.\" All rights reserved.
 .\"
 .\" Redistribution and use in source and binary forms, with or without
 .\" modification, are permitted provided that the following conditions
@@ -25,7 +24,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd January 8, 2010
+.Dd June 2, 2016
 .Dt PTHREAD_ATTR_AFFINITY_NP 3
 .Os
 .Sh NAME
@@ -50,7 +49,7 @@ functions allow the manipulation of sets of CPUs available to the specified thre
 Masks of type
 .Ft cpuset_t
 are composed using the
-.Xr CPU_SET 3
+.Dv CPU_SET
 macros.
 The kernel tolerates large sets as long as all CPUs specified
 in the set exist.
@@ -132,9 +131,8 @@ Insufficient memory exists to store the cpuset mask.
 .Xr cpuset 2 ,
 .Xr cpuset_getid 2 ,
 .Xr cpuset_setid 2 ,
-.Xr CPU_SET 3 ,
-.Xr pthread_get_affinity_np 3 ,
-.Xr pthread_set_affinity_np 3
+.Xr pthread_getaffinity_np 3 ,
+.Xr pthread_setaffinity_np 3
 .Sh STANDARDS
 The
 .Nm pthread_attr_getaffinity_np
@@ -157,6 +155,6 @@ The
 and
 .Nm pthread_attr_setaffinity_np
 functions were written by
-.An David Xu Aq davidxu@FreeBSD.org ,
+.An David Xu Aq Mt davidxu@FreeBSD.org ,
 and this manpage was written by
-.An Xin LI Aq delphij@FreeBSD.org .
+.An Xin LI Aq Mt delphij@FreeBSD.org .

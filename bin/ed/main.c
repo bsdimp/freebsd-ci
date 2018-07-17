@@ -350,7 +350,8 @@ next_addr(void)
 				ibufp++;
 				addr_cnt++;
 				second_addr = (c == ';') ? current_addr : 1;
-				addr = addr_last;
+				if ((addr = next_addr()) < 0)
+					addr = addr_last;
 				break;
 			}
 			/* FALLTHROUGH */
@@ -505,7 +506,8 @@ exec_command(void)
 			return ERR;
 		else if (open_sbuf() < 0)
 			return FATAL;
-		if (*fnp && *fnp != '!') strcpy(old_filename, fnp);
+		if (*fnp && *fnp != '!')
+			 strlcpy(old_filename, fnp, PATH_MAX);
 #ifdef BACKWARDS
 		if (*fnp == '\0' && *old_filename == '\0') {
 			errmsg = "no current filename";
@@ -532,7 +534,8 @@ exec_command(void)
 			return ERR;
 		}
 		GET_COMMAND_SUFFIX();
-		if (*fnp) strcpy(old_filename, fnp);
+		if (*fnp)
+			strlcpy(old_filename, fnp, PATH_MAX);
 		printf("%s\n", strip_escapes(old_filename));
 		break;
 	case 'g':
@@ -663,7 +666,7 @@ exec_command(void)
 		GET_COMMAND_SUFFIX();
 		if (!isglobal) clear_undo_stack();
 		if (*old_filename == '\0' && *fnp != '!')
-			strcpy(old_filename, fnp);
+			strlcpy(old_filename, fnp, PATH_MAX);
 #ifdef BACKWARDS
 		if (*fnp == '\0' && *old_filename == '\0') {
 			errmsg = "no current filename";
@@ -797,7 +800,7 @@ exec_command(void)
 			return ERR;
 		GET_COMMAND_SUFFIX();
 		if (*old_filename == '\0' && *fnp != '!')
-			strcpy(old_filename, fnp);
+			strlcpy(old_filename, fnp, PATH_MAX);
 #ifdef BACKWARDS
 		if (*fnp == '\0' && *old_filename == '\0') {
 			errmsg = "no current filename";
@@ -807,7 +810,7 @@ exec_command(void)
 		if ((addr = write_file(*fnp ? fnp : old_filename,
 		    (c == 'W') ? "a" : "w", first_addr, second_addr)) < 0)
 			return ERR;
-		else if (addr == addr_last)
+		else if (addr == addr_last && *fnp != '!')
 			modified = 0;
 		else if (modified && !scripted && n == 'q')
 			gflag = EMOD;
@@ -1354,7 +1357,7 @@ handle_hup(int signo)
 	char *hup = NULL;		/* hup filename */
 	char *s;
 	char ed_hup[] = "ed.hup";
-	int n;
+	size_t n;
 
 	if (!sigactive)
 		quit(1);

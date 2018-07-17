@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Marcel Moolenaar
  *
  * Redistribution and use in source and binary forms, with or without
@@ -79,6 +81,9 @@ static void atpic_ipi(device_t, u_int);
 static void atpic_mask(device_t, u_int);
 static void atpic_unmask(device_t, u_int);
 
+static void atpic_ofw_translate_code(device_t, u_int irq, int code,
+    enum intr_trigger *trig, enum intr_polarity *pol);
+
 static device_method_t atpic_isa_methods[] = {
 	/* Device interface */
 	DEVMETHOD(device_identify, 	atpic_isa_identify),
@@ -94,6 +99,8 @@ static device_method_t atpic_isa_methods[] = {
 	DEVMETHOD(pic_mask,		atpic_mask),
 	DEVMETHOD(pic_unmask,		atpic_unmask),
 
+	DEVMETHOD(pic_translate_code,	atpic_ofw_translate_code),
+
 	{ 0, 0 },
 };
 
@@ -105,12 +112,13 @@ static driver_t atpic_isa_driver = {
 
 static devclass_t atpic_devclass;
 
-DRIVER_MODULE(atpic, isa, atpic_isa_driver, atpic_devclass, 0, 0);
-
 static struct isa_pnp_id atpic_ids[] = {
 	{ 0x0000d041 /* PNP0000 */, "AT interrupt controller" },
 	{ 0 }
 };
+
+DRIVER_MODULE(atpic, isa, atpic_isa_driver, atpic_devclass, 0, 0);
+ISA_PNP_INFO(atpic_ids);
 
 static __inline uint8_t
 atpic_read(struct atpic_softc *sc, int icu, int ofs)
@@ -323,5 +331,36 @@ atpic_unmask(device_t dev, u_int irq)
 	} else {
 		sc->sc_mask[ATPIC_MASTER] &= ~(1 << irq);
 		atpic_write(sc, ATPIC_MASTER, 1, sc->sc_mask[ATPIC_MASTER]);
+	}
+}
+
+static void
+atpic_ofw_translate_code(device_t dev, u_int irq, int code,
+    enum intr_trigger *trig, enum intr_polarity *pol)
+{
+	switch (code) {
+	case 0:
+		/* Active L level */
+		*trig = INTR_TRIGGER_LEVEL;
+		*pol = INTR_POLARITY_LOW;
+		break;
+	case 1:
+		/* Active H level */
+		*trig = INTR_TRIGGER_LEVEL;
+		*pol = INTR_POLARITY_HIGH;
+		break;
+	case 2:
+		/* H to L edge */
+		*trig = INTR_TRIGGER_EDGE;
+		*pol = INTR_POLARITY_LOW;
+		break;
+	case 3:
+		/* L to H edge */
+		*trig = INTR_TRIGGER_EDGE;
+		*pol = INTR_POLARITY_HIGH;
+		break;
+	default:
+		*trig = INTR_TRIGGER_CONFORM;
+		*pol = INTR_POLARITY_CONFORM;
 	}
 }

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2012 Mark Tinguely
  *
  * All rights reserved.
@@ -47,7 +49,9 @@
 #define	VFPSID_SUBVERSION_OFF	16
 #define	VFPSID_SUBVERSION2_MASK	(0x000f0000)	 /* version 1 and 2 */
 #define	VFPSID_SUBVERSION3_MASK	(0x007f0000)	 /* version 3 */
-#define VFP_ARCH3		(0x00030000)
+#define	VFP_ARCH1		0x0
+#define	VFP_ARCH2		0x1
+#define	VFP_ARCH3		0x2
 #define	VFPSID_PARTNUMBER_OFF	8
 #define	VFPSID_PARTNUMBER_MASK	(0x0000ff00)
 #define	VFPSID_VARIANT_OFF	4
@@ -90,6 +94,12 @@
 /* VFPEXC */
 #define	VFPEXC_EX 		(0x80000000)	/* exception v1 v2 */
 #define	VFPEXC_EN		(0x40000000)	/* vfp enable */
+#define	VFPEXC_DEX		(0x20000000)	/* Synchronous exception */
+#define	VFPEXC_FP2V		(0x10000000)	/* FPINST2 valid */
+#define	VFPEXC_INV		(0x00000080)	/* Input exception */
+#define	VFPEXC_UFC		(0x00000008)	/* Underflow exception */
+#define	VFPEXC_OFC		(0x00000004)	/* Overflow exception */
+#define	VFPEXC_IOC		(0x00000001)	/* Invlaid operation */
 
 /* version 3 registers */
 /* VMVFR0 */
@@ -111,6 +121,12 @@
 #define	VMVFR0_RB_MASK		(0x0000000f)	/* VFP 64 bit media support */
 
 /* VMVFR1 */
+#define	VMVFR1_FMAC_OFF		28
+#define	VMVFR1_FMAC_MASK 	(0xf0000000)	/* Neon FMAC support */
+#define	VMVFR1_VFP_HP_OFF	24
+#define	VMVFR1_VFP_HP_MASK 	(0x0f000000)	/* VFP half prec support */
+#define	VMVFR1_HP_OFF		20
+#define	VMVFR1_HP_MASK 		(0x00f00000)	/* Neon half prec support */
 #define	VMVFR1_SP_OFF		16
 #define	VMVFR1_SP_MASK 		(0x000f0000)	/* Neon single prec support */
 #define VMVFR1_I_OFF		12
@@ -124,6 +140,22 @@
 #define COPROC10		(0x3 << 20)
 #define COPROC11		(0x3 << 22)
 
+#ifndef LOCORE
+struct vfp_state {
+	uint64_t reg[32];
+	uint32_t fpscr;
+	uint32_t fpexec;
+	uint32_t fpinst;
+	uint32_t fpinst2;
+};
+
+#ifdef _KERNEL
+void	get_vfpcontext(struct thread *, mcontext_vfp_t *);
+void	set_vfpcontext(struct thread *, mcontext_vfp_t *);
 void    vfp_init(void);
+void    vfp_store(struct vfp_state *, boolean_t);
+void    vfp_discard(struct thread *);
+#endif	/* _KERNEL */
+#endif	/* LOCORE */
 
 #endif

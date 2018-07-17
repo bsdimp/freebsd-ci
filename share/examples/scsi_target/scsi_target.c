@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * SCSI Disk Emulator
  *
  * Copyright (c) 2002 Nate Lawson.
@@ -365,7 +367,7 @@ init_ccbs()
 	for (i = 0; i < MAX_INITIATORS; i++) {
 		struct ccb_accept_tio *atio;
 		struct atio_descr *a_descr;
-		struct ccb_immed_notify *inot;
+		struct ccb_immediate_notify *inot;
 
 		atio = (struct ccb_accept_tio *)malloc(sizeof(*atio));
 		if (atio == NULL) {
@@ -382,7 +384,7 @@ init_ccbs()
 		atio->ccb_h.targ_descr = a_descr;
 		send_ccb((union ccb *)atio, /*priority*/1);
 
-		inot = (struct ccb_immed_notify *)malloc(sizeof(*inot));
+		inot = (struct ccb_immediate_notify *)malloc(sizeof(*inot));
 		if (inot == NULL) {
 			warn("malloc INOT");
 			return (-1);
@@ -593,7 +595,7 @@ handle_read()
 			oo += run_queue(c_descr->atio);
 			break;
 		}
-		case XPT_IMMED_NOTIFY:
+		case XPT_IMMEDIATE_NOTIFY:
 			/* INOTs are handled with priority */
 			TAILQ_INSERT_HEAD(&work_queue, &ccb->ccb_h,
 					  periph_links.tqe);
@@ -903,7 +905,7 @@ free_ccb(union ccb *ccb)
 	case XPT_ACCEPT_TARGET_IO:
 		free(ccb->ccb_h.targ_descr);
 		/* FALLTHROUGH */
-	case XPT_IMMED_NOTIFY:
+	case XPT_IMMEDIATE_NOTIFY:
 	default:
 		free(ccb);
 		break;

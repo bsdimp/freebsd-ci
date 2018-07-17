@@ -11,7 +11,7 @@
 .\" 2. Redistributions in binary form must reproduce the above copyright
 .\"    notice, this list of conditions and the following disclaimer in the
 .\"    documentation and/or other materials provided with the distribution.
-.\" 4. Neither the name of the University nor the names of its contributors
+.\" 3. Neither the name of the University nor the names of its contributors
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .\"
@@ -30,7 +30,7 @@
 .\"     @(#)ffs.3	8.2 (Berkeley) 4/19/94
 .\" $FreeBSD$
 .\"
-.Dd September 29, 2012
+.Dd October 17, 2015
 .Dt FFS 3
 .Os
 .Sh NAME
@@ -81,7 +81,8 @@ Bits are numbered starting at 1, the least significant bit.
 A return value of zero from any of these functions means that the
 argument was zero.
 .Sh SEE ALSO
-.Xr bitstring 3
+.Xr bitstring 3 ,
+.Xr bitset 9
 .Sh HISTORY
 The
 .Fn ffs

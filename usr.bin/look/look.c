@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -13,7 +15,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -59,6 +61,7 @@ __FBSDID("$FreeBSD$");
 #include <err.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <limits.h>
 #include <locale.h>
 #include <stdint.h>
@@ -88,6 +91,14 @@ static void	 print_from(wchar_t *, unsigned char *, unsigned char *);
 
 static void usage(void);
 
+static struct option longopts[] = {
+	{ "alternative",no_argument,	NULL, 'a' },
+	{ "alphanum",	no_argument,	NULL, 'd' },
+	{ "ignore-case",no_argument,	NULL, 'i' },
+	{ "terminate",	required_argument, NULL, 't'},
+	{ NULL,		0,		NULL, 0 },
+};
+
 int
 main(int argc, char *argv[])
 {
@@ -102,8 +113,11 @@ main(int argc, char *argv[])
 
 	file = _path_words;
 	termchar = L'\0';
-	while ((ch = getopt(argc, argv, "dft:")) != -1)
+	while ((ch = getopt_long(argc, argv, "+adft:", longopts, NULL)) != -1)
 		switch(ch) {
+		case 'a':
+			/* COMPATIBILITY */
+			break;
 		case 'd':
 			dflag = 1;
 			break;

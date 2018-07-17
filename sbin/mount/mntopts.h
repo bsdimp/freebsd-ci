@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1994
  *      The Regents of the University of California.  All rights reserved.
  *
@@ -10,7 +12,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 4. Neither the name of the University nor the names of its contributors
+ * 3. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -33,7 +35,7 @@
 struct mntopt {
 	const char *m_option;	/* option name */
 	int m_inverse;		/* if a negative option, e.g. "atime" */
-	int m_flag;		/* bit to set, e.g. MNT_RDONLY */
+	long long m_flag;	/* bit to set, e.g. MNT_RDONLY */
 	int m_altloc;		/* 1 => set bit in altflags */
 };
 
@@ -55,6 +57,7 @@ struct mntopt {
 #define MOPT_MULTILABEL		{ "multilabel",	0, MNT_MULTILABEL, 0 }
 #define MOPT_ACLS		{ "acls",	0, MNT_ACLS, 0 }
 #define MOPT_NFS4ACLS		{ "nfsv4acls",	0, MNT_NFS4ACLS, 0 }
+#define MOPT_AUTOMOUNTED	{ "automounted",0, MNT_AUTOMOUNTED, 0 }
 
 /* Control flags. */
 #define MOPT_FORCE		{ "force",	0, MNT_FORCE, 0 }
@@ -89,7 +92,8 @@ struct mntopt {
 	MOPT_NOCLUSTERW,						\
 	MOPT_MULTILABEL,						\
 	MOPT_ACLS,							\
-	MOPT_NFS4ACLS
+	MOPT_NFS4ACLS,							\
+	MOPT_AUTOMOUNTED
 
 void getmntopts(const char *, const struct mntopt *, int *, int *);
 void rmslashes(char *, char *);
@@ -97,3 +101,4 @@ int checkpath(const char *, char resolved_path[]);
 extern int getmnt_silent;
 void build_iovec(struct iovec **iov, int *iovlen, const char *name, void *val, size_t len);
 void build_iovec_argf(struct iovec **iov, int *iovlen, const char *name, const char *fmt, ...);
+void free_iovec(struct iovec **iovec, int *iovlen);

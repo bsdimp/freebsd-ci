@@ -1,6 +1,8 @@
 /*	$OpenBSD: frame.h,v 1.3 1998/09/15 10:50:12 pefo Exp $ */
 
 /*-
+ * SPDX-License-Identifier: BSD-4-Clause
+ *
  * Copyright (c) 1998 Per Fogelstrom, Opsycon AB
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,6 +39,8 @@
 #ifndef _MACHINE_FRAME_H_
 #define	_MACHINE_FRAME_H_
 
+/* Note: This must also match regnum.h and regdef.h */
+
 struct trapframe {
 	register_t	zero;
 	register_t	ast;
@@ -46,6 +50,16 @@ struct trapframe {
 	register_t	a1;
 	register_t	a2;
 	register_t	a3;
+#if defined(__mips_n32) || defined(__mips_n64)
+	register_t	a4;
+	register_t	a5;
+	register_t	a6;
+	register_t	a7;
+	register_t	t0;
+	register_t	t1;
+	register_t	t2;
+	register_t	t3;
+#else
 	register_t	t0;
 	register_t	t1;
 	register_t	t2;
@@ -54,6 +68,7 @@ struct trapframe {
 	register_t	t5;
 	register_t	t6;
 	register_t	t7;
+#endif
 	register_t	s0;
 	register_t	s1;
 	register_t	s2;
@@ -121,7 +136,7 @@ struct trapframe {
 	f_register_t	f30;
 	f_register_t	f31;
 	register_t	fsr;
-        register_t   fdummy;
+        register_t	fir;
 };
 
 #endif	/* !_MACHINE_FRAME_H_ */

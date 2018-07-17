@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2009 Neelkanth Natu
  * All rights reserved.
  *
@@ -33,6 +35,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/ktr.h>
 #include <sys/proc.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
 #include <sys/mutex.h>
 #include <sys/kernel.h>
 #include <sys/pcpu.h>
@@ -182,7 +185,7 @@ start_ap(int cpuid)
 	int cpus, ms;
 
 	cpus = mp_naps;
-	dpcpu = (void *)kmem_alloc(kernel_map, DPCPU_SIZE);
+	dpcpu = (void *)kmem_malloc(kernel_arena, DPCPU_SIZE, M_WAITOK | M_ZERO);
 
 	mips_sync();
 
@@ -208,7 +211,7 @@ cpu_mp_setmaxid(void)
 	platform_cpu_mask(&cpumask);
 	mp_ncpus = 0;
 	last = 1;
-	while ((cpu = cpusetobj_ffs(&cpumask)) != 0) {
+	while ((cpu = CPU_FFS(&cpumask)) != 0) {
 		last = cpu;
 		cpu--;
 		CPU_CLR(cpu, &cpumask);
@@ -251,7 +254,7 @@ cpu_mp_start(void)
 	platform_cpu_mask(&cpumask);
 
 	while (!CPU_EMPTY(&cpumask)) {
-		cpuid = cpusetobj_ffs(&cpumask) - 1;
+		cpuid = CPU_FFS(&cpumask) - 1;
 		CPU_CLR(cpuid, &cpumask);
 
 		if (cpuid >= MAXCPU) {
@@ -301,6 +304,10 @@ smp_init_secondary(u_int32_t cpuid)
 	while (!aps_ready)
 		;
 
+#ifdef PLATFORM_INIT_SECONDARY
+	platform_init_secondary(cpuid);
+#endif
+
 	/* Initialize curthread. */
 	KASSERT(PCPU_GET(idlethread) != NULL, ("no idle thread"));
 	PCPU_SET(curthread, PCPU_GET(idlethread));
@@ -316,7 +323,6 @@ smp_init_secondary(u_int32_t cpuid)
 
 	if (smp_cpus == mp_ncpus) {
 		atomic_store_rel_int(&smp_started, 1);
-		smp_active = 1;
 	}
 
 	mtx_unlock_spin(&ap_boot_mtx);
@@ -342,12 +348,22 @@ release_aps(void *dummy __unused)
 	if (mp_ncpus == 1)
 		return;
 
+#ifdef PLATFORM_INIT_SECONDARY
+	platform_init_secondary(0);
+#endif
+
 	/*
 	 * IPI handler
 	 */
-	ipi_irq = platform_ipi_intrnum();
-	cpu_establish_hardintr("ipi", mips_ipi_handler, NULL, NULL, ipi_irq,
-			       INTR_TYPE_MISC | INTR_EXCL, NULL);
+	ipi_irq = platform_ipi_hardintr_num();
+	if (ipi_irq != -1) {
+		cpu_establish_hardintr("ipi", mips_ipi_handler, NULL, NULL,
+		    ipi_irq, INTR_TYPE_MISC | INTR_EXCL, NULL);
+	} else {
+		ipi_irq = platform_ipi_softintr_num();
+		cpu_establish_softintr("ipi", mips_ipi_handler, NULL, NULL,
+		    ipi_irq, INTR_TYPE_MISC | INTR_EXCL, NULL);
+	}
 
 	atomic_store_rel_int(&aps_ready, 1);
 

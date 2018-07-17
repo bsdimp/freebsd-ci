@@ -16,7 +16,7 @@
  */
 #include "includes.h"
 
-#ifndef OPENSSL_HAVE_EVPCTR
+#if defined(WITH_OPENSSL) && !defined(OPENSSL_HAVE_EVPCTR)
 #include <sys/types.h>
 
 #include <stdarg.h>
@@ -104,7 +104,7 @@ ssh_aes_ctr_cleanup(EVP_CIPHER_CTX *ctx)
 
 	if ((c = EVP_CIPHER_CTX_get_app_data(ctx)) != NULL) {
 		memset(c, 0, sizeof(*c));
-		xfree(c);
+		free(c);
 		EVP_CIPHER_CTX_set_app_data(ctx, NULL);
 	}
 	return (1);
@@ -143,4 +143,4 @@ evp_aes_128_ctr(void)
 	return (&aes_ctr);
 }
 
-#endif /* OPENSSL_HAVE_EVPCTR */
+#endif /* defined(WITH_OPENSSL) && !defined(OPENSSL_HAVE_EVPCTR) */

@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000 Dmitry Dicky diwil@dataart.com
  * All rights reserved.
  *
@@ -394,7 +396,7 @@ fm801ch_setspeed(kobj_t obj, void *data, u_int32_t speed)
 {
 	struct fm801_chinfo *ch = data;
 	struct fm801_info *fm801 = ch->parent;
-	register int i;
+	int i;
 
 
 	for (i = 0; i < 10 && fm801_rates[i].limit <= speed; i++) ;
@@ -573,8 +575,7 @@ fm801_init(struct fm801_info *fm801)
 static int
 fm801_pci_attach(device_t dev)
 {
-	u_int32_t 		data;
-	struct ac97_info 	*codec = 0;
+	struct ac97_info 	*codec = NULL;
 	struct fm801_info 	*fm801;
 	int 			i;
 	int 			mapped = 0;
@@ -583,10 +584,7 @@ fm801_pci_attach(device_t dev)
 	fm801 = malloc(sizeof(*fm801), M_DEVBUF, M_WAITOK | M_ZERO);
 	fm801->type = pci_get_devid(dev);
 
-	data = pci_read_config(dev, PCIR_COMMAND, 2);
-	data |= (PCIM_CMD_PORTEN|PCIM_CMD_MEMEN|PCIM_CMD_BUSMASTEREN);
-	pci_write_config(dev, PCIR_COMMAND, data, 2);
-	data = pci_read_config(dev, PCIR_COMMAND, 2);
+	pci_enable_busmaster(dev);
 
 	for (i = 0; (mapped == 0) && (i < PCI_MAXMAPS_0); i++) {
 		fm801->regid = PCIR_BAR(i);
@@ -626,7 +624,8 @@ fm801_pci_attach(device_t dev)
 	fm801->irqid = 0;
 	fm801->irq = bus_alloc_resource_any(dev, SYS_RES_IRQ, &fm801->irqid,
 					    RF_ACTIVE | RF_SHAREABLE);
-	if (!fm801->irq || snd_setup_intr(dev, fm801->irq, 0, fm801_intr, fm801, &fm801->ih)) {
+	if (!fm801->irq ||
+	    snd_setup_intr(dev, fm801->irq, 0, fm801_intr, fm801, &fm801->ih)) {
 		device_printf(dev, "unable to map interrupt\n");
 		goto oops;
 	}
@@ -643,7 +642,7 @@ fm801_pci_attach(device_t dev)
 		goto oops;
 	}
 
-	snprintf(status, 64, "at %s 0x%lx irq %ld %s",
+	snprintf(status, 64, "at %s 0x%jx irq %jd %s",
 		(fm801->regtype == SYS_RES_IOPORT)? "io" : "memory",
 		rman_get_start(fm801->reg), rman_get_start(fm801->irq),PCM_KLDSTRING(snd_fm801));
 
@@ -720,7 +719,8 @@ fm801_pci_probe( device_t dev )
 
 static struct resource *
 fm801_alloc_resource(device_t bus, device_t child, int type, int *rid,
-		     u_long start, u_long end, u_long count, u_int flags)
+		     rman_res_t start, rman_res_t end, rman_res_t count,
+		     u_int flags)
 {
 	struct fm801_info *fm801;
 

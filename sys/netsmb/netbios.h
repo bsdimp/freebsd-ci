@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+ *
  * Copyright (c) 2000-2001 Boris Popov
  * All rights reserved.
  *
@@ -33,10 +35,6 @@
  */
 #ifndef _NETINET_IN_H_
 #include <netinet/in.h>
-#endif
-
-#ifndef _NETIPX_IPX_H_
-#include <netipx/ipx.h>
 #endif
 
 #define	NMB_TCP_PORT	137
@@ -114,7 +112,7 @@
  */
 union nb_tran {
 	struct sockaddr_in	x_in;
-	struct sockaddr_ipx	x_ipx;
+	/* struct sockaddr_ipx was here. */
 };
 
 struct nb_name {

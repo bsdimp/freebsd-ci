@@ -47,6 +47,8 @@ do_command(e, u)
 	entry	*e;
 	user	*u;
 {
+	pid_t pid;
+
 	Debug(DPROC, ("[%d] do_command(%s, (%s,%d,%d))\n",
 		getpid(), e->cmd, u->name, e->uid, e->gid))
 
@@ -57,9 +59,11 @@ do_command(e, u)
 	 * vfork() is unsuitable, since we have much to do, and the parent
 	 * needs to be able to run off and fork other processes.
 	 */
-	switch (fork()) {
+	switch ((pid = fork())) {
 	case -1:
 		log_it("CRON",getpid(),"error","can't fork");
+		if (e->flags & INTERVAL)
+			e->lastexit = time(NULL);
 		break;
 	case 0:
 		/* child process */
@@ -70,6 +74,12 @@ do_command(e, u)
 		break;
 	default:
 		/* parent process */
+		Debug(DPROC, ("[%d] main process forked child #%d, "
+		    "returning to work\n", getpid(), pid))
+		if (e->flags & INTERVAL) {
+			e->lastexit = 0;
+			e->child = pid;
+		}
 		break;
 	}
 	Debug(DPROC, ("[%d] main process returning to work\n", getpid()))
@@ -161,8 +171,10 @@ child_process(e, u)
 
 	/* create some pipes to talk to our future child
 	 */
-	pipe(stdin_pipe);	/* child's stdin */
-	pipe(stdout_pipe);	/* child's stdout */
+	if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0) {
+		log_it("CRON", getpid(), "error", "can't pipe");
+		exit(ERROR_EXIT);
+	}
 
 	/* since we are a forked process, we can diddle the command string
 	 * we were passed -- nobody else is going to use it again, right?
@@ -335,8 +347,9 @@ child_process(e, u)
 				_exit(OK_EXIT);
 			}
 # endif /*DEBUGGING*/
-			execle(shell, shell, "-c", e->cmd, (char *)0, e->envp);
-			warn("execl: couldn't exec `%s'", shell);
+			execle(shell, shell, "-c", e->cmd, (char *)NULL,
+			    e->envp);
+			warn("execle: couldn't exec `%s'", shell);
 			_exit(ERROR_EXIT);
 		}
 		break;
@@ -481,14 +494,17 @@ child_process(e, u)
 				auto char	mailcmd[MAX_COMMAND];
 				auto char	hostname[MAXHOSTNAMELEN];
 
-				(void) gethostname(hostname, MAXHOSTNAMELEN);
+				if (gethostname(hostname, MAXHOSTNAMELEN) == -1)
+					hostname[0] = '\0';
+				hostname[sizeof(hostname) - 1] = '\0';
 				(void) snprintf(mailcmd, sizeof(mailcmd),
 					       MAILARGS, MAILCMD);
 				if (!(mail = cron_popen(mailcmd, "w", e))) {
 					warn("%s", MAILCMD);
 					(void) _exit(ERROR_EXIT);
 				}
-				fprintf(mail, "From: %s (Cron Daemon)\n", usernm);
+				fprintf(mail, "From: Cron Daemon <%s@%s>\n",
+					usernm, hostname);
 				fprintf(mail, "To: %s\n", mailto);
 				fprintf(mail, "Subject: Cron <%s@%s> %s\n",
 					usernm, first_word(hostname, "."),

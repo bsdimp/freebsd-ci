@@ -28,12 +28,12 @@
 .\" $NetBSD: cdce.4,v 1.4 2004/12/08 18:35:56 peter Exp $
 .\" $FreeBSD$
 .\"
-.Dd September 17, 2005
+.Dd May 21, 2018
 .Dt CDCE 4
 .Os
 .Sh NAME
 .Nm cdce
-.Nd "USB Communication Device Class Ethernet driver"
+.Nd "USB Communication Device Class Ethernet (CDC ECM/NCM) driver"
 .Sh SYNOPSIS
 To compile this driver into the kernel,
 place the following lines in your
@@ -42,6 +42,8 @@ kernel configuration file:
 .Cd "device uhci"
 .Cd "device ohci"
 .Cd "device usb"
+.Cd "device miibus"
+.Cd "device uether"
 .Cd "device cdce"
 .Ed
 .Pp
@@ -56,7 +58,9 @@ The
 .Nm
 driver provides support for USB Host-to-Host (aka USB-to-USB) and
 USB-to-Ethernet bridges based on the USB Communication Device Class
-(CDC) and Ethernet subclass.
+Ethernet Control Model (CDC ECM) and Network Control Model (CDC NCM)
+specifications.
+It also provides device-side CDC ECM support.
 .Pp
 The USB bridge appears as a regular network interface on both sides,
 transporting Ethernet frames.
@@ -114,9 +118,10 @@ is running low on mbufs.
 .Sh SEE ALSO
 .Xr arp 4 ,
 .Xr intro 4 ,
+.Xr ipheth 4 ,
 .Xr netintro 4 ,
+.Xr urndis 4 ,
 .Xr usb 4 ,
-.\" .Xr hostname.if 5 ,
 .Xr ifconfig 8
 .Rs
 .%T "Universal Serial Bus Class Definitions for Communication Devices"
@@ -139,15 +144,15 @@ and
 The
 .Nm
 driver was written by
-.An Craig Boston Aq craig@tobuj.gank.org
+.An Craig Boston Aq Mt craig@tobuj.gank.org
 based on the
 .Xr aue 4
 driver written by
-.An Bill Paul Aq wpaul@windriver.com
+.An Bill Paul Aq Mt wpaul@windriver.com
 and ported to
 .Ox
 by
-.An Daniel Hartmeier Aq dhartmei@openbsd.org .
+.An Daniel Hartmeier Aq Mt dhartmei@openbsd.org .
 .Sh CAVEATS
 Many USB devices notoriously fail to report their class and interfaces
 correctly.

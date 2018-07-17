@@ -1,4 +1,6 @@
 /*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 1997, 1998, 1999 Kenneth D. Merry.
  * All rights reserved.
  *
@@ -199,6 +201,8 @@ void devstat_end_transaction(struct devstat *ds, u_int32_t bytes,
 			     devstat_trans_flags flags,
 			     struct bintime *now, struct bintime *then);
 void devstat_end_transaction_bio(struct devstat *ds, struct bio *bp);
+void devstat_end_transaction_bio_bt(struct devstat *ds, struct bio *bp,
+			     struct bintime *now);
 #endif
 
 #endif /* _DEVICESTAT_H */

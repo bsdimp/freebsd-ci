@@ -25,7 +25,7 @@
 .\"
 .\" $FreeBSD$
 .\"
-.Dd November 18, 2012
+.Dd July 11, 2018
 .Dt PORTS 7
 .Os
 .Sh NAME
@@ -35,41 +35,49 @@
 The
 .Fx
 Ports Collection
-offers a simple way for users and
-administrators to install applications.
-Each
-.Em port
-contains any patches necessary to make the original
-application source code compile and run on
+offers a simple way to compile and install third party applications.
+It is also used to build packages, to be installed using
+.Xr pkg 8 .
+It can be installed and updated using
+.Xr portsnap 8 .
+.Pp
+The ports tree, typically located at
+.Pa /usr/ports ,
+consists of subdirectories, one for each category; those in turn contain
+individual ports.
+Each port is a directory with metadata and patches necessary to make
+the original application source code compile and run on
 .Fx .
 Compiling an
 application is as simple as typing
 .Nm make Cm build
-in the port directory!
+in the port directory.
 The
 .Pa Makefile
 automatically fetches the
-application source code, either from a local disk or via FTP, unpacks it
-on your system, applies the patches, and compiles it.
-If all goes well,
-simply type
+application source code, either from a local disk or the network, unpacks it,
+applies the patches, and compiles it.
+It also recursively handles dependencies \(em other pieces of software
+the port depends on in order to build and work.
+Afterwards,
 .Nm make Cm install
-to install the application.
+installs the application.
 .Pp
-For more information about using ports, see
-.Dq "Packages and Ports"
+For more information about using ports, see the
+.Dq "Packages and Ports" section
 in
-.%B "The FreeBSD Handbook" ,
-.Pa ( file:/usr/share/doc/en_US.ISO8859-1/books/handbook/ports.html
-or
-.Pa http://www.FreeBSD.org/doc/en_US.ISO8859-1/books/handbook/ports.html ) .
+.%B "The FreeBSD Handbook":
+.Pp
+.Lk https://www.FreeBSD.org/doc/en/books/handbook/ports.html
+.Pp
 For information about creating new ports, see
-.%B "The Porter's Handbook"
-.Pa ( file:/usr/share/doc/en_US.ISO8859-1/books/porters-handbook/index.html
-or
-.Pa http://www.FreeBSD.org/doc/en_US.ISO8859-1/books/porters-handbook/ ) .
+.%B "The Porter's Handbook":
+.Pp
+.Lk https://www.FreeBSD.org/doc/en/books/porters-handbook/
 .Sh TARGETS
-Some of the targets work recursively through subdirectories.
+Some of the
+.Xr make 1
+targets work recursively through subdirectories.
 This lets you, for example, install all of the
 .Dq Li biology
 ports.
@@ -97,7 +105,7 @@ target.
 Configure
 .Va OPTIONS
 for this port using
-.Xr dialog 1 .
+.Xr dialog4ports 1 .
 .It Cm fetch
 Fetch all of the files needed to build this port from the sites
 listed in
@@ -177,7 +185,7 @@ configured.
 Configure
 .Va OPTIONS
 for this port and all its dependencies using
-.Xr dialog 1 .
+.Xr dialog4ports 1 .
 .It Cm fetch-list
 Show list of files to be fetched in order to build the port.
 .It Cm fetch-recursive
@@ -214,12 +222,12 @@ portion never recurses
 (this is perhaps a bug).
 .It Cm reinstall
 Use this to restore a port after using
-.Xr pkg_delete 1
+.Xr pkg-delete 8
 when you should have used
 .Cm deinstall .
 .It Cm deinstall
 Remove an installed port from the system, similar to
-.Xr pkg_delete 1 .
+.Xr pkg-delete 8 .
 .It Cm deinstall-all
 Remove all installed ports with the same
 .Va PKGORIGIN
@@ -231,7 +239,7 @@ The package is a
 .Pa .tbz
 file that you can use to
 install the port on other machines with
-.Xr pkg_add 1 .
+.Xr pkg-add 8 .
 If the directory specified by
 .Va PACKAGES
 does not exist, the package will be put into the current directory.
@@ -430,7 +438,7 @@ cluster (for
 .Cm fetchindex
 target).
 Defaults to
-.Pa http://www.FreeBSD.org/ports/ .
+.Pa https://www.FreeBSD.org/ports/ .
 .It Va FETCHINDEX
 Command to get
 .Pa INDEX
@@ -458,7 +466,7 @@ If defined, only operate on a port if it requires interaction.
 If defined, only operate on a port if it can be installed 100% automatically.
 .It Va DISABLE_VULNERABILITIES
 If defined, disable check for security vulnerabilities using
-.Xr portaudit 1 Pq Pa ports/ports-mgmt/portaudit
+.Xr pkg-audit 8
 when installing new ports.
 .It Va NO_IGNORE
 If defined, allow installation of ports marked as
@@ -486,6 +494,42 @@ have been configured will have a uniquely named sub-directory, containing a
 single file
 .Pa options .
 .El
+.Sh MAKE VARIABLES
+The following list provides a name and short description for many of the
+variables that are used when building ports.
+More information on these and other related variables may be found in
+.Pa ${PORTSDIR}/Mk/*
+and the
+.Fx
+Porter's Handbook.
+.Bl -tag -width ".Va WITH_GHOSTSCRIPT_VER"
+.It Va WITH_OPENSSL_PORT
+.Pq Vt bool
+If set, causes ports that make use of OpenSSL to use the OpenSSL from
+ports
+.Pq if available
+instead of the OpenSSL from the base system.
+.It Va WITH_DEBUG
+.Pq Vt bool
+If set, debugging symbols are installed for ports binaries.
+.It Va WITH_DEBUG_PORTS
+A list of origins for which to set
+.Va WITH_DEBUG_PORTS .
+.It Va WITH_SSP_PORTS
+.Pq Vt bool
+If set, enables
+.Fl fstack-protector
+for most ports.
+.It Va WITH_GHOSTSCRIPT_VER
+If set, the version of ghostscript to be used by ports.
+.It Va WITH_CCACHE_BUILD
+.Pq Vt bool
+If set, enables the use of
+.Xr ccache 1
+for building ports.
+.It Va CCACHE_DIR
+Which directory to use for the ccache data.
+.El
 .Sh FILES
 .Bl -tag -width ".Pa /usr/ports/Mk/bsd.port.mk" -compact
 .It Pa /usr/ports
@@ -493,20 +537,27 @@ The default ports directory
 .It Pa /usr/ports/Mk/bsd.port.mk
 The big Kahuna.
 .El
+.Sh EXAMPLES
+Build and install Emacs:
+.Bd -literal -offset indent
+cd /usr/ports/editors/emacs
+make install
+.Ed
 .Sh SEE ALSO
 .Xr make 1 ,
+.Xr make.conf 5 ,
 .Xr pkg 8 ,
 .Xr portsnap 8
 .Pp
 The following are part of the ports collection:
 .Pp
-.Xr portaudit 1 ,
+.Xr pkg 7 ,
 .Xr portlint 1
 .Rs
 .%B "The FreeBSD Handbook"
 .Re
 .Pp
-.Pa http://www.FreeBSD.org/ports
+.Pa https://www.FreeBSD.org/ports
 (searchable index of all ports)
 .Sh HISTORY
 The Ports Collection

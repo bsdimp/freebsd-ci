@@ -1,5 +1,7 @@
-/*
+/*-
  * link_control.c
+ *
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
  *
  * Copyright (c) 2001-2002 Maksim Yevmenkin <m_evmenkin@yahoo.com>
  * All rights reserved.
@@ -29,6 +31,7 @@
  * $FreeBSD$
  */
 
+#define L2CAP_SOCKET_CHECKED
 #include <bluetooth.h>
 #include <errno.h>
 #include <stdio.h>
@@ -357,7 +360,7 @@ again:
 		goto again;
 
 	return (OK);
-} /* hci_diconnect */
+} /* hci_disconnect */
 
 /* Send Add_SCO_Connection command to the unit */
 static int

@@ -1,4 +1,6 @@
-/*
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
  * Copyright (c) 2010, LSI Corp.
  * All rights reserved.
  * Author : Manjunath Ranganathaiah
@@ -410,7 +412,7 @@ struct tws_request {
     void         (*cb)(struct tws_request *);      /* callback func */
     bus_dmamap_t dma_map;        /* dma map */
     union ccb    *ccb_ptr;       /* pointer to ccb */
-    struct callout_handle thandle; /* handle to req timeout */
+    struct callout timeout;	 /* request timeout timer */
     struct tws_softc *sc;        /* pointer back to ctlr softc */
 
     struct tws_request *next;    /* pointer to next request */
