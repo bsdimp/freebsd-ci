@@ -937,9 +937,6 @@ static int
 ccu_a31_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (!ofw_bus_is_compatible(dev, "allwinner,sun6i-a31-ccu"))
 		return (ENXIO);
 
