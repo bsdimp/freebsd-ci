@@ -457,9 +457,6 @@ static int
 ccu_h6_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (!ofw_bus_is_compatible(dev, "allwinner,sun50i-h6-ccu"))
 		return (ENXIO);
 
