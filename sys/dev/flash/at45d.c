@@ -234,9 +234,6 @@ at45d_probe(device_t dev)
 	int rv;
 
 #ifdef FDT
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
 		return (ENXIO);
 
