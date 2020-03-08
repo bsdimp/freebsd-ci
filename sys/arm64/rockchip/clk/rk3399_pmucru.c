@@ -822,9 +822,6 @@ static int
 rk3399_pmucru_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (ofw_bus_is_compatible(dev, "rockchip,rk3399-pmucru")) {
 		device_set_desc(dev, "Rockchip RK3399 PMU Clock and Reset Unit");
 		return (BUS_PROBE_DEFAULT);
