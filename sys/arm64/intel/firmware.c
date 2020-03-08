@@ -61,9 +61,6 @@ firmware_probe(device_t dev)
 	if (!fdt_depth_search_compatible(node, "intel,stratix10-svc", 0))
 		return (ENXIO);
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	device_set_desc(dev, "Firmware node");
 
 	return (BUS_PROBE_DEFAULT);
