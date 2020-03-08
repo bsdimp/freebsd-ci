@@ -428,9 +428,6 @@ sdhci_xenon_probe(device_t dev)
 	sc->slot_id = 0;
 	sc->max_clk = XENON_MMC_MAX_CLK;
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
 		return (ENXIO);
 
