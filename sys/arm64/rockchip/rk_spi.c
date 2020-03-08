@@ -273,8 +273,6 @@ rk_spi_xfer_buf(struct rk_spi_softc *sc, void *rxbuf, void *txbuf, uint32_t len)
 static int
 rk_spi_probe(device_t dev)
 {
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
 
 	if (!ofw_bus_search_compatible(dev, compat_data)->ocd_data)
 		return (ENXIO);
