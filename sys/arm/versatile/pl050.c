@@ -612,9 +612,6 @@ static int
 pl050_kmi_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	/*
 	 * PL050 is plain PS2 port that pushes bytes to/from computer
 	 * VersatilePB has two such ports and QEMU simulates keyboard
