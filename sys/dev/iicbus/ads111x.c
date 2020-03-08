@@ -492,12 +492,10 @@ ads111x_find_chipinfo(device_t dev)
 	int i;
 
 #ifdef FDT
-	if (ofw_bus_status_okay(dev)) {
-		info = (struct ads111x_chipinfo*)
-		    ofw_bus_search_compatible(dev, compat_data)->ocd_data;
-		if (info != NULL)
-			return (info);
-	}
+	info = (struct ads111x_chipinfo*)
+	    ofw_bus_search_compatible(dev, compat_data)->ocd_data;
+	if (info != NULL)
+		return (info);
 #endif
 
 	/* For hinted devices, we must be told the chip type. */
