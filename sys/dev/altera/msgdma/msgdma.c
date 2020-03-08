@@ -219,9 +219,6 @@ msgdma_probe(device_t dev)
 {
 	int hwtype;
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	hwtype = ofw_bus_search_compatible(dev, compat_data)->ocd_data;
 	if (hwtype == HWTYPE_NONE)
 		return (ENXIO);
