@@ -121,8 +121,6 @@ static int
 if_dwc_rk_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
 	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data == 0)
 		return (ENXIO);
 	device_set_desc(dev, "Rockchip Gigabit Ethernet Controller");
