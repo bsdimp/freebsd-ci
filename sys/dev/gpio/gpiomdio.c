@@ -84,8 +84,6 @@ gpiomdio_probe(device_t dev)
 {
 	struct gpiobus_ivar *devi;
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
 	if (!ofw_bus_is_compatible(dev, "freebsd,gpiomdio"))
 		return (ENXIO);
 	devi = GPIOBUS_IVAR(dev);
