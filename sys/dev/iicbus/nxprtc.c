@@ -929,8 +929,6 @@ nxprtc_probe(device_t dev)
 	int chiptype, rv;
 
 #ifdef FDT
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
 	rv = BUS_PROBE_GENERIC;
 #else
 	rv = BUS_PROBE_NOWILDCARD;
