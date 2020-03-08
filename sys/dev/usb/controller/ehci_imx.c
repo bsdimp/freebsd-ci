@@ -181,9 +181,6 @@ static int
 imx_usbmisc_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (ofw_bus_search_compatible(dev, usbmisc_compat_data)->ocd_data) {
 		device_set_desc(dev, "i.MX USB Misc Control");
 		return (BUS_PROBE_DEFAULT);
