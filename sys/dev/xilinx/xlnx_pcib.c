@@ -333,9 +333,6 @@ static int
 xlnx_pcib_fdt_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (ofw_bus_is_compatible(dev, "xlnx,xdma-host-3.00")) {
 		device_set_desc(dev, "Xilinx XDMA PCIe Controller");
 		return (BUS_PROBE_DEFAULT);
