@@ -261,10 +261,6 @@ uart_fdt_probe(device_t dev)
 	int err;
 
 	sc = device_get_softc(dev);
-
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	sc->sc_class = (struct uart_class *)uart_fdt_find_device(dev);
 	if (sc->sc_class == NULL)
 		return (ENXIO);
