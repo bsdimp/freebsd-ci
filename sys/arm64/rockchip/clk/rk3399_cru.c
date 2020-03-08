@@ -1237,9 +1237,6 @@ static int
 rk3399_cru_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (ofw_bus_is_compatible(dev, "rockchip,rk3399-cru")) {
 		device_set_desc(dev, "Rockchip RK3399 Clock and Reset Unit");
 		return (BUS_PROBE_DEFAULT);
