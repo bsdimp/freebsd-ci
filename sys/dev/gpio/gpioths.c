@@ -108,8 +108,7 @@ gpioths_probe(device_t dev)
 	rv = BUS_PROBE_NOWILDCARD;
 
 #ifdef FDT
-	if (ofw_bus_status_okay(dev) &&
-	    ofw_bus_search_compatible(dev, compat_data)->ocd_data)
+	if (ofw_bus_search_compatible(dev, compat_data)->ocd_data)
 		rv = BUS_PROBE_DEFAULT;
 #endif
 
