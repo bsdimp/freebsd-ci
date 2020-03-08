@@ -139,11 +139,6 @@ ltc430x_probe(device_t dev)
 {
 	int type;
 
-#ifdef FDT
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-#endif
-
 	type = ltc430x_find_chiptype(dev);
 	if (type == CHIP_NONE)
 		return (ENXIO);
