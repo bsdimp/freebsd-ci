@@ -228,9 +228,6 @@ static int
 plic_probe(device_t dev)
 {
 
-	if (!ofw_bus_status_okay(dev))
-		return (ENXIO);
-
 	if (!ofw_bus_is_compatible(dev, "riscv,plic0") &&
 	    !ofw_bus_is_compatible(dev, "sifive,plic-1.0.0"))
 		return (ENXIO);
